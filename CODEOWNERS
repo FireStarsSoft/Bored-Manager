@@ -1,0 +1,18 @@
+# Default ownership. Replace or extend this direct maintainer with organization
+# teams when the project adds them.
+* @kuronoFS
+
+# Security- and release-sensitive surfaces require explicit owner review.
+/.github/ @kuronoFS
+/SECURITY.md @kuronoFS
+/packaging/ @kuronoFS
+/scripts/install-manager.sh @kuronoFS
+/scripts/install-agent.sh @kuronoFS
+/docs/runbooks/release.md @kuronoFS
+/api/ @kuronoFS
+/api/proto/ @kuronoFS
+/internal/auth/ @kuronoFS
+/internal/pki/ @kuronoFS
+/internal/releaseverify/ @kuronoFS
+/internal/updatehelper/ @kuronoFS
+/lab/ @kuronoFS

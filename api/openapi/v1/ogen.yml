@@ -1,0 +1,11 @@
+parser:
+  allow_remote: true
+generator:
+  features:
+    disable_all: true
+    enable:
+      - paths/client
+      - client/request/options
+      - client/request/validation
+      - client/editors
+      - client/security/reentrant

@@ -1,0 +1,999 @@
+openapi: 3.0.3
+info:
+  title: Bored Manager API
+  version: 0.1.0
+  summary: Versioned control-plane API for Bored Manager.
+  description: |
+    Public REST and event contracts for Bored Manager. All mutating operations
+    require both the session cookie and an `X-CSRF-Token` header. Resource IDs
+    are canonical lowercase UUIDv7 values. Timestamps are RFC 3339 UTC values.
+    Event cursors are decimal strings so JavaScript clients do not lose integer
+    precision. This development contract may only change compatibly within v1.
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+servers:
+  - url: https://127.0.0.1:8443/api/v1
+    description: Initial local setup endpoint
+  - url: https://{manager}/api/v1
+    variables:
+      manager:
+        default: bored-manager.local:8443
+security:
+  - sessionCookie: []
+tags:
+  - name: Health
+  - name: Setup
+  - name: Auth
+  - name: Agents
+  - name: Enrollment
+  - name: Services
+  - name: Jobs
+  - name: Docker Hosts
+  - name: Templates
+  - name: Networks
+  - name: Releases
+  - name: Diagnostics
+  - name: Events
+  - name: Bootstrap Artifacts
+paths:
+  /health:
+    get:
+      tags: [Health]
+      operationId: getHealth
+      security: []
+      responses:
+        '200':
+          description: Manager is ready to serve requests.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/Health'}
+        '503': {$ref: './components.yaml#/components/responses/ServiceUnavailable'}
+  /version:
+    get:
+      tags: [Health]
+      operationId: getVersion
+      security: []
+      responses:
+        '200':
+          description: Manager build and compatibility metadata.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/ManagerVersionInfo'}
+  /setup:
+    get:
+      tags: [Setup]
+      operationId: getSetupStatus
+      security: []
+      responses:
+        '200':
+          description: Current first-run setup state.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/SetupStatus'}
+    post:
+      tags: [Setup]
+      operationId: completeSetup
+      description: Available only over loopback while setup is incomplete.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './components.yaml#/components/schemas/CompleteSetupRequest'}
+      responses:
+        '201':
+          description: Setup completed and initial admin session created.
+          headers:
+            Set-Cookie: {$ref: './components.yaml#/components/headers/SessionCookie'}
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/Session'}
+        '400': {$ref: './components.yaml#/components/responses/BadRequest'}
+        '403': {$ref: './components.yaml#/components/responses/Forbidden'}
+        '409': {$ref: './components.yaml#/components/responses/Conflict'}
+        '422': {$ref: './components.yaml#/components/responses/ValidationFailed'}
+        '429': {$ref: './components.yaml#/components/responses/RateLimited'}
+  /auth/login:
+    post:
+      tags: [Auth]
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './components.yaml#/components/schemas/LoginRequest'}
+      responses:
+        '200':
+          description: Authenticated session.
+          headers:
+            Set-Cookie: {$ref: './components.yaml#/components/headers/SessionCookie'}
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/Session'}
+        '401': {$ref: './components.yaml#/components/responses/Unauthorized'}
+        '429': {$ref: './components.yaml#/components/responses/RateLimited'}
+  /auth/session:
+    get:
+      tags: [Auth]
+      operationId: getSession
+      responses:
+        '200':
+          description: Current session.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/Session'}
+        '401': {$ref: './components.yaml#/components/responses/Unauthorized'}
+    delete:
+      tags: [Auth]
+      operationId: logout
+      parameters: [{$ref: './components.yaml#/components/parameters/CSRFToken'}]
+      responses:
+        '204': {description: Session revoked.}
+        '401': {$ref: './components.yaml#/components/responses/Unauthorized'}
+        '403': {$ref: './components.yaml#/components/responses/Forbidden'}
+  /auth/reauthenticate:
+    post:
+      tags: [Auth]
+      operationId: reauthenticate
+      parameters: [{$ref: './components.yaml#/components/parameters/CSRFToken'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './components.yaml#/components/schemas/ReauthenticateRequest'}
+      responses:
+        '200':
+          description: Session marked recently reauthenticated.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/Session'}
+        '401': {$ref: './components.yaml#/components/responses/Unauthorized'}
+        '403': {$ref: './components.yaml#/components/responses/Forbidden'}
+        '429': {$ref: './components.yaml#/components/responses/RateLimited'}
+  /agents:
+    get:
+      tags: [Agents]
+      operationId: listAgents
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/PageSize'}
+        - {$ref: './components.yaml#/components/parameters/PageToken'}
+        - {name: presence, in: query, schema: {$ref: './components.yaml#/components/schemas/PresenceState'}}
+        - {name: tag, in: query, schema: {type: string}}
+        - {name: search, in: query, schema: {type: string, maxLength: 128}}
+      responses:
+        '200':
+          description: Cursor-consistent agent snapshot.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/AgentList'}
+        '401': {$ref: './components.yaml#/components/responses/Unauthorized'}
+  /agents/install-command:
+    get:
+      tags: [Agents]
+      operationId: getAgentInstallCommand
+      description: Returns an exact-version command only when the corresponding offline-signed agent release is cached and verified.
+      responses:
+        '200':
+          description: Agent bootstrap availability and pinned connection details.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/AgentInstallCommand'}
+        '400': {$ref: './components.yaml#/components/responses/BadRequest'}
+        '401': {$ref: './components.yaml#/components/responses/Unauthorized'}
+  /agents/{agent_id}:
+    parameters: [{$ref: './components.yaml#/components/parameters/AgentID'}]
+    get:
+      tags: [Agents]
+      operationId: getAgent
+      responses:
+        '200':
+          description: Agent detail.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/Agent'}
+        '404': {$ref: './components.yaml#/components/responses/NotFound'}
+    patch:
+      tags: [Agents]
+      operationId: updateAgent
+      parameters: [{$ref: './components.yaml#/components/parameters/CSRFToken'}]
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema: {$ref: './components.yaml#/components/schemas/UpdateAgentRequest'}
+      responses:
+        '200':
+          description: Updated logical identity and agent view.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/Agent'}
+        '404': {$ref: './components.yaml#/components/responses/NotFound'}
+        '422': {$ref: './components.yaml#/components/responses/ValidationFailed'}
+  /agents/{agent_id}/revoke:
+    post:
+      tags: [Agents]
+      operationId: revokeAgent
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/AgentID'}
+        - {$ref: './components.yaml#/components/parameters/CSRFToken'}
+        - {$ref: './components.yaml#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './components.yaml#/components/schemas/RevokeAgentRequest'}
+      responses:
+        '200':
+          description: Certificate revoked and active control stream closed.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/Agent'}
+        '400': {$ref: './components.yaml#/components/responses/BadRequest'}
+        '401': {$ref: './components.yaml#/components/responses/Unauthorized'}
+        '403': {$ref: './components.yaml#/components/responses/ReauthenticationRequired'}
+        '404': {$ref: './components.yaml#/components/responses/NotFound'}
+        '409': {$ref: './components.yaml#/components/responses/Conflict'}
+  /enrollment-requests:
+    get:
+      tags: [Enrollment]
+      operationId: listEnrollmentRequests
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/PageSize'}
+        - {$ref: './components.yaml#/components/parameters/PageToken'}
+        - {name: state, in: query, schema: {$ref: './components.yaml#/components/schemas/EnrollmentState'}}
+      responses:
+        '200':
+          description: Enrollment requests visible to administrators.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/EnrollmentRequestList'}
+    post:
+      tags: [Enrollment]
+      operationId: requestEnrollment
+      description: Agent-facing endpoint. The manager parses the CSR and derives its fingerprint and verification code; the body never contains a private key.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './components.yaml#/components/schemas/CreateEnrollmentRequest'}
+      responses:
+        '202':
+          description: Request is awaiting approval or a pre-approved provision challenge.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/EnrollmentRequest'}
+        '409': {$ref: './components.yaml#/components/responses/Conflict'}
+        '422': {$ref: './components.yaml#/components/responses/ValidationFailed'}
+        '429': {$ref: './components.yaml#/components/responses/RateLimited'}
+  /enrollment-requests/{enrollment_id}:
+    parameters: [{$ref: './components.yaml#/components/parameters/EnrollmentID'}]
+    get:
+      tags: [Enrollment]
+      operationId: getEnrollmentRequest
+      responses:
+        '200':
+          description: Enrollment request.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/EnrollmentRequest'}
+        '404': {$ref: './components.yaml#/components/responses/NotFound'}
+  /enrollment-requests/{enrollment_id}/approve:
+    post:
+      tags: [Enrollment]
+      operationId: approveEnrollmentRequest
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/EnrollmentID'}
+        - {$ref: './components.yaml#/components/parameters/CSRFToken'}
+        - {$ref: './components.yaml#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './components.yaml#/components/schemas/ApproveEnrollmentRequest'}
+      responses:
+        '200':
+          description: Enrollment approved and identity assigned; the agent retrieves its certificate by proving possession of the CSR private key.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/EnrollmentRequest'}
+        '403': {$ref: './components.yaml#/components/responses/ReauthenticationRequired'}
+        '404': {$ref: './components.yaml#/components/responses/NotFound'}
+        '409': {$ref: './components.yaml#/components/responses/Conflict'}
+  /enrollment-requests/{enrollment_id}/status:
+    post:
+      tags: [Enrollment]
+      operationId: getEnrollmentStatus
+      description: |
+        Agent-facing polling endpoint. Proof is an Ed25519 signature made by the
+        CSR private key over `bored-manager enrollment status:{enrollment_id}`.
+        This binds collection to the enrollment identity without a bearer token.
+      security: []
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/EnrollmentID'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './components.yaml#/components/schemas/EnrollmentStatusProof'}
+      responses:
+        '200':
+          description: Signed certificate chain and assigned identity after proof-of-possession verification.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/EnrollmentApproval'}
+        '202':
+          description: Request remains pending approval.
+          headers:
+            Retry-After: {schema: {type: integer, minimum: 1, default: 5}}
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/EnrollmentRequest'}
+        '403': {$ref: './components.yaml#/components/responses/Forbidden'}
+        '404': {$ref: './components.yaml#/components/responses/NotFound'}
+        '409': {$ref: './components.yaml#/components/responses/Conflict'}
+        '429': {$ref: './components.yaml#/components/responses/RateLimited'}
+  /enrollment-requests/{enrollment_id}/reject:
+    post:
+      tags: [Enrollment]
+      operationId: rejectEnrollmentRequest
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/EnrollmentID'}
+        - {$ref: './components.yaml#/components/parameters/CSRFToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './components.yaml#/components/schemas/RejectEnrollmentRequest'}
+      responses:
+        '200':
+          description: Rejected enrollment request.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/EnrollmentRequest'}
+        '403': {$ref: './components.yaml#/components/responses/ReauthenticationRequired'}
+        '404': {$ref: './components.yaml#/components/responses/NotFound'}
+        '409': {$ref: './components.yaml#/components/responses/Conflict'}
+  /service-definitions:
+    get:
+      tags: [Services]
+      operationId: listServiceDefinitions
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/PageSize'}
+        - {$ref: './components.yaml#/components/parameters/PageToken'}
+      responses:
+        '200':
+          description: Service catalog.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/ServiceDefinitionList'}
+    post:
+      tags: [Services]
+      operationId: createServiceDefinition
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/CSRFToken'}
+        - {$ref: './components.yaml#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './components.yaml#/components/schemas/CreateServiceDefinitionRequest'}
+      responses:
+        '201':
+          description: Service definition created.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/ServiceDefinition'}
+        '409': {$ref: './components.yaml#/components/responses/Conflict'}
+        '422': {$ref: './components.yaml#/components/responses/ValidationFailed'}
+  /service-definitions/{service_definition_id}:
+    parameters: [{$ref: './components.yaml#/components/parameters/ServiceDefinitionID'}]
+    get:
+      tags: [Services]
+      operationId: getServiceDefinition
+      responses:
+        '200':
+          description: Definition and published revisions.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/ServiceDefinitionDetail'}
+        '404': {$ref: './components.yaml#/components/responses/NotFound'}
+    patch:
+      tags: [Services]
+      operationId: updateServiceDefinitionMetadata
+      parameters: [{$ref: './components.yaml#/components/parameters/CSRFToken'}]
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema: {$ref: './components.yaml#/components/schemas/UpdateServiceDefinitionRequest'}
+      responses:
+        '200':
+          description: Metadata updated; published revisions remain immutable.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/ServiceDefinition'}
+        '404': {$ref: './components.yaml#/components/responses/NotFound'}
+        '422': {$ref: './components.yaml#/components/responses/ValidationFailed'}
+  /service-definitions/{service_definition_id}/revisions:
+    post:
+      tags: [Services]
+      operationId: publishServiceRevision
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/ServiceDefinitionID'}
+        - {$ref: './components.yaml#/components/parameters/CSRFToken'}
+        - {$ref: './components.yaml#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './components.yaml#/components/schemas/PublishServiceRevisionRequest'}
+      responses:
+        '201':
+          description: Immutable signed service revision.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/ServiceRevision'}
+        '409': {$ref: './components.yaml#/components/responses/Conflict'}
+        '422': {$ref: './components.yaml#/components/responses/ValidationFailed'}
+  /service-assignments:
+    get:
+      tags: [Services]
+      operationId: listServiceAssignments
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/PageSize'}
+        - {$ref: './components.yaml#/components/parameters/PageToken'}
+      responses:
+        '200':
+          description: Assignment precedence snapshot.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/ServiceAssignmentList'}
+    post:
+      tags: [Services]
+      operationId: createServiceAssignment
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/CSRFToken'}
+        - {$ref: './components.yaml#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './components.yaml#/components/schemas/CreateServiceAssignmentRequest'}
+      responses:
+        '201':
+          description: Assignment created.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/ServiceAssignment'}
+        '422': {$ref: './components.yaml#/components/responses/ValidationFailed'}
+  /agents/{agent_id}/services:
+    get:
+      tags: [Services]
+      operationId: listAgentServices
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/AgentID'}
+        - {$ref: './components.yaml#/components/parameters/PageSize'}
+        - {$ref: './components.yaml#/components/parameters/PageToken'}
+      responses:
+        '200':
+          description: Observed service-state axes for the selected agent.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/ObservedServiceList'}
+        '404': {$ref: './components.yaml#/components/responses/NotFound'}
+  /jobs:
+    get:
+      tags: [Jobs]
+      operationId: listJobs
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/PageSize'}
+        - {$ref: './components.yaml#/components/parameters/PageToken'}
+        - {name: type, in: query, schema: {$ref: './components.yaml#/components/schemas/JobType'}}
+        - {name: state, in: query, schema: {$ref: './components.yaml#/components/schemas/JobState'}}
+      responses:
+        '200':
+          description: Durable jobs.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/JobList'}
+    post:
+      tags: [Jobs]
+      operationId: createJob
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/CSRFToken'}
+        - {$ref: './components.yaml#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './components.yaml#/components/schemas/CreateJobRequest'}
+      responses:
+        '202':
+          description: Durable job queued.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/Job'}
+        '409': {$ref: './components.yaml#/components/responses/Conflict'}
+        '422': {$ref: './components.yaml#/components/responses/ValidationFailed'}
+        '403': {$ref: './components.yaml#/components/responses/ReauthenticationRequired'}
+  /jobs/{job_id}:
+    get:
+      tags: [Jobs]
+      operationId: getJob
+      parameters: [{$ref: './components.yaml#/components/parameters/JobID'}]
+      responses:
+        '200':
+          description: Job and per-target progress.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/Job'}
+        '404': {$ref: './components.yaml#/components/responses/NotFound'}
+  /jobs/{job_id}/cancel:
+    post:
+      tags: [Jobs]
+      operationId: cancelJob
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/JobID'}
+        - {$ref: './components.yaml#/components/parameters/CSRFToken'}
+        - {$ref: './components.yaml#/components/parameters/IdempotencyKey'}
+      requestBody:
+        content:
+          application/json:
+            schema: {$ref: './components.yaml#/components/schemas/CancelJobRequest'}
+      responses:
+        '202':
+          description: Cancellation requested.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/Job'}
+        '404': {$ref: './components.yaml#/components/responses/NotFound'}
+        '409': {$ref: './components.yaml#/components/responses/Conflict'}
+  /jobs/{job_id}/targets/{target_id}/retry:
+    post:
+      tags: [Jobs]
+      operationId: retryJobTarget
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/JobID'}
+        - {$ref: './components.yaml#/components/parameters/TargetID'}
+        - {$ref: './components.yaml#/components/parameters/CSRFToken'}
+        - {$ref: './components.yaml#/components/parameters/IdempotencyKey'}
+      responses:
+        '202':
+          description: A new attempt was queued for the same target.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/JobTarget'}
+        '404': {$ref: './components.yaml#/components/responses/NotFound'}
+        '409': {$ref: './components.yaml#/components/responses/Conflict'}
+  /docker-hosts:
+    get:
+      tags: [Docker Hosts]
+      operationId: listDockerHosts
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/PageSize'}
+        - {$ref: './components.yaml#/components/parameters/PageToken'}
+      responses:
+        '200':
+          description: Registered Docker hosts.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/DockerHostList'}
+    post:
+      tags: [Docker Hosts]
+      operationId: createDockerHost
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/CSRFToken'}
+        - {$ref: './components.yaml#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './components.yaml#/components/schemas/CreateDockerHostRequest'}
+      responses:
+        '201':
+          description: Host saved after strict host-key preflight.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/DockerHost'}
+        '409': {$ref: './components.yaml#/components/responses/Conflict'}
+        '422': {$ref: './components.yaml#/components/responses/ValidationFailed'}
+  /docker-hosts/local/discovery:
+    get:
+      tags: [Docker Hosts]
+      operationId: discoverLocalDocker
+      description: Probes `/var/run/docker.sock` directly without invoking the Docker CLI.
+      responses:
+        '200':
+          description: Current local Docker Engine probe result.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/DockerProbe'}
+        '401': {$ref: './components.yaml#/components/responses/Unauthorized'}
+  /docker-hosts/{docker_host_id}:
+    parameters: [{$ref: './components.yaml#/components/parameters/DockerHostID'}]
+    get:
+      tags: [Docker Hosts]
+      operationId: getDockerHost
+      responses:
+        '200':
+          description: Docker host profile.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/DockerHost'}
+        '404': {$ref: './components.yaml#/components/responses/NotFound'}
+    patch:
+      tags: [Docker Hosts]
+      operationId: updateDockerHost
+      parameters: [{$ref: './components.yaml#/components/parameters/CSRFToken'}]
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema: {$ref: './components.yaml#/components/schemas/UpdateDockerHostRequest'}
+      responses:
+        '200':
+          description: Updated and revalidated host.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/DockerHost'}
+        '404': {$ref: './components.yaml#/components/responses/NotFound'}
+        '409': {$ref: './components.yaml#/components/responses/Conflict'}
+    delete:
+      tags: [Docker Hosts]
+      operationId: deleteDockerHost
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/CSRFToken'}
+        - {name: confirmation, in: query, required: true, schema: {type: string}}
+      responses:
+        '204': {description: Profile removed; Docker resources were not deleted.}
+        '404': {$ref: './components.yaml#/components/responses/NotFound'}
+        '409': {$ref: './components.yaml#/components/responses/Conflict'}
+  /docker-hosts/{docker_host_id}/preflight:
+    post:
+      tags: [Docker Hosts]
+      operationId: preflightDockerHost
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/DockerHostID'}
+        - {$ref: './components.yaml#/components/parameters/CSRFToken'}
+        - {$ref: './components.yaml#/components/parameters/IdempotencyKey'}
+      responses:
+        '202':
+          description: Preflight job queued.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/Job'}
+        '404': {$ref: './components.yaml#/components/responses/NotFound'}
+  /templates:
+    get:
+      tags: [Templates]
+      operationId: listTemplates
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/PageSize'}
+        - {$ref: './components.yaml#/components/parameters/PageToken'}
+      responses:
+        '200':
+          description: Container templates.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/TemplateList'}
+    post:
+      tags: [Templates]
+      operationId: createTemplate
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/CSRFToken'}
+        - {$ref: './components.yaml#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './components.yaml#/components/schemas/CreateTemplateRequest'}
+      responses:
+        '201':
+          description: Template created.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/Template'}
+        '409': {$ref: './components.yaml#/components/responses/Conflict'}
+        '422': {$ref: './components.yaml#/components/responses/ValidationFailed'}
+  /templates/{template_id}:
+    get:
+      tags: [Templates]
+      operationId: getTemplate
+      parameters: [{$ref: './components.yaml#/components/parameters/TemplateID'}]
+      responses:
+        '200':
+          description: Template and immutable revisions.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/TemplateDetail'}
+        '404': {$ref: './components.yaml#/components/responses/NotFound'}
+  /templates/{template_id}/revisions:
+    post:
+      tags: [Templates]
+      operationId: publishTemplateRevision
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/TemplateID'}
+        - {$ref: './components.yaml#/components/parameters/CSRFToken'}
+        - {$ref: './components.yaml#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './components.yaml#/components/schemas/PublishTemplateRevisionRequest'}
+      responses:
+        '201':
+          description: Immutable template revision published.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/TemplateRevision'}
+        '409': {$ref: './components.yaml#/components/responses/Conflict'}
+        '422': {$ref: './components.yaml#/components/responses/ValidationFailed'}
+  /network-profiles:
+    get:
+      tags: [Networks]
+      operationId: listNetworkProfiles
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/PageSize'}
+        - {$ref: './components.yaml#/components/parameters/PageToken'}
+      responses:
+        '200':
+          description: Network profile revisions.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/NetworkProfileList'}
+    post:
+      tags: [Networks]
+      operationId: createNetworkProfile
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/CSRFToken'}
+        - {$ref: './components.yaml#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './components.yaml#/components/schemas/CreateNetworkProfileRequest'}
+      responses:
+        '201':
+          description: Network profile created.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/NetworkProfile'}
+        '409': {$ref: './components.yaml#/components/responses/Conflict'}
+        '422': {$ref: './components.yaml#/components/responses/ValidationFailed'}
+  /network-profiles/{network_profile_id}:
+    get:
+      tags: [Networks]
+      operationId: getNetworkProfile
+      parameters: [{$ref: './components.yaml#/components/parameters/NetworkProfileID'}]
+      responses:
+        '200':
+          description: Network profile revision.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/NetworkProfile'}
+        '404': {$ref: './components.yaml#/components/responses/NotFound'}
+  /network-profiles/{network_profile_id}/preflight:
+    post:
+      tags: [Networks]
+      operationId: preflightNetworkProfile
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/NetworkProfileID'}
+        - {$ref: './components.yaml#/components/parameters/CSRFToken'}
+        - {$ref: './components.yaml#/components/parameters/IdempotencyKey'}
+      responses:
+        '202':
+          description: Network/plugin preflight job queued.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/Job'}
+        '404': {$ref: './components.yaml#/components/responses/NotFound'}
+  /network-profiles/{network_profile_id}/revisions:
+    post:
+      tags: [Networks]
+      operationId: publishNetworkProfileRevision
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/NetworkProfileID'}
+        - {$ref: './components.yaml#/components/parameters/CSRFToken'}
+        - {$ref: './components.yaml#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './components.yaml#/components/schemas/PublishNetworkProfileRevisionRequest'}
+      responses:
+        '201':
+          description: New immutable network revision created; existing endpoints stay on the prior revision until rolled.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/NetworkProfile'}
+        '404': {$ref: './components.yaml#/components/responses/NotFound'}
+        '409': {$ref: './components.yaml#/components/responses/Conflict'}
+        '422': {$ref: './components.yaml#/components/responses/ValidationFailed'}
+  /ip-reservations:
+    get:
+      tags: [Networks]
+      operationId: listIPReservations
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/PageSize'}
+        - {$ref: './components.yaml#/components/parameters/PageToken'}
+        - {name: network_profile_id, in: query, schema: {$ref: './components.yaml#/components/schemas/UUIDv7'}}
+      responses:
+        '200':
+          description: Active and released IP reservations.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/IPReservationList'}
+  /releases:
+    get:
+      tags: [Releases]
+      operationId: listReleases
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/PageSize'}
+        - {$ref: './components.yaml#/components/parameters/PageToken'}
+        - {name: channel, in: query, schema: {$ref: './components.yaml#/components/schemas/ReleaseChannel'}}
+      responses:
+        '200':
+          description: Verified release catalog.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/ReleaseList'}
+    post:
+      tags: [Releases]
+      operationId: importRelease
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/CSRFToken'}
+        - {$ref: './components.yaml#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './components.yaml#/components/schemas/ImportReleaseRequest'}
+      responses:
+        '202':
+          description: Manifest download and verification queued.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/Job'}
+        '422': {$ref: './components.yaml#/components/responses/ValidationFailed'}
+  /releases/{release_id}:
+    get:
+      tags: [Releases]
+      operationId: getRelease
+      parameters: [{$ref: './components.yaml#/components/parameters/ReleaseID'}]
+      responses:
+        '200':
+          description: Verified release manifest and artifact status.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/Release'}
+        '404': {$ref: './components.yaml#/components/responses/NotFound'}
+  /releases/{release_id}/rollouts:
+    post:
+      tags: [Releases]
+      operationId: createUpdateRollout
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/ReleaseID'}
+        - {$ref: './components.yaml#/components/parameters/CSRFToken'}
+        - {$ref: './components.yaml#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './components.yaml#/components/schemas/CreateUpdateRolloutRequest'}
+      responses:
+        '202':
+          description: Canary/wave rollout job queued.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/Job'}
+        '403': {$ref: './components.yaml#/components/responses/ReauthenticationRequired'}
+        '404': {$ref: './components.yaml#/components/responses/NotFound'}
+        '409': {$ref: './components.yaml#/components/responses/Conflict'}
+  /diagnostics:
+    post:
+      tags: [Diagnostics]
+      operationId: createDiagnosticBundle
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/CSRFToken'}
+        - {$ref: './components.yaml#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './components.yaml#/components/schemas/CreateDiagnosticRequest'}
+      responses:
+        '202':
+          description: Redacted support bundle generation queued.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/DiagnosticBundle'}
+        '422': {$ref: './components.yaml#/components/responses/ValidationFailed'}
+  /diagnostics/{diagnostic_id}:
+    get:
+      tags: [Diagnostics]
+      operationId: getDiagnosticBundle
+      parameters: [{$ref: './components.yaml#/components/parameters/DiagnosticID'}]
+      responses:
+        '200':
+          description: Diagnostic bundle metadata.
+          content:
+            application/json:
+              schema: {$ref: './components.yaml#/components/schemas/DiagnosticBundle'}
+        '404': {$ref: './components.yaml#/components/responses/NotFound'}
+    delete:
+      tags: [Diagnostics]
+      operationId: deleteDiagnosticBundle
+      parameters:
+        - {$ref: './components.yaml#/components/parameters/DiagnosticID'}
+        - {$ref: './components.yaml#/components/parameters/CSRFToken'}
+      responses:
+        '204': {description: Bundle and metadata deleted.}
+        '404': {$ref: './components.yaml#/components/responses/NotFound'}
+  /diagnostics/{diagnostic_id}/download:
+    get:
+      tags: [Diagnostics]
+      operationId: downloadDiagnosticBundle
+      parameters: [{$ref: './components.yaml#/components/parameters/DiagnosticID'}]
+      responses:
+        '200':
+          description: Redacted tar.zst support bundle.
+          content:
+            application/zstd:
+              schema: {type: string, contentEncoding: binary}
+        '404': {$ref: './components.yaml#/components/responses/NotFound'}
+        '409': {$ref: './components.yaml#/components/responses/Conflict'}
+  /events:
+    get:
+      tags: [Events]
+      operationId: connectEvents
+      description: |
+        Upgrades to WebSocket. Clients pass the last applied cursor and must
+        refetch a REST snapshot when a `resync_required` envelope is received.
+      x-websocket: true
+      parameters:
+        - name: cursor
+          in: query
+          schema: {$ref: './components.yaml#/components/schemas/EventCursor'}
+        - name: Origin
+          in: header
+          required: true
+          schema: {type: string, format: uri}
+      responses:
+        '101':
+          description: WebSocket event stream; each text frame is an EventEnvelope.
+          x-message-schema: {$ref: './components.yaml#/components/schemas/EventEnvelope'}
+        '400': {$ref: './components.yaml#/components/responses/BadRequest'}
+        '401': {$ref: './components.yaml#/components/responses/Unauthorized'}
+        '403': {$ref: './components.yaml#/components/responses/Forbidden'}
+  /artifacts/releases/{tag}/{name}:
+    get:
+      tags: [Bootstrap Artifacts]
+      operationId: downloadVerifiedAgentArtifact
+      description: Serves only a whitelisted artifact from the manager's matching offline-signed release cache.
+      security: []
+      parameters:
+        - name: tag
+          in: path
+          required: true
+          schema: {type: string, pattern: '^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$'}
+        - name: name
+          in: path
+          required: true
+          schema: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$'}
+      responses:
+        '200':
+          description: Verified immutable release artifact.
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        '404': {$ref: './components.yaml#/components/responses/NotFound'}
+        '503': {$ref: './components.yaml#/components/responses/ServiceUnavailable'}
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: bm_session

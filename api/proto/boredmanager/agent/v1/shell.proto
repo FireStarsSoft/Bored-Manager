@@ -1,0 +1,107 @@
+syntax = "proto3";
+
+package boredmanager.agent.v1;
+
+import "boredmanager/agent/v1/common.proto";
+
+option go_package = "github.com/FireStarsSoft/Bored-Manager/api/gen/go/boredmanager/agent/v1;agentv1";
+
+// ShellService is a distinct flow-controlled channel. The agent initiates this
+// bidirectional stream after receiving an out-of-band shell offer identifier.
+service ShellService {
+  rpc OpenShell(stream AgentShellFrame) returns (stream ManagerShellFrame);
+}
+
+message AgentShellFrame {
+  FrameMetadata metadata = 1;
+  string shell_id = 2;
+  oneof body {
+    ShellAccepted accepted = 10;
+    ShellOutput output = 11;
+    ShellExit exit = 12;
+    ShellProblem problem = 13;
+    ShellWindowAck window_ack = 14;
+  }
+}
+
+message ManagerShellFrame {
+  FrameMetadata metadata = 1;
+  string shell_id = 2;
+  oneof body {
+    ShellOpen open = 10;
+    ShellInput input = 11;
+    ShellResize resize = 12;
+    ShellSignal signal = 13;
+    ShellClose close = 14;
+  }
+}
+
+message ShellOpen {
+  string offer_nonce = 1;
+  string operating_system_user = 2;
+  repeated string command = 3;
+  map<string, string> environment = 4;
+  uint32 columns = 5;
+  uint32 rows = 6;
+  bool root_authorized = 7;
+  int64 expires_at_unix_ms = 8;
+  uint32 initial_receive_window_bytes = 9;
+}
+
+message ShellAccepted {
+  uint32 process_id = 1;
+  string operating_system_user = 2;
+  uint32 receive_window_bytes = 3;
+}
+
+message ShellInput {
+  uint64 offset = 1;
+  bytes data = 2;
+}
+
+message ShellOutput {
+  enum Stream {
+    STREAM_UNSPECIFIED = 0;
+    STREAM_STDOUT = 1;
+    STREAM_STDERR = 2;
+  }
+  Stream stream = 1;
+  uint64 offset = 2;
+  bytes data = 3;
+}
+
+message ShellResize {
+  uint32 columns = 1;
+  uint32 rows = 2;
+}
+
+message ShellSignal {
+  enum Signal {
+    SIGNAL_UNSPECIFIED = 0;
+    SIGNAL_INTERRUPT = 1;
+    SIGNAL_TERMINATE = 2;
+    SIGNAL_KILL = 3;
+    SIGNAL_HANGUP = 4;
+  }
+  Signal signal = 1;
+}
+
+message ShellClose {
+  string reason = 1;
+  uint32 grace_period_seconds = 2;
+}
+
+message ShellExit {
+  int32 exit_code = 1;
+  int32 terminating_signal = 2;
+  int64 finished_at_unix_ms = 3;
+}
+
+message ShellProblem {
+  Problem problem = 1;
+}
+
+message ShellWindowAck {
+  uint64 consumed_through_offset = 1;
+  uint32 receive_window_bytes = 2;
+}

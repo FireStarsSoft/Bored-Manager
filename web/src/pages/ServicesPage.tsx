@@ -1,0 +1,20 @@
+import { useMemo, useState } from "react";
+import { Blocks, CheckCircle2, FileSignature, Filter, MoreHorizontal, Plus, Search, ShieldCheck } from "lucide-react";
+import { useApi } from "../api/context";
+import { useAsyncData } from "../hooks/useAsyncData";
+import type { ServiceDefinition } from "../types";
+import { Badge, Button, EmptyState, ErrorPanel, LoadingPanel, PageHeader, Panel } from "../components/ui";
+
+export function ServicesPage() {
+  const api = useApi();
+  const [query, setQuery] = useState("");
+  const [adapter, setAdapter] = useState("all");
+  const resource = useAsyncData<ServiceDefinition[]>((signal) => api.listServices(signal), [api]);
+  const filtered = useMemo(() => (resource.data ?? []).filter((service) => (adapter === "all" || service.adapter === adapter) && (!query || `${service.name} ${service.key} ${service.description}`.toLowerCase().includes(query.toLowerCase()))), [adapter, query, resource.data]);
+  return <div className="page"><PageHeader eyebrow="Signed catalog" title="Services" description="Define once, monitor continuously and run controlled lifecycle actions." actions={<Button disabled={!import.meta.env.DEV}><Plus size={16} /> New service definition</Button>} />
+    <section className="summary-strip"><span><Blocks size={17} /><strong>{resource.data?.length ?? 0}</strong> definitions</span><span><CheckCircle2 size={17} /><strong>{resource.data?.reduce((sum, service) => sum + service.healthy, 0) ?? 0}</strong> healthy assignments</span><span><FileSignature size={17} /><strong>{resource.data?.length ? `${Math.round(resource.data.filter((service) => service.signed).length / resource.data.length * 100)}%` : "--"}</strong> signed revisions</span><span><ShieldCheck size={17} /><strong>--</strong> policy audit pending</span></section>
+    <Panel><div className="panel-heading"><div><h2>Service catalog</h2><p>Immutable revisions pin every detector, action and rollback hint.</p></div><div className="compact-filters"><label className="table-search"><Search size={16} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search catalog..." aria-label="Search service catalog" /></label><label className="select-control"><Filter size={15} /><select aria-label="Filter by adapter" value={adapter} onChange={(e) => setAdapter(e.target.value)}><option value="all">All adapters</option><option value="systemd">systemd</option><option value="http">HTTP</option><option value="command">Command</option><option value="process">Process</option><option value="tcp">TCP</option></select></label></div></div>
+      {resource.loading ? <LoadingPanel label="Loading catalog" /> : resource.error ? <ErrorPanel message={resource.error} retry={resource.reload} /> : filtered.length === 0 ? <EmptyState title={resource.data?.length ? "No matching services" : "Service catalog is a pre-alpha capability"}>{resource.data?.length ? "Try a different search or adapter." : "The manager API does not expose service definitions yet. This screen will populate as soon as the monitoring stage is enabled."}</EmptyState> : <div className="catalog-grid">{filtered.map((service) => <article className="catalog-card" key={service.id}><header><span className="service-icon"><Blocks size={19} /></span><div><h3>{service.name}</h3><code>{service.key}</code></div><button className="row-menu" aria-label={`Actions for ${service.name}`}><MoreHorizontal size={18} /></button></header><p>{service.description}</p><div className="catalog-meta"><Badge tone="info">{service.adapter}</Badge><Badge tone="success"><FileSignature size={12} /> revision {service.revision}</Badge></div><dl><div><dt>Assignments</dt><dd>{service.assigned}</dd></div><div><dt>Healthy</dt><dd className={service.healthy === service.assigned ? "good" : "warning-text"}>{service.healthy}/{service.assigned}</dd></div><div><dt>Platform</dt><dd>{service.supportedOs}</dd></div></dl><footer><button>View revision</button><button>Manage assignments</button></footer></article>)}</div>}
+    </Panel>
+  </div>;
+}

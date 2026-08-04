@@ -1,0 +1,36 @@
+[Unit]
+Description=Bored Manager container agent
+Documentation=https://github.com/FireStarsSoft/Bored-Manager
+Wants=network-online.target
+After=network-online.target dbus.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+EnvironmentFile=-/etc/default/bored-manager-agent
+EnvironmentFile=-/etc/bored-manager/agent.env
+ExecStart=/usr/bin/bored-agentd
+Restart=always
+RestartSec=5s
+TimeoutStopSec=30s
+KillMode=mixed
+UMask=0077
+
+RuntimeDirectory=bored-manager-agent
+RuntimeDirectoryMode=0700
+StateDirectory=bored-manager-agent
+StateDirectoryMode=0700
+
+PrivateTmp=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,170 @@
+syntax = "proto3";
+
+package boredmanager.agent.v1;
+
+import "boredmanager/agent/v1/common.proto";
+
+option go_package = "github.com/FireStarsSoft/Bored-Manager/api/gen/go/boredmanager/agent/v1;agentv1";
+
+// ControlService carries only control-plane state. PTY bytes and artifact data
+// are deliberately excluded so they cannot starve heartbeat and job control.
+service ControlService {
+  rpc Connect(stream AgentControlFrame) returns (stream ManagerControlFrame);
+}
+
+message AgentControlFrame {
+  FrameMetadata metadata = 1;
+  oneof body {
+    AgentHello hello = 10;
+    Heartbeat heartbeat = 11;
+    InventorySnapshot inventory_snapshot = 12;
+    ServiceStateDelta service_state_delta = 13;
+    ServiceStateSnapshot service_state_snapshot = 14;
+    JobPrepared job_prepared = 15;
+    JobProgress job_progress = 16;
+    JobResult job_result = 17;
+    LeaseRenewal lease_renewal = 18;
+    AgentDraining draining = 19;
+  }
+}
+
+message ManagerControlFrame {
+  FrameMetadata metadata = 1;
+  oneof body {
+    ManagerWelcome welcome = 10;
+    JobOffer job_offer = 11;
+    PrepareJob prepare_job = 12;
+    CommitJob commit_job = 13;
+    CancelJob cancel_job = 14;
+    SnapshotRequest snapshot_request = 15;
+    CertificateRotation certificate_rotation = 16;
+    CertificateRevoked certificate_revoked = 17;
+    DrainAgent drain_agent = 18;
+  }
+}
+
+message AgentHello {
+  string session_nonce = 1;
+  uint64 last_manager_sequence = 2;
+  uint64 last_completed_event_sequence = 3;
+  Inventory inventory = 4;
+  repeated string capabilities = 5;
+}
+
+message ManagerWelcome {
+  string connection_id = 1;
+  int64 server_time_unix_ms = 2;
+  uint32 heartbeat_interval_seconds = 3;
+  uint32 stale_after_seconds = 4;
+  uint64 maximum_frame_bytes = 5;
+  string minimum_agent_version = 6;
+}
+
+message Heartbeat {
+  ResourceMetrics metrics = 1;
+  uint32 active_job_count = 2;
+  uint32 active_shell_count = 3;
+  uint64 last_applied_manager_sequence = 4;
+}
+
+message InventorySnapshot {
+  Inventory inventory = 1;
+}
+
+message ServiceStateDelta {
+  repeated ObservedServiceState changed = 1;
+  uint64 snapshot_generation = 2;
+}
+
+message ServiceStateSnapshot {
+  repeated ObservedServiceState services = 1;
+  uint64 snapshot_generation = 2;
+  bool complete = 3;
+}
+
+message JobOffer {
+  JobLease lease = 1;
+  string job_type = 2;
+  bytes parameters_json = 3;
+  bool barrier = 4;
+  int64 prepare_deadline_unix_ms = 5;
+}
+
+message PrepareJob {
+  JobLease lease = 1;
+  bytes immutable_parameters_json = 2;
+  repeated ArtifactDescriptor artifacts = 3;
+}
+
+message JobPrepared {
+  JobLease lease = 1;
+  bool ready = 2;
+  Problem problem = 3;
+  bytes preparation_result_json = 4;
+}
+
+message CommitJob {
+  JobLease lease = 1;
+  int64 not_before_unix_ms = 2;
+  int64 execution_deadline_unix_ms = 3;
+}
+
+message JobProgress {
+  JobLease lease = 1;
+  JobTargetState state = 2;
+  uint32 progress_percent = 3;
+  string phase = 4;
+  string bounded_summary = 5;
+}
+
+message JobResult {
+  JobLease lease = 1;
+  JobTargetState terminal_state = 2;
+  int32 exit_code = 3;
+  bytes result_json = 4;
+  Problem problem = 5;
+  int64 finished_at_unix_ms = 6;
+}
+
+message LeaseRenewal {
+  JobLease lease = 1;
+  JobTargetState state = 2;
+}
+
+message CancelJob {
+  string job_id = 1;
+  string target_id = 2;
+  string lease_id = 3;
+  string reason = 4;
+  int64 grace_deadline_unix_ms = 5;
+}
+
+message SnapshotRequest {
+  bool inventory = 1;
+  bool services = 2;
+  string reason = 3;
+}
+
+message CertificateRotation {
+  string rotation_id = 1;
+  bytes certificate_chain_pem = 2;
+  bytes manager_ca_pem = 3;
+  int64 not_after_unix_ms = 4;
+}
+
+message CertificateRevoked {
+  string certificate_serial = 1;
+  string reason = 2;
+  int64 disconnect_at_unix_ms = 3;
+}
+
+message DrainAgent {
+  string reason = 1;
+  int64 deadline_unix_ms = 2;
+}
+
+message AgentDraining {
+  uint32 active_job_count = 1;
+  uint32 active_shell_count = 2;
+  bool safe_to_disconnect = 3;
+}

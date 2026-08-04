@@ -1,0 +1,36 @@
+[Unit]
+Description=Bored Manager guarded package update helper
+Documentation=https://github.com/FireStarsSoft/Bored-Manager/blob/main/docs/runbooks/release.md
+Requires=bored-managerd.service
+After=local-fs.target bored-managerd.service
+
+[Service]
+Type=simple
+User=root
+Group=bored-manager
+EnvironmentFile=-/etc/default/bored-manager
+ExecStart=/usr/lib/bored-manager/bored-update-helper
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+KillMode=mixed
+UMask=0077
+
+NoNewPrivileges=no
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+IPAddressDeny=any
+
+[Install]
+WantedBy=multi-user.target

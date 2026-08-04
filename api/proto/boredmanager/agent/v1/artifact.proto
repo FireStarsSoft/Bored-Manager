@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package boredmanager.agent.v1;
+
+import "boredmanager/agent/v1/common.proto";
+
+option go_package = "github.com/FireStarsSoft/Bored-Manager/api/gen/go/boredmanager/agent/v1;agentv1";
+
+// ArtifactService is a pull-only, integrity-checked data plane. Agents never
+// fetch release artifacts from the Internet and must verify size/digest/signature.
+service ArtifactService {
+  rpc GetArtifact(ArtifactRequest) returns (stream ArtifactChunk);
+  rpc ReportArtifactResult(ArtifactResult) returns (ArtifactReceipt);
+}
+
+message ArtifactRequest {
+  FrameMetadata metadata = 1;
+  string artifact_id = 2;
+  string lease_id = 3;
+  uint64 resume_offset = 4;
+  string expected_sha256_digest = 5;
+}
+
+message ArtifactChunk {
+  FrameMetadata metadata = 1;
+  ArtifactDescriptor descriptor = 2;
+  uint64 offset = 3;
+  bytes data = 4;
+  bytes chunk_sha256 = 5;
+  bool final_chunk = 6;
+}
+
+message ArtifactResult {
+  FrameMetadata metadata = 1;
+  string artifact_id = 2;
+  string lease_id = 3;
+  bool verified = 4;
+  uint64 received_bytes = 5;
+  string computed_sha256_digest = 6;
+  Problem problem = 7;
+}
+
+message ArtifactReceipt {
+  FrameMetadata metadata = 1;
+  string artifact_id = 2;
+  bool accepted = 3;
+  int64 recorded_at_unix_ms = 4;
+  Problem problem = 5;
+}

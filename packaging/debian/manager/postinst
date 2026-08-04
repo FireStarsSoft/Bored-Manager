@@ -1,0 +1,26 @@
+#!/bin/sh
+set -eu
+
+if ! getent group bored-manager >/dev/null 2>&1; then
+    addgroup --system bored-manager >/dev/null
+fi
+
+if ! getent passwd bored-manager >/dev/null 2>&1; then
+    adduser --system --ingroup bored-manager --home /var/lib/bored-manager \
+        --no-create-home --shell /usr/sbin/nologin --disabled-password \
+        --gecos "Bored Manager daemon" bored-manager >/dev/null
+fi
+
+install -d -o bored-manager -g bored-manager -m 0750 \
+    /etc/bored-manager /var/lib/bored-manager /var/cache/bored-manager /run/bored-manager
+install -d -o bored-manager -g bored-manager -m 0750 /var/cache/bored-manager/staged
+
+if command -v systemd-tmpfiles >/dev/null 2>&1; then
+    systemd-tmpfiles --create /usr/lib/tmpfiles.d/bored-manager.conf || true
+fi
+
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload || true
+fi
+
+exit 0

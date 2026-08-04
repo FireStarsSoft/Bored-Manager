@@ -1,0 +1,26 @@
+#!/bin/sh
+set -eu
+
+if ! getent group bored-shell >/dev/null 2>&1; then
+    addgroup --system bored-shell >/dev/null
+fi
+
+if ! getent passwd bored-shell >/dev/null 2>&1; then
+    adduser --system --ingroup bored-shell --home /var/lib/bored-manager-agent/shell \
+        --no-create-home --shell /bin/bash --disabled-password \
+        --gecos "Bored Manager restricted terminal" bored-shell >/dev/null
+fi
+
+install -d -o root -g root -m 0750 /etc/bored-manager
+install -d -o root -g root -m 0700 /var/lib/bored-manager-agent /run/bored-manager-agent
+install -d -o bored-shell -g bored-shell -m 0750 /var/lib/bored-manager-agent/shell
+
+if command -v systemd-tmpfiles >/dev/null 2>&1; then
+    systemd-tmpfiles --create /usr/lib/tmpfiles.d/bored-manager-agent.conf || true
+fi
+
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload || true
+fi
+
+exit 0

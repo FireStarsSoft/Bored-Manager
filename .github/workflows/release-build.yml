@@ -1,0 +1,150 @@
+name: Build draft release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing protected tag (vX.Y.Z)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build-draft:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Checkout exact tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate tag and release trust root
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+          [[ "$(git describe --tags --exact-match)" == "$RELEASE_TAG" ]]
+          python3 scripts/verify-release-readiness.py \
+            --tag "$RELEASE_TAG" --commit "$(git rev-parse HEAD)"
+          test -f packaging/release/release-public-key.pem
+          test -f packaging/release/release-public-key.sha256
+          actual_key_sha="$(openssl pkey -pubin -in packaging/release/release-public-key.pem -outform DER | sha256sum | awk '{print $1}')"
+          expected_key_sha="$(tr -d '[:space:]' < packaging/release/release-public-key.sha256)"
+          [[ "$actual_key_sha" == "$expected_key_sha" ]]
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.5
+          cache-dependency-path: go.sum
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.18.0
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Test and build
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          commit="$(git rev-parse HEAD)"
+          build_time="$(git show -s --format=%cI HEAD)"
+          npm ci --prefix web
+          npm audit --prefix web --audit-level=moderate
+          bash scripts/generate-contracts.sh
+          git diff --exit-code -- api/gen web/src/api/generated
+          test -z "$(git status --porcelain --untracked-files=all -- api/gen web/src/api/generated)"
+          make test
+          make build VERSION="$version" COMMIT="$commit" BUILD_TIME="$build_time"
+          bash scripts/build-deb.sh --version "$version" --architecture amd64 \
+            --output-dir dist/packages \
+            --release-public-key packaging/release/release-public-key.pem
+          bash scripts/verify-deb.sh \
+            "dist/packages/bored-manager_${version}-1_amd64.deb" \
+            "dist/packages/bored-manager-agent_${version}-1_amd64.deb"
+          mkdir -p dist/release
+          cp dist/packages/*.deb dist/release/
+          bash scripts/render-installers.sh \
+            --public-key packaging/release/release-public-key.pem \
+            --output-dir dist/release
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: dist/release
+          format: spdx-json
+          output-file: dist/release/bored-manager.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Create GitHub build provenance
+        id: provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: |
+            dist/release/*.deb
+            dist/release/install-manager.sh
+            dist/release/install-agent.sh
+      - name: Assemble canonical release metadata
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          PROVENANCE_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          build_time="$(git show -s --format=%cI HEAD)"
+          test -n "$build_time"
+          cp "$PROVENANCE_BUNDLE" dist/release/bored-manager.intoto.jsonl
+          mapfile -t checksum_inputs < <(find dist/release -maxdepth 1 -type f -printf '%p\n' | LC_ALL=C sort)
+          bash scripts/generate-checksums.sh dist/release/SHA256SUMS "${checksum_inputs[@]}"
+          channel=stable
+          [[ "$version" != *-* ]] || channel=prerelease
+          compat_series="$(printf '%s' "$version" | cut -d. -f1-2).x"
+          manager_package="dist/release/bored-manager_${version}-1_amd64.deb"
+          agent_package="dist/release/bored-manager-agent_${version}-1_amd64.deb"
+          test -f "$manager_package"
+          test -f "$agent_package"
+          python3 scripts/generate-release-manifest.py \
+            --version "$version" \
+            --commit "$(git rev-parse HEAD)" \
+            --channel "$channel" \
+            --published-at "$build_time" \
+            --agent-compat "$compat_series" \
+            --output dist/release/release-manifest-v1.json \
+            --artifact installer:manager:dist/release/install-manager.sh \
+            --artifact installer:agent:dist/release/install-agent.sh \
+            --artifact checksums:release:dist/release/SHA256SUMS \
+            --artifact sbom:release:dist/release/bored-manager.spdx.json \
+            --artifact provenance:release:dist/release/bored-manager.intoto.jsonl \
+            --artifact debian-package:manager:"$manager_package" \
+            --artifact debian-package:agent:"$agent_package"
+          bash -n dist/release/install-manager.sh dist/release/install-agent.sh
+          ! grep -R '@@BORED_MANAGER_' dist/release
+      - name: Create unsigned draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          prerelease_flag=()
+          [[ "$RELEASE_TAG" != *-* ]] || prerelease_flag=(--prerelease)
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 && {
+            echo "Release already exists; refusing to replace draft assets" >&2
+            exit 1
+          }
+          gh release create "$RELEASE_TAG" dist/release/* \
+            --draft "${prerelease_flag[@]}" \
+            --title "Bored Manager ${RELEASE_TAG}" \
+            --notes "Unsigned draft. Do not install. Offline signatures and promotion are required."
+      - name: Upload workflow evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: unsigned-release-${{ inputs.tag }}
+          path: dist/release/
+          if-no-files-found: error
+          retention-days: 14

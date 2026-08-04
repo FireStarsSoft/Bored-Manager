@@ -1,0 +1,3 @@
+# DEVELOPMENT PLACEHOLDER - NOT A PUBLIC KEY
+# Release builds must replace this file with the reviewed Ed25519 public key.
+@@BORED_MANAGER_RELEASE_PUBLIC_KEY_PEM@@

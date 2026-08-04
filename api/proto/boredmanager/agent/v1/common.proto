@@ -1,0 +1,137 @@
+syntax = "proto3";
+
+package boredmanager.agent.v1;
+
+option go_package = "github.com/FireStarsSoft/Bored-Manager/api/gen/go/boredmanager/agent/v1;agentv1";
+
+// Compatibility policy: field numbers and names are never reused. When a
+// published field is removed, that exact number and name must be declared
+// reserved in its message. This initial schema has no field tombstones yet.
+
+// FrameMetadata is mandatory on every streaming frame. sequence is monotonic
+// within one stream incarnation; sent_at_unix_ms is UTC Unix milliseconds.
+message FrameMetadata {
+  string protocol_version = 1;
+  string agent_id = 2;
+  uint64 sequence = 3;
+  int64 sent_at_unix_ms = 4;
+  string connection_id = 5;
+}
+
+message Problem {
+  string code = 1;
+  string title = 2;
+  string detail = 3;
+  bool retryable = 4;
+  map<string, string> metadata = 5;
+}
+
+message Inventory {
+  string hostname = 1;
+  string os_release = 2;
+  string architecture = 3;
+  string kernel_version = 4;
+  string agent_version = 5;
+  string systemd_version = 6;
+  string machine_id_hash = 7;
+  uint32 cpu_count = 8;
+  uint64 memory_bytes = 9;
+  uint64 disk_bytes = 10;
+  repeated string addresses = 11;
+  map<string, string> labels = 12;
+}
+
+message ResourceMetrics {
+  double cpu_percent = 1;
+  uint64 memory_used_bytes = 2;
+  uint64 memory_limit_bytes = 3;
+  uint64 disk_used_bytes = 4;
+  uint64 disk_total_bytes = 5;
+  uint64 network_receive_bytes = 6;
+  uint64 network_transmit_bytes = 7;
+  int64 sampled_at_unix_ms = 8;
+}
+
+enum InstallationState {
+  INSTALLATION_STATE_UNSPECIFIED = 0;
+  INSTALLATION_STATE_UNSUPPORTED = 1;
+  INSTALLATION_STATE_NOT_INSTALLED = 2;
+  INSTALLATION_STATE_INSTALLED = 3;
+  INSTALLATION_STATE_UNKNOWN = 4;
+}
+
+enum EnablementState {
+  ENABLEMENT_STATE_UNSPECIFIED = 0;
+  ENABLEMENT_STATE_ENABLED = 1;
+  ENABLEMENT_STATE_DISABLED = 2;
+  ENABLEMENT_STATE_STATIC = 3;
+  ENABLEMENT_STATE_MASKED = 4;
+  ENABLEMENT_STATE_UNKNOWN = 5;
+}
+
+enum RuntimeState {
+  RUNTIME_STATE_UNSPECIFIED = 0;
+  RUNTIME_STATE_ACTIVE = 1;
+  RUNTIME_STATE_INACTIVE = 2;
+  RUNTIME_STATE_STARTING = 3;
+  RUNTIME_STATE_FAILED = 4;
+  RUNTIME_STATE_UNKNOWN = 5;
+}
+
+enum HealthState {
+  HEALTH_STATE_UNSPECIFIED = 0;
+  HEALTH_STATE_HEALTHY = 1;
+  HEALTH_STATE_UNHEALTHY = 2;
+  HEALTH_STATE_DEGRADED = 3;
+  HEALTH_STATE_UNKNOWN = 4;
+  HEALTH_STATE_NOT_CONFIGURED = 5;
+}
+
+message ObservedServiceState {
+  string service_definition_id = 1;
+  string service_revision_id = 2;
+  InstallationState installation = 3;
+  EnablementState enablement = 4;
+  RuntimeState runtime = 5;
+  HealthState health = 6;
+  string version = 7;
+  string systemd_active_state = 8;
+  string systemd_sub_state = 9;
+  int64 checked_at_unix_ms = 10;
+  int64 transitioned_at_unix_ms = 11;
+  uint64 state_duration_seconds = 12;
+  string error_summary = 13;
+}
+
+enum JobTargetState {
+  JOB_TARGET_STATE_UNSPECIFIED = 0;
+  JOB_TARGET_STATE_QUEUED = 1;
+  JOB_TARGET_STATE_LEASED = 2;
+  JOB_TARGET_STATE_PREPARING = 3;
+  JOB_TARGET_STATE_READY = 4;
+  JOB_TARGET_STATE_COMMITTED = 5;
+  JOB_TARGET_STATE_RUNNING = 6;
+  JOB_TARGET_STATE_SUCCEEDED = 7;
+  JOB_TARGET_STATE_FAILED = 8;
+  JOB_TARGET_STATE_CANCELLED = 9;
+  JOB_TARGET_STATE_EXPIRED = 10;
+}
+
+message JobLease {
+  string job_id = 1;
+  string target_id = 2;
+  string lease_id = 3;
+  int64 expires_at_unix_ms = 4;
+  uint32 attempt = 5;
+  string idempotency_key = 6;
+}
+
+message ArtifactDescriptor {
+  string artifact_id = 1;
+  string name = 2;
+  string media_type = 3;
+  uint64 size_bytes = 4;
+  string sha256_digest = 5;
+  bytes signature = 6;
+  uint32 chunk_size_bytes = 7;
+}

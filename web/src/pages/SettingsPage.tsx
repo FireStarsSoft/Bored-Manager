@@ -1,0 +1,23 @@
+import { useEffect, useState, type FormEvent } from "react";
+import { Database, HardDrive, KeyRound, LockKeyhole, Save, ShieldCheck } from "lucide-react";
+import { useApi } from "../api/context";
+import { useAsyncData } from "../hooks/useAsyncData";
+import type { Settings } from "../types";
+import { Badge, Button, ErrorPanel, LoadingPanel, PageHeader, Panel, Toast } from "../components/ui";
+
+export function SettingsPage() {
+  const api = useApi(); const resource = useAsyncData<Settings>((signal) => api.getSettings(signal), [api]);
+  const [form, setForm] = useState<Settings>(); const [busy, setBusy] = useState(false); const [notice, setNotice] = useState<string>();
+  useEffect(() => { if (resource.data) setForm(resource.data); }, [resource.data]);
+  async function save(event: FormEvent) { event.preventDefault(); if (!form) return; setBusy(true); try { setForm(await api.updateSettings(form)); setNotice("Manager settings were saved."); } finally { setBusy(false); } }
+  if (resource.loading && !form) return <LoadingPanel label="Loading manager settings" />;
+  if (resource.error && !form) return <div className="page"><PageHeader eyebrow="Manager configuration" title="Settings & security" description="This capability is not exposed by the current pre-alpha API." /><ErrorPanel message={resource.error} retry={resource.reload} /></div>;
+  if (!form) return null;
+  return <div className="page"><PageHeader eyebrow="Manager configuration" title="Settings & security" description="Network, retention, update policy and privileged-operation controls." />
+    <form onSubmit={save} className="settings-layout"><div><Panel className="settings-section"><header><span><ShieldCheck size={19} /></span><div><h2>Organization</h2><p>Identity shown throughout the console and support bundles.</p></div></header><label>Organization name<input value={form.organizationName} onChange={(e) => setForm({ ...form, organizationName: e.target.value })} /></label><label className="switch-row"><span><strong>Require re-authentication for root actions</strong><small>Root terminals, batch commands and destructive operations.</small></span><button type="button" role="switch" aria-checked={form.requireRootReauthentication} className={form.requireRootReauthentication ? "toggle on" : "toggle"} onClick={() => setForm({ ...form, requireRootReauthentication: !form.requireRootReauthentication })}><i /></button></label></Panel>
+      <Panel className="settings-section"><header><span><HardDrive size={19} /></span><div><h2>Listener & ports</h2><p>Changes require a manager service restart.</p></div></header><div className="field-grid"><label>Bind address<input value={form.bindAddress} onChange={(e) => setForm({ ...form, bindAddress: e.target.value })} /></label><label>Web HTTPS port<input type="number" value={form.webPort} onChange={(e) => setForm({ ...form, webPort: Number(e.target.value) })} /></label><label>Agent mTLS port<input type="number" value={form.agentPort} onChange={(e) => setForm({ ...form, agentPort: Number(e.target.value) })} /></label></div></Panel>
+      <Panel className="settings-section"><header><span><Database size={19} /></span><div><h2>Data retention</h2><p>Noncritical output is rejected when storage reaches 90% of quota.</p></div></header><div className="field-grid"><label>Retention days<input type="number" min="7" max="365" value={form.retentionDays} onChange={(e) => setForm({ ...form, retentionDays: Number(e.target.value) })} /></label><label>Database quota (GiB)<input type="number" min="1" max="100" value={form.quotaGiB} onChange={(e) => setForm({ ...form, quotaGiB: Number(e.target.value) })} /></label><label>Release channel<select value={form.releaseChannel} onChange={(e) => setForm({ ...form, releaseChannel: e.target.value as Settings["releaseChannel"] })}><option value="stable">Stable</option><option value="beta">Beta</option></select></label></div></Panel></div>
+      <aside><Panel className="trust-panel"><span className="large-icon"><LockKeyhole size={24} /></span><h2>Trust & credentials</h2><p>The manager CA and SSH encryption key are root-only systemd credentials.</p><dl><div><dt>Manager CA</dt><dd><Badge tone="success">Healthy</Badge></dd></div><div><dt>Agent certificates</dt><dd>24 active</dd></div><div><dt>Next CA review</dt><dd>in 276 days</dd></div></dl><Button variant="secondary" type="button"><KeyRound size={16} /> Export recovery kit</Button></Panel><Button className="save-settings" type="submit" busy={busy}><Save size={16} /> Save settings</Button></aside></form>
+    {notice && <Toast title="Settings saved" message={notice} onClose={() => setNotice(undefined)} />}
+  </div>;
+}

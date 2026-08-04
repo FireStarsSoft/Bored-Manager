@@ -1,0 +1,20 @@
+#!/bin/sh
+set -eu
+
+case "${1:-}" in
+    remove|purge)
+        rm -f -- /etc/systemd/system/bored-managerd.service.d/docker-group.conf
+        rmdir -- /etc/systemd/system/bored-managerd.service.d >/dev/null 2>&1 || true
+        ;;
+esac
+
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+
+if [ "${1:-}" = "purge" ]; then
+    echo "Bored Manager state and Docker resources were preserved." >&2
+    echo "Use the audited bmctl purge workflow before removing preserved state." >&2
+fi
+
+exit 0

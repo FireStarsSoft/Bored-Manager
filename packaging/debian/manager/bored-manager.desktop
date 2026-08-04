@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Bored Manager
+Comment=Open the local Bored Manager Web interface
+Exec=bmctl open-ui
+Terminal=false
+Categories=System;Network;
+Keywords=Docker;systemd;services;monitoring;

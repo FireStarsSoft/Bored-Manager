@@ -1,0 +1,12 @@
+Package: bored-manager-agent
+Version: @@VERSION@@
+Section: admin
+Priority: optional
+Architecture: @@ARCHITECTURE@@
+Installed-Size: @@INSTALLED_SIZE@@
+Maintainer: FireStarsSoft <noreply@firestarssoft.invalid>
+Depends: adduser, ca-certificates, systemd
+Homepage: https://github.com/FireStarsSoft/Bored-Manager
+Description: Bored Manager service-container agent
+ The root agent opens an outbound mutually authenticated connection to Bored
+ Manager and performs typed service, health, terminal, and update operations.

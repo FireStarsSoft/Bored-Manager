@@ -1,0 +1,62 @@
+name: Bug report
+description: Report a reproducible non-security defect
+title: "bug: "
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report vulnerabilities or include credentials/private keys here. Follow SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: Version/commit
+      description: Output of bmctl version or the exact Git commit.
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Manager
+        - Agent
+        - bmctl
+        - Web UI
+        - Installer/packaging
+        - Provisioning/networking
+        - Documentation
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Ubuntu/Docker versions, topology, and relevant configuration without secrets.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Minimal ordered steps and frequency.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostics
+      description: Review all output and remove secrets, identities, and private addresses first.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety confirmation
+      options:
+        - label: This report contains no vulnerability details, credentials, private keys, enrollment challenges, cookies, or unredacted support bundle.
+          required: true

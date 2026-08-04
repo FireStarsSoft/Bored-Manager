@@ -1,0 +1,149 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go test and vet
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.5
+          cache-dependency-path: go.sum
+      - name: Verify modules
+        run: go mod verify
+      - name: Test with race detector
+        run: go test -race ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Scan reachable Go vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+
+  web:
+    name: Web lint, test, and build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.18.0
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install locked dependencies
+        run: npm ci
+        working-directory: web
+      - name: Audit dependencies
+        run: npm audit --audit-level=moderate
+        working-directory: web
+      - name: Typecheck
+        run: npm run typecheck
+        working-directory: web
+      - name: Test
+        run: npm test -- --run
+        working-directory: web
+      - name: Build
+        run: npm run build
+        working-directory: web
+
+  scripts-and-package:
+    name: Scripts and Debian package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.5
+          cache-dependency-path: go.sum
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.18.0
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Check shell syntax and policy
+        run: |
+          bash -n scripts/*.sh lab/gates/*.sh packaging/debian/manager/postinst packaging/debian/manager/prerm packaging/debian/manager/postrm packaging/debian/agent/postinst packaging/debian/agent/prerm packaging/debian/agent/postrm
+          shellcheck --severity=warning scripts/*.sh lab/gates/*.sh packaging/debian/manager/postinst packaging/debian/manager/prerm packaging/debian/manager/postrm packaging/debian/agent/postinst packaging/debian/agent/prerm packaging/debian/agent/postrm
+          bash lab/gates/policy-check.sh
+      - name: Test release metadata validators
+        run: python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+      - name: Check GitHub Actions workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: Build binaries
+        run: make build VERSION=0.1.0-ci
+      - name: Build and inspect Debian packages
+        run: |
+          bash scripts/build-deb.sh --version 0.1.0-ci --architecture amd64
+          for package in dist/*.deb; do
+            dpkg-deb --info "$package"
+            dpkg-deb --contents "$package" >/dev/null
+          done
+          bash scripts/verify-deb.sh \
+            dist/bored-manager_0.1.0-ci-1_amd64.deb \
+            dist/bored-manager-agent_0.1.0-ci-1_amd64.deb
+          bash scripts/test-release-pipeline.sh
+          grep -R '@@BORED_MANAGER_RELEASE_PUBLIC_KEY_PEM@@' packaging/debian/manager/release-signing.pub >/dev/null
+
+  contracts:
+    name: Contract generation is clean
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.5
+          cache-dependency-path: go.sum
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.18.0
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install locked frontend dependencies
+        run: npm ci
+        working-directory: web
+      - name: Reject breaking contract changes
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: bash scripts/check-contract-compatibility.sh "$BASE_REF"
+      - name: Generate
+        run: bash scripts/generate-contracts.sh
+      - name: Reject generated drift
+        run: |
+          git diff --exit-code -- api/gen web/src/api/generated
+          test -z "$(git status --porcelain --untracked-files=all -- api/gen web/src/api/generated)"

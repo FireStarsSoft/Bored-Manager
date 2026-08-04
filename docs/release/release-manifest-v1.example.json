@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "release": {
+    "version": "0.1.0-alpha.1",
+    "tag": "v0.1.0-alpha.1",
+    "channel": "prerelease",
+    "published_at": "2026-08-04T00:00:00Z"
+  },
+  "source": {
+    "repository": "https://github.com/FireStarsSoft/Bored-Manager",
+    "commit": "0123456789abcdef0123456789abcdef01234567"
+  },
+  "compatibility": {
+    "ubuntu": "24.04",
+    "architecture": "amd64",
+    "manager_supports_agent": ["0.1.x"]
+  },
+  "artifacts": [
+    {
+      "name": "install-manager.sh",
+      "kind": "installer",
+      "component": "manager",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "size": 12000
+    },
+    {
+      "name": "install-agent.sh",
+      "kind": "installer",
+      "component": "agent",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "size": 12000
+    },
+    {
+      "name": "bored-manager_0.1.0-alpha.1-1_amd64.deb",
+      "kind": "debian-package",
+      "component": "manager",
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "size": 8000000,
+      "package": {
+        "name": "bored-manager",
+        "version": "0.1.0~alpha.1-1",
+        "architecture": "amd64"
+      }
+    },
+    {
+      "name": "bored-manager-agent_0.1.0-alpha.1-1_amd64.deb",
+      "kind": "debian-package",
+      "component": "agent",
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "size": 6000000,
+      "package": {
+        "name": "bored-manager-agent",
+        "version": "0.1.0~alpha.1-1",
+        "architecture": "amd64"
+      }
+    },
+    {
+      "name": "SHA256SUMS",
+      "kind": "checksums",
+      "component": "release",
+      "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "size": 1024
+    },
+    {
+      "name": "bored-manager.spdx.json",
+      "kind": "sbom",
+      "component": "release",
+      "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "size": 50000
+    },
+    {
+      "name": "bored-manager.intoto.jsonl",
+      "kind": "provenance",
+      "component": "release",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "size": 12000
+    }
+  ]
+}

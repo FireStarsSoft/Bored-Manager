@@ -1,0 +1,72 @@
+name: Verify and promote signed release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Signed draft tag (vX.Y.Z)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    runs-on: ubuntu-24.04
+    environment: release
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout exact tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - name: Download immutable draft asset set
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+          [[ "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" == true ]]
+          mkdir -p release-assets
+          gh release download "$RELEASE_TAG" --dir release-assets
+      - name: Verify signatures, manifest, packages, and installers
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          python3 scripts/verify-release-readiness.py \
+            --tag "$RELEASE_TAG" --commit "$(git rev-parse HEAD)"
+          bash scripts/verify-release-assets.sh \
+            --directory release-assets \
+            --public-key packaging/release/release-public-key.pem \
+            --fingerprint-file packaging/release/release-public-key.sha256 \
+            --tag "$RELEASE_TAG" \
+            --commit "$(git rev-parse HEAD)"
+      - name: Verify GitHub build provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for artifact in \
+            release-assets/*.deb \
+            release-assets/install-manager.sh \
+            release-assets/install-agent.sh; do
+            gh attestation verify "$artifact" \
+              --repo "$GITHUB_REPOSITORY" \
+              --bundle release-assets/bored-manager.intoto.jsonl \
+              --signer-workflow FireStarsSoft/Bored-Manager/.github/workflows/release-build.yml \
+              --deny-self-hosted-runners
+          done
+      - name: Publish existing draft without rebuilding
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            gh release edit "$RELEASE_TAG" --draft=false --prerelease=true
+          else
+            gh release edit "$RELEASE_TAG" --draft=false --prerelease=false
+          fi
+          [[ "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" == false ]]

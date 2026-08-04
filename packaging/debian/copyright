@@ -1,0 +1,9 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: Bored Manager
+Source: https://github.com/FireStarsSoft/Bored-Manager
+
+Files: *
+Copyright: 2026 FireStarsSoft contributors
+License: Apache-2.0
+ On Debian systems, the complete text of the Apache License, Version 2.0 is
+ available at /usr/share/common-licenses/Apache-2.0.

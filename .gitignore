@@ -1,0 +1,32 @@
+# Build outputs
+/bin/
+/dist/
+/coverage/
+/web/dist/
+/web/node_modules/
+/node_modules/
+__pycache__/
+*.py[cod]
+
+# Runtime state
+*.db
+*.db-shm
+*.db-wal
+*.pid
+*.sock
+/var/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+!packaging/keys/*.public.pem
+!packaging/release/release-public-key.pem
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

@@ -6,6 +6,9 @@
 > offline release public key is embedded by the release process. `main` documents the next
 > development release; a release tag freezes the documentation for that release.
 
+Vietnamese operator guide: [docs/README.MD](docs/README.MD). The English README remains the
+canonical reference when the two translations differ.
+
 Bored Manager is a small, self-hosted control plane for operating service-oriented Ubuntu
 containers across one or more Docker hosts. It combines inventory, service health, durable
 actions, terminal access, provisioning, networking, and controlled updates in one LAN-oriented

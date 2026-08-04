@@ -1,0 +1,12 @@
+Package: bored-manager
+Version: @@VERSION@@
+Section: admin
+Priority: optional
+Architecture: @@ARCHITECTURE@@
+Installed-Size: @@INSTALLED_SIZE@@
+Maintainer: FireStarsSoft <noreply@firestarssoft.invalid>
+Depends: adduser, ca-certificates, systemd
+Homepage: https://github.com/FireStarsSoft/Bored-Manager
+Description: Bored Manager control plane and local CLI
+ Bored Manager provides the manager daemon, local bmctl client, and guarded
+ update helper for operating managed Ubuntu service containers.

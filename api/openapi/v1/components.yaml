@@ -1,0 +1,1089 @@
+components:
+  headers:
+    SessionCookie:
+      description: Secure, HttpOnly, SameSite=Strict session cookie.
+      schema: {type: string}
+  parameters:
+    CSRFToken:
+      name: X-CSRF-Token
+      in: header
+      required: true
+      description: Synchronizer token returned by the current Session and checked against server-side session state.
+      schema: {type: string, minLength: 32, maxLength: 256}
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Stable per-intent key retained for at least 24 hours.
+      schema: {type: string, minLength: 8, maxLength: 128}
+    PageSize:
+      name: page_size
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 200, default: 50}
+    PageToken:
+      name: page_token
+      in: query
+      schema: {type: string, maxLength: 1024}
+    AgentID:
+      name: agent_id
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/UUIDv7'}
+    EnrollmentID:
+      name: enrollment_id
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/UUIDv7'}
+    ServiceDefinitionID:
+      name: service_definition_id
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/UUIDv7'}
+    JobID:
+      name: job_id
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/UUIDv7'}
+    TargetID:
+      name: target_id
+      in: path
+      required: true
+      schema: {type: string, minLength: 1, maxLength: 256}
+    DockerHostID:
+      name: docker_host_id
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/UUIDv7'}
+    TemplateID:
+      name: template_id
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/UUIDv7'}
+    NetworkProfileID:
+      name: network_profile_id
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/UUIDv7'}
+    ReleaseID:
+      name: release_id
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/UUIDv7'}
+    DiagnosticID:
+      name: diagnostic_id
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/UUIDv7'}
+  responses:
+    BadRequest:
+      description: Malformed request.
+      content: {application/problem+json: {schema: {$ref: '#/components/schemas/Problem'}}}
+    Unauthorized:
+      description: Authentication required or session expired.
+      content: {application/problem+json: {schema: {$ref: '#/components/schemas/Problem'}}}
+    Forbidden:
+      description: Authenticated principal lacks permission or CSRF/Origin validation failed.
+      content: {application/problem+json: {schema: {$ref: '#/components/schemas/Problem'}}}
+    ReauthenticationRequired:
+      description: A recent password reauthentication is required for this sensitive operation.
+      content: {application/problem+json: {schema: {$ref: '#/components/schemas/Problem'}}}
+    NotFound:
+      description: Resource was not found or is not visible to the caller.
+      content: {application/problem+json: {schema: {$ref: '#/components/schemas/Problem'}}}
+    Conflict:
+      description: Resource state or idempotency key conflicts with the operation.
+      content: {application/problem+json: {schema: {$ref: '#/components/schemas/Problem'}}}
+    ValidationFailed:
+      description: Semantically invalid request.
+      content: {application/problem+json: {schema: {$ref: '#/components/schemas/Problem'}}}
+    RateLimited:
+      description: Request rate limit exceeded.
+      headers:
+        Retry-After: {schema: {type: integer, minimum: 1}}
+      content: {application/problem+json: {schema: {$ref: '#/components/schemas/Problem'}}}
+    ServiceUnavailable:
+      description: Manager is starting, migrating, rolling back, or unhealthy.
+      content: {application/problem+json: {schema: {$ref: '#/components/schemas/Problem'}}}
+  schemas:
+    UUIDv7:
+      type: string
+      format: uuid
+      pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+    Timestamp:
+      type: string
+      format: date-time
+    EventCursor:
+      type: string
+      pattern: '^[0-9]+$'
+      description: Unsigned 64-bit event position encoded as a decimal string.
+    SHA256Digest:
+      type: string
+      pattern: '^sha256:[0-9a-f]{64}$'
+    Page:
+      type: object
+      additionalProperties: false
+      required: [event_cursor]
+      properties:
+        next_page_token: {type: string}
+        event_cursor: {$ref: '#/components/schemas/EventCursor'}
+    FieldViolation:
+      type: object
+      additionalProperties: false
+      required: [field, description]
+      properties:
+        field: {type: string}
+        description: {type: string}
+    Problem:
+      type: object
+      additionalProperties: false
+      required: [type, title, status, code]
+      properties:
+        type: {type: string, format: uri-reference}
+        title: {type: string}
+        status: {type: integer, minimum: 400, maximum: 599}
+        detail: {type: string}
+        instance: {type: string, format: uri-reference}
+        code: {type: string, pattern: '^[a-z0-9_]+$'}
+        request_id: {type: string}
+        violations:
+          type: array
+          maxItems: 100
+          items: {$ref: '#/components/schemas/FieldViolation'}
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status, version, database, event_cursor, checked_at]
+      properties:
+        status: {type: string, enum: [ok, degraded]}
+        version: {type: string}
+        database: {type: string, enum: [ok, readonly, unavailable]}
+        event_cursor: {$ref: '#/components/schemas/EventCursor'}
+        checked_at: {$ref: '#/components/schemas/Timestamp'}
+    BuildVersion:
+      type: object
+      additionalProperties: false
+      required: [version, commit, build_time]
+      properties:
+        version: {type: string, minLength: 1}
+        commit: {type: string, pattern: '^(?:unknown|[0-9a-f]{40})$'}
+        build_time: {type: string, minLength: 1}
+    ManagerVersionInfo:
+      type: object
+      additionalProperties: false
+      required: [component, version, api, agent_compatibility]
+      properties:
+        component: {type: string, enum: [bored-managerd]}
+        version: {$ref: '#/components/schemas/BuildVersion'}
+        api: {type: string, enum: [v1]}
+        agent_compatibility:
+          type: array
+          minItems: 2
+          maxItems: 2
+          uniqueItems: true
+          items: {type: string, enum: ['N', 'N-1']}
+    Role: {type: string, enum: [admin, operator, viewer]}
+    User:
+      type: object
+      additionalProperties: false
+      required: [user_id, username, display_name, role, created_at, updated_at]
+      properties:
+        user_id: {$ref: '#/components/schemas/UUIDv7'}
+        username: {type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'}
+        display_name: {type: string, minLength: 1, maxLength: 128}
+        role: {$ref: '#/components/schemas/Role'}
+        disabled_at: {allOf: [{$ref: '#/components/schemas/Timestamp'}], nullable: true}
+        created_at: {$ref: '#/components/schemas/Timestamp'}
+        updated_at: {$ref: '#/components/schemas/Timestamp'}
+    Session:
+      type: object
+      additionalProperties: false
+      required: [session_id, user, csrf_token, created_at, expires_at]
+      properties:
+        session_id: {$ref: '#/components/schemas/UUIDv7'}
+        user: {$ref: '#/components/schemas/User'}
+        csrf_token: {type: string, minLength: 32}
+        created_at: {$ref: '#/components/schemas/Timestamp'}
+        expires_at: {$ref: '#/components/schemas/Timestamp'}
+        reauthenticated_until: {allOf: [{$ref: '#/components/schemas/Timestamp'}], nullable: true}
+    SetupStatus:
+      type: object
+      additionalProperties: false
+      required: [required, https_listen_address, https_port, grpc_listen_address, grpc_port, certificate_fingerprint, local_docker_detected, local_docker_registered]
+      properties:
+        required: {type: boolean}
+        completed_at: {allOf: [{$ref: '#/components/schemas/Timestamp'}], nullable: true}
+        https_listen_address: {type: string}
+        https_port: {type: integer, minimum: 1024, maximum: 65535}
+        grpc_listen_address: {type: string}
+        grpc_port: {type: integer, minimum: 1024, maximum: 65535}
+        certificate_fingerprint: {type: string}
+        local_docker_detected: {type: boolean}
+        local_docker_registered: {type: boolean}
+    CompleteSetupRequest:
+      type: object
+      additionalProperties: false
+      required: [username, display_name, password, https_listen_address, https_port, grpc_listen_address, grpc_port, register_local_docker, docker_risk_confirmation]
+      properties:
+        username: {type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'}
+        display_name: {type: string, minLength: 1, maxLength: 128}
+        password: {type: string, format: password, minLength: 14, maxLength: 1024, writeOnly: true}
+        https_listen_address: {type: string, format: ipvanyaddress}
+        https_port: {type: integer, minimum: 1024, maximum: 65535, default: 8443}
+        grpc_listen_address: {type: string, format: ipvanyaddress}
+        grpc_port: {type: integer, minimum: 1024, maximum: 65535, default: 9443}
+        register_local_docker: {type: boolean}
+        docker_risk_confirmation:
+          type: string
+          description: Must equal `I UNDERSTAND DOCKER ACCESS IS ROOT-EQUIVALENT` when local Docker is registered.
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [username, password]
+      properties:
+        username: {type: string, minLength: 1, maxLength: 128}
+        password: {type: string, format: password, minLength: 1, maxLength: 1024, writeOnly: true}
+    ReauthenticateRequest:
+      type: object
+      description: Successful verification marks the server-side session reauthenticated for five minutes.
+      additionalProperties: false
+      required: [password]
+      properties:
+        password: {type: string, format: password, minLength: 1, maxLength: 1024, writeOnly: true}
+    PresenceState: {type: string, enum: [pending, online, stale, offline, revoked]}
+    AgentInstallCommand:
+      type: object
+      additionalProperties: false
+      required: [available, version, manager_url, manager_spki_pin]
+      properties:
+        available: {type: boolean}
+        version: {type: string, minLength: 1}
+        manager_url: {type: string, format: uri, pattern: '^https://'}
+        manager_spki_pin: {type: string, pattern: '^sha256//[A-Za-z0-9+/]{43}=$'}
+        command: {type: string, minLength: 1}
+        reason: {type: string, minLength: 1}
+    EnrollmentState: {type: string, enum: [pending_approval, approved, rejected, expired, revoked]}
+    Inventory:
+      type: object
+      additionalProperties: false
+      required: [hostname, os_release, architecture, kernel_version, agent_version, systemd_version, machine_id_hash, cpu_count, memory_bytes, disk_bytes, addresses]
+      properties:
+        hostname: {type: string, minLength: 1, maxLength: 253}
+        os_release: {type: string, enum: [ubuntu-24.04]}
+        architecture: {type: string, enum: [amd64]}
+        kernel_version: {type: string}
+        agent_version: {type: string}
+        systemd_version: {type: string}
+        machine_id_hash: {type: string, pattern: '^[0-9a-f]{64}$'}
+        cpu_count: {type: integer, minimum: 1}
+        memory_bytes: {type: integer, minimum: 1}
+        disk_bytes: {type: integer, minimum: 1}
+        addresses: {type: array, maxItems: 64, uniqueItems: true, items: {type: string, format: ipvanyaddress}}
+        labels: {type: object, maxProperties: 64, additionalProperties: {type: string, maxLength: 256}}
+    Agent:
+      type: object
+      additionalProperties: false
+      required: [agent_id, logical_instance_id, presence, protocol_version, certificate_serial, inventory, last_sequence, enrolled_at]
+      properties:
+        agent_id: {$ref: '#/components/schemas/UUIDv7'}
+        logical_instance_id: {$ref: '#/components/schemas/UUIDv7'}
+        supersedes_agent_id: {$ref: '#/components/schemas/UUIDv7'}
+        alias: {type: string, minLength: 1, maxLength: 128}
+        tags: {type: array, maxItems: 64, uniqueItems: true, items: {type: string}}
+        presence: {$ref: '#/components/schemas/PresenceState'}
+        protocol_version: {type: string}
+        certificate_serial: {type: string}
+        inventory: {$ref: '#/components/schemas/Inventory'}
+        last_sequence: {type: integer, minimum: 0}
+        last_seen_at: {allOf: [{$ref: '#/components/schemas/Timestamp'}], nullable: true}
+        enrolled_at: {$ref: '#/components/schemas/Timestamp'}
+        revoked_at: {allOf: [{$ref: '#/components/schemas/Timestamp'}], nullable: true}
+        revocation_reason: {type: string, maxLength: 512}
+    AgentList:
+      type: object
+      additionalProperties: false
+      required: [agents, page]
+      properties:
+        agents: {type: array, items: {$ref: '#/components/schemas/Agent'}}
+        page: {$ref: '#/components/schemas/Page'}
+    UpdateAgentRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        alias: {type: string, minLength: 1, maxLength: 128}
+        tags: {type: array, maxItems: 64, uniqueItems: true, items: {type: string}}
+    RevokeAgentRequest:
+      type: object
+      additionalProperties: false
+      required: [reason, confirmation]
+      properties:
+        reason: {type: string, minLength: 1, maxLength: 512}
+        confirmation: {type: string, pattern: '^REVOKE .+$'}
+    CreateEnrollmentRequest:
+      type: object
+      additionalProperties: false
+      required: [name, csr_pem, inventory, version]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 128}
+        csr_pem: {type: string, minLength: 128, maxLength: 16384, writeOnly: true}
+        inventory: {$ref: '#/components/schemas/Inventory'}
+        version: {type: string, minLength: 1, maxLength: 128}
+        provision_challenge: {type: string, minLength: 32, maxLength: 1024, writeOnly: true}
+    EnrollmentStatusProof:
+      type: object
+      additionalProperties: false
+      required: [proof]
+      properties:
+        proof:
+          type: string
+          pattern: '^[A-Za-z0-9+/]{86}$'
+          writeOnly: true
+          description: Unpadded standard-base64 Ed25519 signature over `bored-manager enrollment status:{enrollment_id}`.
+    EnrollmentRequest:
+      type: object
+      additionalProperties: false
+      required: [enrollment_id, state, csr_fingerprint, verification_code, source_address, inventory, requested_at, expires_at]
+      properties:
+        enrollment_id: {$ref: '#/components/schemas/UUIDv7'}
+        state: {$ref: '#/components/schemas/EnrollmentState'}
+        csr_fingerprint: {type: string, pattern: '^(?:[0-9A-F]{2}:){31}[0-9A-F]{2}$'}
+        verification_code: {type: string, pattern: '^[A-Z2-7]{4}-[A-Z2-7]{4}$'}
+        source_address: {type: string, format: ipvanyaddress}
+        inventory: {$ref: '#/components/schemas/Inventory'}
+        provision_challenge_id: {$ref: '#/components/schemas/UUIDv7'}
+        requested_at: {$ref: '#/components/schemas/Timestamp'}
+        expires_at: {$ref: '#/components/schemas/Timestamp'}
+        reviewed_at: {allOf: [{$ref: '#/components/schemas/Timestamp'}], nullable: true}
+        reviewed_by: {$ref: '#/components/schemas/UUIDv7'}
+        decision_reason: {type: string, maxLength: 512}
+        agent_id: {$ref: '#/components/schemas/UUIDv7'}
+    EnrollmentRequestList:
+      type: object
+      additionalProperties: false
+      required: [enrollment_requests, page]
+      properties:
+        enrollment_requests: {type: array, items: {$ref: '#/components/schemas/EnrollmentRequest'}}
+        page: {$ref: '#/components/schemas/Page'}
+    ApproveEnrollmentRequest:
+      type: object
+      additionalProperties: false
+      required: [verification_code, alias, tags]
+      properties:
+        verification_code: {type: string, pattern: '^[A-Z2-7]{4}-[A-Z2-7]{4}$'}
+        alias: {type: string, minLength: 1, maxLength: 128}
+        tags: {type: array, maxItems: 64, uniqueItems: true, items: {type: string}}
+        logical_instance_id: {$ref: '#/components/schemas/UUIDv7'}
+    RejectEnrollmentRequest:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: {type: string, minLength: 1, maxLength: 512}
+    EnrollmentApproval:
+      type: object
+      additionalProperties: false
+      required: [agent, certificate_chain_pem, manager_ca_pem, certificate_not_after]
+      properties:
+        agent: {$ref: '#/components/schemas/Agent'}
+        certificate_chain_pem: {type: string, readOnly: true}
+        manager_ca_pem: {type: string, readOnly: true}
+        certificate_not_after: {$ref: '#/components/schemas/Timestamp'}
+    InstallationState: {type: string, enum: [unsupported, not_installed, installed, unknown]}
+    EnablementState: {type: string, enum: [enabled, disabled, static, masked, unknown]}
+    RuntimeState: {type: string, enum: [active, inactive, starting, failed, unknown]}
+    HealthState: {type: string, enum: [healthy, unhealthy, degraded, unknown, not_configured]}
+    ServiceActionType: {type: string, enum: [install, uninstall, start, stop, restart, update, check]}
+    ServiceDefinition:
+      type: object
+      additionalProperties: false
+      required: [service_definition_id, key, display_name, current_revision, created_at, updated_at]
+      properties:
+        service_definition_id: {$ref: '#/components/schemas/UUIDv7'}
+        key: {type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'}
+        display_name: {type: string, minLength: 1, maxLength: 128}
+        description: {type: string, maxLength: 2048}
+        current_revision: {type: integer, minimum: 1}
+        created_at: {$ref: '#/components/schemas/Timestamp'}
+        updated_at: {$ref: '#/components/schemas/Timestamp'}
+    ServiceCheckSpec:
+      type: object
+      additionalProperties: false
+      required: [type, interval_seconds, timeout_seconds, failure_threshold]
+      properties:
+        type: {type: string, enum: [systemd, process, tcp, http, command]}
+        interval_seconds: {type: integer, minimum: 5, maximum: 3600, default: 30}
+        timeout_seconds: {type: integer, minimum: 1, maximum: 300}
+        failure_threshold: {type: integer, minimum: 1, maximum: 20, default: 3}
+        configuration: {type: object, additionalProperties: {type: string, maxLength: 4096}}
+    ServiceActionSpec:
+      type: object
+      additionalProperties: false
+      required: [type, script, timeout_seconds, requires_root]
+      properties:
+        type: {$ref: '#/components/schemas/ServiceActionType'}
+        script: {type: string, minLength: 1, maxLength: 65536}
+        timeout_seconds: {type: integer, minimum: 1, maximum: 3600}
+        allowed_exit_codes: {type: array, maxItems: 32, uniqueItems: true, items: {type: integer, minimum: 0, maximum: 255}}
+        requires_root: {type: boolean}
+    ServiceRevision:
+      type: object
+      additionalProperties: false
+      required: [service_revision_id, service_definition_id, revision, ubuntu_releases, architectures, checks, actions, signature, published_at]
+      properties:
+        service_revision_id: {$ref: '#/components/schemas/UUIDv7'}
+        service_definition_id: {$ref: '#/components/schemas/UUIDv7'}
+        revision: {type: integer, minimum: 1}
+        ubuntu_releases: {type: array, minItems: 1, uniqueItems: true, items: {type: string, enum: [ubuntu-24.04]}}
+        architectures: {type: array, minItems: 1, uniqueItems: true, items: {type: string, enum: [amd64]}}
+        systemd_unit: {type: string, pattern: '^[A-Za-z0-9_.@-]+\.service$'}
+        version_command: {type: string, maxLength: 4096}
+        checks: {type: array, maxItems: 16, items: {$ref: '#/components/schemas/ServiceCheckSpec'}}
+        actions: {type: array, maxItems: 16, items: {$ref: '#/components/schemas/ServiceActionSpec'}}
+        signature: {type: string}
+        published_at: {$ref: '#/components/schemas/Timestamp'}
+    CreateServiceDefinitionRequest:
+      type: object
+      additionalProperties: false
+      required: [key, display_name]
+      properties:
+        key: {type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'}
+        display_name: {type: string, minLength: 1, maxLength: 128}
+        description: {type: string, maxLength: 2048}
+    UpdateServiceDefinitionRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        display_name: {type: string, minLength: 1, maxLength: 128}
+        description: {type: string, maxLength: 2048}
+    PublishServiceRevisionRequest:
+      type: object
+      additionalProperties: false
+      required: [ubuntu_releases, architectures, checks, actions, signature]
+      properties:
+        ubuntu_releases: {type: array, minItems: 1, uniqueItems: true, items: {type: string, enum: [ubuntu-24.04]}}
+        architectures: {type: array, minItems: 1, uniqueItems: true, items: {type: string, enum: [amd64]}}
+        systemd_unit: {type: string, pattern: '^[A-Za-z0-9_.@-]+\.service$'}
+        version_command: {type: string, maxLength: 4096}
+        checks: {type: array, maxItems: 16, items: {$ref: '#/components/schemas/ServiceCheckSpec'}}
+        actions: {type: array, maxItems: 16, items: {$ref: '#/components/schemas/ServiceActionSpec'}}
+        signature: {type: string}
+    ServiceDefinitionList:
+      type: object
+      additionalProperties: false
+      required: [service_definitions, page]
+      properties:
+        service_definitions: {type: array, items: {$ref: '#/components/schemas/ServiceDefinition'}}
+        page: {$ref: '#/components/schemas/Page'}
+    ServiceDefinitionDetail:
+      type: object
+      additionalProperties: false
+      required: [definition, revisions]
+      properties:
+        definition: {$ref: '#/components/schemas/ServiceDefinition'}
+        revisions: {type: array, items: {$ref: '#/components/schemas/ServiceRevision'}}
+    ServiceAssignment:
+      type: object
+      additionalProperties: false
+      required: [service_assignment_id, service_revision_id, scope_type, scope_id, excluded_agent_ids, created_at]
+      properties:
+        service_assignment_id: {$ref: '#/components/schemas/UUIDv7'}
+        service_revision_id: {$ref: '#/components/schemas/UUIDv7'}
+        scope_type: {type: string, enum: [global, group, template, agent]}
+        scope_id: {type: string}
+        excluded_agent_ids: {type: array, uniqueItems: true, items: {$ref: '#/components/schemas/UUIDv7'}}
+        created_at: {$ref: '#/components/schemas/Timestamp'}
+        disabled_at: {allOf: [{$ref: '#/components/schemas/Timestamp'}], nullable: true}
+    CreateServiceAssignmentRequest:
+      type: object
+      additionalProperties: false
+      required: [service_revision_id, scope_type, scope_id, excluded_agent_ids]
+      properties:
+        service_revision_id: {$ref: '#/components/schemas/UUIDv7'}
+        scope_type: {type: string, enum: [global, group, template, agent]}
+        scope_id: {type: string, minLength: 1}
+        excluded_agent_ids: {type: array, uniqueItems: true, items: {$ref: '#/components/schemas/UUIDv7'}}
+    ServiceAssignmentList:
+      type: object
+      additionalProperties: false
+      required: [service_assignments, page]
+      properties:
+        service_assignments: {type: array, items: {$ref: '#/components/schemas/ServiceAssignment'}}
+        page: {$ref: '#/components/schemas/Page'}
+    ObservedServiceState:
+      type: object
+      additionalProperties: false
+      required: [agent_id, service_definition_id, installation, enablement, runtime, health, checked_at, transitioned_at, state_duration_seconds]
+      properties:
+        agent_id: {$ref: '#/components/schemas/UUIDv7'}
+        service_definition_id: {$ref: '#/components/schemas/UUIDv7'}
+        service_revision_id: {$ref: '#/components/schemas/UUIDv7'}
+        installation: {$ref: '#/components/schemas/InstallationState'}
+        enablement: {$ref: '#/components/schemas/EnablementState'}
+        runtime: {$ref: '#/components/schemas/RuntimeState'}
+        health: {$ref: '#/components/schemas/HealthState'}
+        version: {type: string, maxLength: 256}
+        systemd_active_state: {type: string, maxLength: 64}
+        systemd_sub_state: {type: string, maxLength: 64}
+        checked_at: {$ref: '#/components/schemas/Timestamp'}
+        transitioned_at: {$ref: '#/components/schemas/Timestamp'}
+        state_duration_seconds: {type: integer, minimum: 0}
+        error_summary: {type: string, maxLength: 1024}
+    ObservedServiceList:
+      type: object
+      additionalProperties: false
+      required: [observed_services, page]
+      properties:
+        observed_services: {type: array, items: {$ref: '#/components/schemas/ObservedServiceState'}}
+        page: {$ref: '#/components/schemas/Page'}
+    JobType: {type: string, enum: [command, service, provision, update, backup, restore, purge]}
+    JobState: {type: string, enum: [queued, running, succeeded, failed, cancelled, expired]}
+    JobTargetState: {type: string, enum: [queued, leased, preparing, ready, committed, running, succeeded, failed, cancelled, expired]}
+    JobTargetResult:
+      type: object
+      additionalProperties: true
+    JobParameters:
+      type: object
+      additionalProperties: true
+    JobTarget:
+      type: object
+      additionalProperties: false
+      required: [target_id, state, attempt, idempotency_key]
+      properties:
+        target_id: {type: string, minLength: 1, maxLength: 256}
+        state: {$ref: '#/components/schemas/JobTargetState'}
+        attempt: {type: integer, minimum: 1}
+        idempotency_key: {type: string, minLength: 8, maxLength: 128}
+        lease_id: {$ref: '#/components/schemas/UUIDv7'}
+        lease_expires_at: {allOf: [{$ref: '#/components/schemas/Timestamp'}], nullable: true}
+        prepared_at: {allOf: [{$ref: '#/components/schemas/Timestamp'}], nullable: true}
+        committed_at: {allOf: [{$ref: '#/components/schemas/Timestamp'}], nullable: true}
+        started_at: {allOf: [{$ref: '#/components/schemas/Timestamp'}], nullable: true}
+        finished_at: {allOf: [{$ref: '#/components/schemas/Timestamp'}], nullable: true}
+        exit_code: {type: integer, minimum: -1, maximum: 255}
+        result: {$ref: '#/components/schemas/JobTargetResult'}
+        error: {$ref: '#/components/schemas/Problem'}
+    Job:
+      type: object
+      additionalProperties: false
+      required: [job_id, job_type, state, requested_by, idempotency_key, created_at, targets]
+      properties:
+        job_id: {$ref: '#/components/schemas/UUIDv7'}
+        job_type: {$ref: '#/components/schemas/JobType'}
+        state: {$ref: '#/components/schemas/JobState'}
+        requested_by: {type: string}
+        idempotency_key: {type: string, minLength: 8, maxLength: 128}
+        parameters: {$ref: '#/components/schemas/JobParameters'}
+        created_at: {$ref: '#/components/schemas/Timestamp'}
+        started_at: {allOf: [{$ref: '#/components/schemas/Timestamp'}], nullable: true}
+        finished_at: {allOf: [{$ref: '#/components/schemas/Timestamp'}], nullable: true}
+        targets: {type: array, items: {$ref: '#/components/schemas/JobTarget'}}
+    CreateJobRequest:
+      oneOf:
+        - {$ref: '#/components/schemas/CreateCommandJobRequest'}
+        - {$ref: '#/components/schemas/CreateServiceJobRequest'}
+        - {$ref: '#/components/schemas/CreateProvisionJobRequest'}
+        - {$ref: '#/components/schemas/CreateBackupJobRequest'}
+        - {$ref: '#/components/schemas/CreateRestoreJobRequest'}
+        - {$ref: '#/components/schemas/CreatePurgeJobRequest'}
+      discriminator:
+        propertyName: job_type
+        mapping:
+          command: '#/components/schemas/CreateCommandJobRequest'
+          service: '#/components/schemas/CreateServiceJobRequest'
+          provision: '#/components/schemas/CreateProvisionJobRequest'
+          backup: '#/components/schemas/CreateBackupJobRequest'
+          restore: '#/components/schemas/CreateRestoreJobRequest'
+          purge: '#/components/schemas/CreatePurgeJobRequest'
+    JobTargetIDs:
+      type: array
+      minItems: 1
+      maxItems: 1000
+      uniqueItems: true
+      items: {type: string, minLength: 1, maxLength: 256}
+    CreateCommandJobRequest:
+      type: object
+      additionalProperties: false
+      required: [job_type, target_ids, parameters]
+      properties:
+        job_type: {type: string, enum: [command]}
+        target_ids: {$ref: '#/components/schemas/JobTargetIDs'}
+        parameters: {$ref: '#/components/schemas/CommandJobParameters'}
+        expires_at: {$ref: '#/components/schemas/Timestamp'}
+    CommandJobParameters:
+      type: object
+      additionalProperties: false
+      required: [argv, operating_system_user, timeout_seconds, barrier]
+      properties:
+        argv: {type: array, minItems: 1, maxItems: 128, items: {type: string, maxLength: 4096}}
+        operating_system_user: {type: string, enum: [bored-shell, root]}
+        working_directory: {type: string, maxLength: 4096}
+        environment: {type: object, maxProperties: 64, additionalProperties: {type: string, maxLength: 4096}}
+        timeout_seconds: {type: integer, minimum: 1, maximum: 86400}
+        barrier: {type: boolean, default: false}
+    CreateServiceJobRequest:
+      type: object
+      additionalProperties: false
+      required: [job_type, target_ids, parameters]
+      properties:
+        job_type: {type: string, enum: [service]}
+        target_ids: {$ref: '#/components/schemas/JobTargetIDs'}
+        parameters: {$ref: '#/components/schemas/ServiceJobParameters'}
+        expires_at: {$ref: '#/components/schemas/Timestamp'}
+    ServiceJobParameters:
+      type: object
+      additionalProperties: false
+      required: [service_revision_id, action]
+      properties:
+        service_revision_id: {$ref: '#/components/schemas/UUIDv7'}
+        action: {$ref: '#/components/schemas/ServiceActionType'}
+    CreateProvisionJobRequest:
+      type: object
+      additionalProperties: false
+      required: [job_type, target_ids, parameters]
+      properties:
+        job_type: {type: string, enum: [provision]}
+        target_ids:
+          description: Docker host identifiers.
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/UUIDv7'}
+        parameters: {$ref: '#/components/schemas/ProvisionJobParameters'}
+        expires_at: {$ref: '#/components/schemas/Timestamp'}
+    ProvisionJobParameters:
+      type: object
+      additionalProperties: false
+      required: [template_revision_id, count_per_host, naming_pattern, dry_run]
+      properties:
+        template_revision_id: {$ref: '#/components/schemas/UUIDv7'}
+        count_per_host: {type: integer, minimum: 1, maximum: 800}
+        naming_pattern: {type: string, minLength: 1, maxLength: 128}
+        dry_run: {type: boolean, default: true}
+    CreateBackupJobRequest:
+      type: object
+      additionalProperties: false
+      required: [job_type, target_ids, parameters]
+      properties:
+        job_type: {type: string, enum: [backup]}
+        target_ids: {type: array, minItems: 1, maxItems: 1, items: {type: string, enum: [manager]}}
+        parameters: {$ref: '#/components/schemas/BackupJobParameters'}
+    BackupJobParameters:
+      type: object
+      additionalProperties: false
+      required: [include_encrypted_credentials]
+      properties:
+        include_encrypted_credentials: {type: boolean}
+    CreateRestoreJobRequest:
+      type: object
+      additionalProperties: false
+      required: [job_type, target_ids, parameters]
+      properties:
+        job_type: {type: string, enum: [restore]}
+        target_ids: {type: array, minItems: 1, maxItems: 1, items: {type: string, enum: [manager]}}
+        parameters: {$ref: '#/components/schemas/RestoreJobParameters'}
+    RestoreJobParameters:
+      type: object
+      additionalProperties: false
+      required: [backup_id, confirmation]
+      properties:
+        backup_id: {$ref: '#/components/schemas/UUIDv7'}
+        confirmation: {type: string, pattern: '^RESTORE .+$'}
+    CreatePurgeJobRequest:
+      type: object
+      additionalProperties: false
+      required: [job_type, target_ids, parameters]
+      properties:
+        job_type: {type: string, enum: [purge]}
+        target_ids: {type: array, minItems: 1, maxItems: 1, items: {type: string, enum: [manager]}}
+        parameters: {$ref: '#/components/schemas/PurgeJobParameters'}
+    PurgeJobParameters:
+      type: object
+      additionalProperties: false
+      required: [resource_groups, confirmation]
+      properties:
+        resource_groups:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: string, enum: [configuration, database, credentials, cache, agents, containers, images, volumes, networks]}
+        confirmation: {type: string, pattern: '^PURGE BORED MANAGER$'}
+    CancelJobRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        target_ids: {type: array, maxItems: 1000, uniqueItems: true, items: {type: string}}
+        reason: {type: string, maxLength: 512}
+    JobList:
+      type: object
+      additionalProperties: false
+      required: [jobs, page]
+      properties:
+        jobs: {type: array, items: {$ref: '#/components/schemas/Job'}}
+        page: {$ref: '#/components/schemas/Page'}
+    DockerTransport: {type: string, enum: [local_unix, remote_ssh]}
+    DockerProbe:
+      type: object
+      additionalProperties: false
+      required: [available, status]
+      properties:
+        available: {type: boolean}
+        status: {type: string, enum: [unavailable, reachable, healthy]}
+        server_version: {type: string}
+        api_version: {type: string}
+        os: {type: string}
+        architecture: {type: string}
+        error: {type: string}
+    SSHHostKey:
+      type: object
+      additionalProperties: false
+      required: [algorithm, fingerprint]
+      properties:
+        algorithm: {type: string, enum: [ssh-ed25519, ecdsa-sha2-nistp256, rsa-sha2-512]}
+        fingerprint: {type: string, pattern: '^SHA256:[A-Za-z0-9+/]{43}$'}
+    DockerHost:
+      type: object
+      additionalProperties: false
+      required: [docker_host_id, name, transport, socket_path, healthy, created_at, updated_at]
+      properties:
+        docker_host_id: {$ref: '#/components/schemas/UUIDv7'}
+        name: {type: string, minLength: 1, maxLength: 128}
+        transport: {$ref: '#/components/schemas/DockerTransport'}
+        socket_path: {type: string, pattern: '^/'}
+        ssh_address: {type: string}
+        ssh_port: {type: integer, minimum: 1, maximum: 65535}
+        ssh_user: {type: string}
+        ssh_credential_ref: {type: string, writeOnly: true}
+        ssh_host_key: {$ref: '#/components/schemas/SSHHostKey'}
+        docker_version: {type: string}
+        docker_api_version: {type: string}
+        architecture: {type: string}
+        os_release: {type: string}
+        healthy: {type: boolean}
+        last_preflight_at: {allOf: [{$ref: '#/components/schemas/Timestamp'}], nullable: true}
+        last_preflight_problem: {$ref: '#/components/schemas/Problem'}
+        created_at: {$ref: '#/components/schemas/Timestamp'}
+        updated_at: {$ref: '#/components/schemas/Timestamp'}
+    CreateDockerHostRequest:
+      oneOf:
+        - {$ref: '#/components/schemas/CreateLocalDockerHostRequest'}
+        - {$ref: '#/components/schemas/CreateRemoteDockerHostRequest'}
+      discriminator: {propertyName: transport}
+    CreateLocalDockerHostRequest:
+      type: object
+      additionalProperties: false
+      required: [name, transport, socket_path, root_equivalent_confirmation]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 128}
+        transport: {type: string, enum: [local_unix]}
+        socket_path: {type: string, enum: [/var/run/docker.sock]}
+        root_equivalent_confirmation: {type: string, enum: [I UNDERSTAND DOCKER ACCESS IS ROOT-EQUIVALENT]}
+    CreateRemoteDockerHostRequest:
+      type: object
+      additionalProperties: false
+      required: [name, transport, socket_path, ssh_address, ssh_port, ssh_user, ssh_credential_ref, known_host_line, ssh_host_key]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 128}
+        transport: {type: string, enum: [remote_ssh]}
+        socket_path: {type: string, pattern: '^/'}
+        ssh_address: {type: string}
+        ssh_port: {type: integer, minimum: 1, maximum: 65535, default: 22}
+        ssh_user: {type: string, minLength: 1, maxLength: 128}
+        ssh_credential_ref:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+          writeOnly: true
+          description: Name of a private key already loaded through systemd encrypted credentials.
+        known_host_line:
+          type: string
+          minLength: 64
+          maxLength: 16384
+          writeOnly: true
+          description: Exact OpenSSH known_hosts line obtained through a trusted channel.
+        ssh_host_key: {$ref: '#/components/schemas/SSHHostKey'}
+    UpdateDockerHostRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: {type: string, minLength: 1, maxLength: 128}
+        socket_path: {type: string, pattern: '^/'}
+        ssh_address: {type: string}
+        ssh_port: {type: integer, minimum: 1, maximum: 65535}
+        ssh_user: {type: string}
+        ssh_credential_ref:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+          writeOnly: true
+        known_host_line: {type: string, minLength: 64, maxLength: 16384, writeOnly: true}
+        ssh_host_key: {$ref: '#/components/schemas/SSHHostKey'}
+    DockerHostList:
+      type: object
+      additionalProperties: false
+      required: [docker_hosts, page]
+      properties:
+        docker_hosts: {type: array, items: {$ref: '#/components/schemas/DockerHost'}}
+        page: {$ref: '#/components/schemas/Page'}
+    Template:
+      type: object
+      additionalProperties: false
+      required: [template_id, key, display_name, current_revision, created_at, updated_at]
+      properties:
+        template_id: {$ref: '#/components/schemas/UUIDv7'}
+        key: {type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'}
+        display_name: {type: string, minLength: 1, maxLength: 128}
+        current_revision: {type: integer, minimum: 1}
+        created_at: {$ref: '#/components/schemas/Timestamp'}
+        updated_at: {$ref: '#/components/schemas/Timestamp'}
+    TemplateRevision:
+      type: object
+      additionalProperties: false
+      required: [template_revision_id, template_id, revision, base_image, base_image_digest, cpu_quota, memory_bytes, pids_limit, environment, service_revision_ids, network_profile_ids, required_capabilities, read_only_root_filesystem, published_at]
+      properties:
+        template_revision_id: {$ref: '#/components/schemas/UUIDv7'}
+        template_id: {$ref: '#/components/schemas/UUIDv7'}
+        revision: {type: integer, minimum: 1}
+        base_image: {type: string, minLength: 1, maxLength: 512}
+        base_image_digest: {$ref: '#/components/schemas/SHA256Digest'}
+        derived_image_digest: {$ref: '#/components/schemas/SHA256Digest'}
+        cpu_quota: {type: number, minimum: 0, exclusiveMinimum: true}
+        memory_bytes: {type: integer, minimum: 67108864}
+        pids_limit: {type: integer, minimum: 16}
+        environment: {type: object, maxProperties: 128, additionalProperties: {type: string, maxLength: 4096}}
+        service_revision_ids: {type: array, maxItems: 20, uniqueItems: true, items: {$ref: '#/components/schemas/UUIDv7'}}
+        network_profile_ids: {type: array, maxItems: 16, uniqueItems: true, items: {$ref: '#/components/schemas/UUIDv7'}}
+        required_capabilities:
+          type: array
+          uniqueItems: true
+          x-forbidden-values: [SYS_ADMIN, CAP_SYS_ADMIN]
+          description: SYS_ADMIN and CAP_SYS_ADMIN are forbidden by contract and runtime validation.
+          items: {type: string, pattern: '^[A-Z0-9_]+$'}
+        read_only_root_filesystem: {type: boolean}
+        published_at: {$ref: '#/components/schemas/Timestamp'}
+    CreateTemplateRequest:
+      type: object
+      additionalProperties: false
+      required: [key, display_name]
+      properties:
+        key: {type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'}
+        display_name: {type: string, minLength: 1, maxLength: 128}
+    PublishTemplateRevisionRequest:
+      type: object
+      additionalProperties: false
+      required: [base_image, base_image_digest, cpu_quota, memory_bytes, pids_limit, environment, service_revision_ids, network_profile_ids, required_capabilities, read_only_root_filesystem]
+      properties:
+        base_image: {type: string, minLength: 1, maxLength: 512}
+        base_image_digest: {$ref: '#/components/schemas/SHA256Digest'}
+        cpu_quota: {type: number, minimum: 0, exclusiveMinimum: true}
+        memory_bytes: {type: integer, minimum: 67108864}
+        pids_limit: {type: integer, minimum: 16}
+        environment: {type: object, maxProperties: 128, additionalProperties: {type: string, maxLength: 4096}}
+        service_revision_ids: {type: array, maxItems: 20, uniqueItems: true, items: {$ref: '#/components/schemas/UUIDv7'}}
+        network_profile_ids: {type: array, maxItems: 16, uniqueItems: true, items: {$ref: '#/components/schemas/UUIDv7'}}
+        required_capabilities:
+          type: array
+          uniqueItems: true
+          x-forbidden-values: [SYS_ADMIN, CAP_SYS_ADMIN]
+          description: SYS_ADMIN and CAP_SYS_ADMIN are forbidden by contract and runtime validation.
+          items: {type: string, pattern: '^[A-Z0-9_]+$'}
+        read_only_root_filesystem: {type: boolean, default: true}
+    TemplateList:
+      type: object
+      additionalProperties: false
+      required: [templates, page]
+      properties:
+        templates: {type: array, items: {$ref: '#/components/schemas/Template'}}
+        page: {$ref: '#/components/schemas/Page'}
+    TemplateDetail:
+      type: object
+      additionalProperties: false
+      required: [template, revisions]
+      properties:
+        template: {$ref: '#/components/schemas/Template'}
+        revisions: {type: array, items: {$ref: '#/components/schemas/TemplateRevision'}}
+    NetworkMode: {type: string, enum: [bridge, static_pool, macvlan, ipvlan, external_dhcp]}
+    NetworkProfile:
+      type: object
+      additionalProperties: false
+      required: [network_profile_id, name, revision, mode, docker_network_name, endpoint_hard_limit]
+      properties:
+        network_profile_id: {$ref: '#/components/schemas/UUIDv7'}
+        name: {type: string, minLength: 1, maxLength: 128}
+        revision: {type: integer, minimum: 1}
+        mode: {$ref: '#/components/schemas/NetworkMode'}
+        docker_host_id: {$ref: '#/components/schemas/UUIDv7'}
+        docker_network_name: {type: string, minLength: 1, maxLength: 63}
+        subnet: {type: string, format: cidr}
+        gateway: {type: string, format: ipvanyaddress}
+        ip_range: {type: string, format: cidr}
+        parent_interface: {type: string}
+        plugin_name: {type: string}
+        plugin_digest: {$ref: '#/components/schemas/SHA256Digest'}
+        endpoint_hard_limit: {type: integer, minimum: 1, maximum: 800, default: 500}
+        published_at: {allOf: [{$ref: '#/components/schemas/Timestamp'}], nullable: true}
+    CreateNetworkProfileRequest:
+      type: object
+      additionalProperties: false
+      required: [name, mode, docker_network_name, endpoint_hard_limit]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 128}
+        mode: {$ref: '#/components/schemas/NetworkMode'}
+        docker_host_id: {$ref: '#/components/schemas/UUIDv7'}
+        docker_network_name: {type: string, minLength: 1, maxLength: 63}
+        subnet: {type: string, format: cidr}
+        gateway: {type: string, format: ipvanyaddress}
+        ip_range: {type: string, format: cidr}
+        parent_interface: {type: string}
+        plugin_name: {type: string}
+        plugin_digest: {$ref: '#/components/schemas/SHA256Digest'}
+        endpoint_hard_limit: {type: integer, minimum: 1, maximum: 800, default: 500}
+    PublishNetworkProfileRevisionRequest:
+      type: object
+      additionalProperties: false
+      required: [mode, docker_network_name, endpoint_hard_limit]
+      properties:
+        mode: {$ref: '#/components/schemas/NetworkMode'}
+        docker_host_id: {$ref: '#/components/schemas/UUIDv7'}
+        docker_network_name: {type: string, minLength: 1, maxLength: 63}
+        subnet: {type: string, format: cidr}
+        gateway: {type: string, format: ipvanyaddress}
+        ip_range: {type: string, format: cidr}
+        parent_interface: {type: string}
+        plugin_name: {type: string}
+        plugin_digest: {$ref: '#/components/schemas/SHA256Digest'}
+        endpoint_hard_limit: {type: integer, minimum: 1, maximum: 800, default: 500}
+    NetworkProfileList:
+      type: object
+      additionalProperties: false
+      required: [network_profiles, page]
+      properties:
+        network_profiles: {type: array, items: {$ref: '#/components/schemas/NetworkProfile'}}
+        page: {$ref: '#/components/schemas/Page'}
+    IPReservation:
+      type: object
+      additionalProperties: false
+      required: [ip_reservation_id, network_profile_id, logical_instance_id, address, acquired_at]
+      properties:
+        ip_reservation_id: {$ref: '#/components/schemas/UUIDv7'}
+        network_profile_id: {$ref: '#/components/schemas/UUIDv7'}
+        logical_instance_id: {$ref: '#/components/schemas/UUIDv7'}
+        address: {type: string, format: ipvanyaddress}
+        mac_address: {type: string, pattern: '^([0-9a-f]{2}:){5}[0-9a-f]{2}$'}
+        acquired_at: {$ref: '#/components/schemas/Timestamp'}
+        released_at: {allOf: [{$ref: '#/components/schemas/Timestamp'}], nullable: true}
+    IPReservationList:
+      type: object
+      additionalProperties: false
+      required: [ip_reservations, page]
+      properties:
+        ip_reservations: {type: array, items: {$ref: '#/components/schemas/IPReservation'}}
+        page: {$ref: '#/components/schemas/Page'}
+    ReleaseChannel: {type: string, enum: [stable, beta, alpha]}
+    ReleaseArtifact:
+      type: object
+      additionalProperties: false
+      required: [name, media_type, size, sha256, url]
+      properties:
+        name: {type: string}
+        media_type: {type: string}
+        size: {type: integer, minimum: 1}
+        sha256: {$ref: '#/components/schemas/SHA256Digest'}
+        signature: {type: string}
+        url: {type: string, format: uri, pattern: '^https://'}
+    Release:
+      type: object
+      additionalProperties: false
+      required: [release_id, version, channel, protocol_version, minimum_agent_version, manifest_version, manifest_sha256, artifacts, published_at]
+      properties:
+        release_id: {$ref: '#/components/schemas/UUIDv7'}
+        version: {type: string, pattern: '^v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$'}
+        channel: {$ref: '#/components/schemas/ReleaseChannel'}
+        protocol_version: {type: string}
+        minimum_agent_version: {type: string}
+        manifest_version: {type: integer, enum: [1]}
+        manifest_sha256: {$ref: '#/components/schemas/SHA256Digest'}
+        artifacts: {type: array, minItems: 1, uniqueItems: true, items: {$ref: '#/components/schemas/ReleaseArtifact'}}
+        published_at: {$ref: '#/components/schemas/Timestamp'}
+    ReleaseList:
+      type: object
+      additionalProperties: false
+      required: [releases, page]
+      properties:
+        releases: {type: array, items: {$ref: '#/components/schemas/Release'}}
+        page: {$ref: '#/components/schemas/Page'}
+    ImportReleaseRequest:
+      type: object
+      additionalProperties: false
+      required: [manifest_url, manifest_sha256]
+      properties:
+        manifest_url: {type: string, format: uri, pattern: '^https://'}
+        manifest_sha256: {$ref: '#/components/schemas/SHA256Digest'}
+    CreateUpdateRolloutRequest:
+      type: object
+      additionalProperties: false
+      required: [target_type, target_ids, canary_percent, wave_size, maximum_failure_percent, reconnect_timeout_seconds]
+      properties:
+        target_type: {type: string, enum: [manager, agent]}
+        target_ids: {type: array, uniqueItems: true, items: {type: string}}
+        canary_percent: {type: number, minimum: 0.1, maximum: 100, default: 2}
+        wave_size: {type: integer, minimum: 1, maximum: 200}
+        maximum_failure_percent: {type: number, minimum: 0, maximum: 100, default: 2}
+        reconnect_timeout_seconds: {type: integer, minimum: 10, maximum: 600, default: 45}
+    DiagnosticBundle:
+      type: object
+      additionalProperties: false
+      required: [diagnostic_id, state, redacted, created_at, expires_at]
+      properties:
+        diagnostic_id: {$ref: '#/components/schemas/UUIDv7'}
+        state: {$ref: '#/components/schemas/JobState'}
+        redacted: {type: boolean, enum: [true]}
+        created_at: {$ref: '#/components/schemas/Timestamp'}
+        expires_at: {$ref: '#/components/schemas/Timestamp'}
+        size_bytes: {type: integer, minimum: 0}
+        sha256: {$ref: '#/components/schemas/SHA256Digest'}
+        download_url: {type: string, format: uri-reference}
+        problem: {$ref: '#/components/schemas/Problem'}
+    CreateDiagnosticRequest:
+      type: object
+      additionalProperties: false
+      required: [include_manager_logs, include_agent_ids, include_database_stats, include_docker_preflight, redacted]
+      properties:
+        include_manager_logs: {type: boolean}
+        include_agent_ids: {type: array, maxItems: 100, uniqueItems: true, items: {$ref: '#/components/schemas/UUIDv7'}}
+        include_database_stats: {type: boolean}
+        include_docker_preflight: {type: boolean}
+        redacted: {type: boolean, enum: [true]}
+    EventType:
+      type: string
+      enum: [agent.changed, enrollment.changed, service.changed, job.changed, docker_host.changed, alert.changed, release.changed, resync_required]
+    ResyncRequired:
+      type: object
+      additionalProperties: false
+      required: [reason, latest_cursor]
+      properties:
+        reason: {type: string, enum: [cursor_expired, buffer_overrun, sequence_gap]}
+        latest_cursor: {$ref: '#/components/schemas/EventCursor'}
+    EventEnvelope:
+      type: object
+      additionalProperties: false
+      required: [cursor, type, occurred_at]
+      properties:
+        cursor: {$ref: '#/components/schemas/EventCursor'}
+        type: {$ref: '#/components/schemas/EventType'}
+        resource_type: {type: string}
+        resource_id: {type: string}
+        occurred_at: {$ref: '#/components/schemas/Timestamp'}
+        payload:
+          oneOf:
+            - {$ref: '#/components/schemas/Agent'}
+            - {$ref: '#/components/schemas/EnrollmentRequest'}
+            - {$ref: '#/components/schemas/ObservedServiceState'}
+            - {$ref: '#/components/schemas/Job'}
+            - {$ref: '#/components/schemas/DockerHost'}
+            - {$ref: '#/components/schemas/Release'}
+            - {$ref: '#/components/schemas/ResyncRequired'}

@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/FireStarsSoft/Bored-Manager/internal/platform"
 	"github.com/FireStarsSoft/Bored-Manager/internal/releaseverify"
 	"github.com/FireStarsSoft/Bored-Manager/internal/version"
 )
@@ -44,8 +45,8 @@ type cachedManifest struct {
 		Repository string `json:"repository"`
 	} `json:"source"`
 	Compatibility struct {
-		Ubuntu       string `json:"ubuntu"`
-		Architecture string `json:"architecture"`
+		OperatingSystems []string `json:"operating_systems"`
+		Architecture     string   `json:"architecture"`
 	} `json:"compatibility"`
 	Artifacts []struct {
 		Name      string `json:"name"`
@@ -95,7 +96,7 @@ func (s *Server) verifiedAgentRelease() (cachedAgentRelease, error) {
 	if manifest.SchemaVersion != 1 || manifest.Release.Version != currentVersion || manifest.Release.Tag != "v"+currentVersion {
 		return cachedAgentRelease{}, errors.New("cached release version does not match the running manager")
 	}
-	if manifest.Source.Repository != "https://github.com/FireStarsSoft/Bored-Manager" || manifest.Compatibility.Ubuntu != "24.04" || manifest.Compatibility.Architecture != "amd64" {
+	if manifest.Source.Repository != "https://github.com/FireStarsSoft/Bored-Manager" || !platform.HasExactSupportedOSReleases(manifest.Compatibility.OperatingSystems) || manifest.Compatibility.Architecture != platform.AMD64 {
 		return cachedAgentRelease{}, errors.New("cached release source or platform is invalid")
 	}
 

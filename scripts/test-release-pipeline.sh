@@ -141,6 +141,39 @@ bash "${SCRIPT_DIR}/verify-release-assets.sh" \
   --tag "$TAG" \
   --commit "$COMMIT" >/dev/null
 
+manifest_backup="${work_dir}/release-manifest-v1.json.clean"
+cp -- "${release_dir}/release-manifest-v1.json" "$manifest_backup"
+python3 - "${release_dir}/release-manifest-v1.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+manifest = json.loads(path.read_text(encoding="utf-8"))
+manifest["compatibility"]["operating_systems"] = ["ubuntu-24.04"]
+path.write_text(
+    json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
+    encoding="utf-8",
+    newline="\n",
+)
+PY
+openssl pkeyutl -sign -inkey "$private_key" -rawin \
+  -in "${release_dir}/release-manifest-v1.json" \
+  -out "${release_dir}/release-manifest-v1.json.sig"
+if bash "${SCRIPT_DIR}/verify-release-assets.sh" \
+  --directory "$release_dir" \
+  --public-key "$public_key" \
+  --fingerprint-file "$fingerprint_file" \
+  --tag "$TAG" \
+  --commit "$COMMIT" >/dev/null 2>&1; then
+  printf 'test-release-pipeline: incomplete platform compatibility was accepted\n' >&2
+  exit 1
+fi
+cp -- "$manifest_backup" "${release_dir}/release-manifest-v1.json"
+openssl pkeyutl -sign -inkey "$private_key" -rawin \
+  -in "${release_dir}/release-manifest-v1.json" \
+  -out "${release_dir}/release-manifest-v1.json.sig"
+
 if bash "${SCRIPT_DIR}/verify-release-assets.sh" \
   --directory "$release_dir" \
   --public-key "$public_key" \

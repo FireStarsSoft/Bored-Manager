@@ -112,6 +112,24 @@ jobs:
             dist/bored-manager-agent_0.1.0-ci-1_amd64.deb
           bash scripts/test-release-pipeline.sh
           grep -R '@@BORED_MANAGER_RELEASE_PUBLIC_KEY_PEM@@' packaging/debian/manager/release-signing.pub >/dev/null
+      - name: Install packages on pinned Kali Rolling image
+        run: |
+          docker run --rm \
+            --volume "$PWD/dist:/packages:ro" \
+            docker.io/kalilinux/kali-rolling@sha256:7a8e05db54fbfa3891c35e11d6cdeac7d6f42efddb53c509b2a7b9c2764cad73 \
+            sh -euc '
+              . /etc/os-release
+              test "$ID" = kali
+              test "$VERSION_CODENAME" = kali-rolling
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update
+              apt-get install -y \
+                /packages/bored-manager_0.1.0-ci-1_amd64.deb \
+                /packages/bored-manager-agent_0.1.0-ci-1_amd64.deb
+              dpkg-query --status bored-manager | grep -Fx "Status: install ok installed"
+              dpkg-query --status bored-manager-agent | grep -Fx "Status: install ok installed"
+              systemd-creds --version
+            '
 
   contracts:
     name: Contract generation is clean

@@ -3993,13 +3993,15 @@ func (s *InventoryLabels) init() InventoryLabels {
 type InventoryOsRelease string
 
 const (
-	InventoryOsReleaseUbuntu2404 InventoryOsRelease = "ubuntu-24.04"
+	InventoryOsReleaseUbuntu2404  InventoryOsRelease = "ubuntu-24.04"
+	InventoryOsReleaseKaliRolling InventoryOsRelease = "kali-rolling"
 )
 
 // AllValues returns all InventoryOsRelease values.
 func (InventoryOsRelease) AllValues() []InventoryOsRelease {
 	return []InventoryOsRelease{
 		InventoryOsReleaseUbuntu2404,
+		InventoryOsReleaseKaliRolling,
 	}
 }
 
@@ -4007,6 +4009,8 @@ func (InventoryOsRelease) AllValues() []InventoryOsRelease {
 func (s InventoryOsRelease) MarshalText() ([]byte, error) {
 	switch s {
 	case InventoryOsReleaseUbuntu2404:
+		return []byte(s), nil
+	case InventoryOsReleaseKaliRolling:
 		return []byte(s), nil
 	default:
 		return nil, errors.Errorf("invalid value: %q", s)
@@ -4018,6 +4022,9 @@ func (s *InventoryOsRelease) UnmarshalText(data []byte) error {
 	switch InventoryOsRelease(data) {
 	case InventoryOsReleaseUbuntu2404:
 		*s = InventoryOsReleaseUbuntu2404
+		return nil
+	case InventoryOsReleaseKaliRolling:
+		*s = InventoryOsReleaseKaliRolling
 		return nil
 	default:
 		return errors.Errorf("invalid value: %q", data)
@@ -6550,18 +6557,18 @@ func (*PublishServiceRevisionConflict) publishServiceRevisionRes() {}
 
 // Ref: #/components/schemas/PublishServiceRevisionRequest
 type PublishServiceRevisionRequest struct {
-	UbuntuReleases []PublishServiceRevisionRequestUbuntuReleasesItem `json:"ubuntu_releases"`
-	Architectures  []PublishServiceRevisionRequestArchitecturesItem  `json:"architectures"`
-	SystemdUnit    OptString                                         `json:"systemd_unit"`
-	VersionCommand OptString                                         `json:"version_command"`
-	Checks         []ServiceCheckSpec                                `json:"checks"`
-	Actions        []ServiceActionSpec                               `json:"actions"`
-	Signature      string                                            `json:"signature"`
+	OsReleases     []PublishServiceRevisionRequestOsReleasesItem    `json:"os_releases"`
+	Architectures  []PublishServiceRevisionRequestArchitecturesItem `json:"architectures"`
+	SystemdUnit    OptString                                        `json:"systemd_unit"`
+	VersionCommand OptString                                        `json:"version_command"`
+	Checks         []ServiceCheckSpec                               `json:"checks"`
+	Actions        []ServiceActionSpec                              `json:"actions"`
+	Signature      string                                           `json:"signature"`
 }
 
-// GetUbuntuReleases returns the value of UbuntuReleases.
-func (s *PublishServiceRevisionRequest) GetUbuntuReleases() []PublishServiceRevisionRequestUbuntuReleasesItem {
-	return s.UbuntuReleases
+// GetOsReleases returns the value of OsReleases.
+func (s *PublishServiceRevisionRequest) GetOsReleases() []PublishServiceRevisionRequestOsReleasesItem {
+	return s.OsReleases
 }
 
 // GetArchitectures returns the value of Architectures.
@@ -6594,9 +6601,9 @@ func (s *PublishServiceRevisionRequest) GetSignature() string {
 	return s.Signature
 }
 
-// SetUbuntuReleases sets the value of UbuntuReleases.
-func (s *PublishServiceRevisionRequest) SetUbuntuReleases(val []PublishServiceRevisionRequestUbuntuReleasesItem) {
-	s.UbuntuReleases = val
+// SetOsReleases sets the value of OsReleases.
+func (s *PublishServiceRevisionRequest) SetOsReleases(val []PublishServiceRevisionRequestOsReleasesItem) {
+	s.OsReleases = val
 }
 
 // SetArchitectures sets the value of Architectures.
@@ -6663,23 +6670,27 @@ func (s *PublishServiceRevisionRequestArchitecturesItem) UnmarshalText(data []by
 	}
 }
 
-type PublishServiceRevisionRequestUbuntuReleasesItem string
+type PublishServiceRevisionRequestOsReleasesItem string
 
 const (
-	PublishServiceRevisionRequestUbuntuReleasesItemUbuntu2404 PublishServiceRevisionRequestUbuntuReleasesItem = "ubuntu-24.04"
+	PublishServiceRevisionRequestOsReleasesItemUbuntu2404  PublishServiceRevisionRequestOsReleasesItem = "ubuntu-24.04"
+	PublishServiceRevisionRequestOsReleasesItemKaliRolling PublishServiceRevisionRequestOsReleasesItem = "kali-rolling"
 )
 
-// AllValues returns all PublishServiceRevisionRequestUbuntuReleasesItem values.
-func (PublishServiceRevisionRequestUbuntuReleasesItem) AllValues() []PublishServiceRevisionRequestUbuntuReleasesItem {
-	return []PublishServiceRevisionRequestUbuntuReleasesItem{
-		PublishServiceRevisionRequestUbuntuReleasesItemUbuntu2404,
+// AllValues returns all PublishServiceRevisionRequestOsReleasesItem values.
+func (PublishServiceRevisionRequestOsReleasesItem) AllValues() []PublishServiceRevisionRequestOsReleasesItem {
+	return []PublishServiceRevisionRequestOsReleasesItem{
+		PublishServiceRevisionRequestOsReleasesItemUbuntu2404,
+		PublishServiceRevisionRequestOsReleasesItemKaliRolling,
 	}
 }
 
 // MarshalText implements encoding.TextMarshaler.
-func (s PublishServiceRevisionRequestUbuntuReleasesItem) MarshalText() ([]byte, error) {
+func (s PublishServiceRevisionRequestOsReleasesItem) MarshalText() ([]byte, error) {
 	switch s {
-	case PublishServiceRevisionRequestUbuntuReleasesItemUbuntu2404:
+	case PublishServiceRevisionRequestOsReleasesItemUbuntu2404:
+		return []byte(s), nil
+	case PublishServiceRevisionRequestOsReleasesItemKaliRolling:
 		return []byte(s), nil
 	default:
 		return nil, errors.Errorf("invalid value: %q", s)
@@ -6687,10 +6698,13 @@ func (s PublishServiceRevisionRequestUbuntuReleasesItem) MarshalText() ([]byte, 
 }
 
 // UnmarshalText implements encoding.TextUnmarshaler.
-func (s *PublishServiceRevisionRequestUbuntuReleasesItem) UnmarshalText(data []byte) error {
-	switch PublishServiceRevisionRequestUbuntuReleasesItem(data) {
-	case PublishServiceRevisionRequestUbuntuReleasesItemUbuntu2404:
-		*s = PublishServiceRevisionRequestUbuntuReleasesItemUbuntu2404
+func (s *PublishServiceRevisionRequestOsReleasesItem) UnmarshalText(data []byte) error {
+	switch PublishServiceRevisionRequestOsReleasesItem(data) {
+	case PublishServiceRevisionRequestOsReleasesItemUbuntu2404:
+		*s = PublishServiceRevisionRequestOsReleasesItemUbuntu2404
+		return nil
+	case PublishServiceRevisionRequestOsReleasesItemKaliRolling:
+		*s = PublishServiceRevisionRequestOsReleasesItemKaliRolling
 		return nil
 	default:
 		return errors.Errorf("invalid value: %q", data)
@@ -8171,17 +8185,17 @@ func (s *ServiceJobParameters) SetAction(val ServiceActionType) {
 
 // Ref: #/components/schemas/ServiceRevision
 type ServiceRevision struct {
-	ServiceRevisionID   UUIDv7                              `json:"service_revision_id"`
-	ServiceDefinitionID UUIDv7                              `json:"service_definition_id"`
-	Revision            int                                 `json:"revision"`
-	UbuntuReleases      []ServiceRevisionUbuntuReleasesItem `json:"ubuntu_releases"`
-	Architectures       []ServiceRevisionArchitecturesItem  `json:"architectures"`
-	SystemdUnit         OptString                           `json:"systemd_unit"`
-	VersionCommand      OptString                           `json:"version_command"`
-	Checks              []ServiceCheckSpec                  `json:"checks"`
-	Actions             []ServiceActionSpec                 `json:"actions"`
-	Signature           string                              `json:"signature"`
-	PublishedAt         Timestamp                           `json:"published_at"`
+	ServiceRevisionID   UUIDv7                             `json:"service_revision_id"`
+	ServiceDefinitionID UUIDv7                             `json:"service_definition_id"`
+	Revision            int                                `json:"revision"`
+	OsReleases          []ServiceRevisionOsReleasesItem    `json:"os_releases"`
+	Architectures       []ServiceRevisionArchitecturesItem `json:"architectures"`
+	SystemdUnit         OptString                          `json:"systemd_unit"`
+	VersionCommand      OptString                          `json:"version_command"`
+	Checks              []ServiceCheckSpec                 `json:"checks"`
+	Actions             []ServiceActionSpec                `json:"actions"`
+	Signature           string                             `json:"signature"`
+	PublishedAt         Timestamp                          `json:"published_at"`
 }
 
 // GetServiceRevisionID returns the value of ServiceRevisionID.
@@ -8199,9 +8213,9 @@ func (s *ServiceRevision) GetRevision() int {
 	return s.Revision
 }
 
-// GetUbuntuReleases returns the value of UbuntuReleases.
-func (s *ServiceRevision) GetUbuntuReleases() []ServiceRevisionUbuntuReleasesItem {
-	return s.UbuntuReleases
+// GetOsReleases returns the value of OsReleases.
+func (s *ServiceRevision) GetOsReleases() []ServiceRevisionOsReleasesItem {
+	return s.OsReleases
 }
 
 // GetArchitectures returns the value of Architectures.
@@ -8254,9 +8268,9 @@ func (s *ServiceRevision) SetRevision(val int) {
 	s.Revision = val
 }
 
-// SetUbuntuReleases sets the value of UbuntuReleases.
-func (s *ServiceRevision) SetUbuntuReleases(val []ServiceRevisionUbuntuReleasesItem) {
-	s.UbuntuReleases = val
+// SetOsReleases sets the value of OsReleases.
+func (s *ServiceRevision) SetOsReleases(val []ServiceRevisionOsReleasesItem) {
+	s.OsReleases = val
 }
 
 // SetArchitectures sets the value of Architectures.
@@ -8330,23 +8344,27 @@ func (s *ServiceRevisionArchitecturesItem) UnmarshalText(data []byte) error {
 	}
 }
 
-type ServiceRevisionUbuntuReleasesItem string
+type ServiceRevisionOsReleasesItem string
 
 const (
-	ServiceRevisionUbuntuReleasesItemUbuntu2404 ServiceRevisionUbuntuReleasesItem = "ubuntu-24.04"
+	ServiceRevisionOsReleasesItemUbuntu2404  ServiceRevisionOsReleasesItem = "ubuntu-24.04"
+	ServiceRevisionOsReleasesItemKaliRolling ServiceRevisionOsReleasesItem = "kali-rolling"
 )
 
-// AllValues returns all ServiceRevisionUbuntuReleasesItem values.
-func (ServiceRevisionUbuntuReleasesItem) AllValues() []ServiceRevisionUbuntuReleasesItem {
-	return []ServiceRevisionUbuntuReleasesItem{
-		ServiceRevisionUbuntuReleasesItemUbuntu2404,
+// AllValues returns all ServiceRevisionOsReleasesItem values.
+func (ServiceRevisionOsReleasesItem) AllValues() []ServiceRevisionOsReleasesItem {
+	return []ServiceRevisionOsReleasesItem{
+		ServiceRevisionOsReleasesItemUbuntu2404,
+		ServiceRevisionOsReleasesItemKaliRolling,
 	}
 }
 
 // MarshalText implements encoding.TextMarshaler.
-func (s ServiceRevisionUbuntuReleasesItem) MarshalText() ([]byte, error) {
+func (s ServiceRevisionOsReleasesItem) MarshalText() ([]byte, error) {
 	switch s {
-	case ServiceRevisionUbuntuReleasesItemUbuntu2404:
+	case ServiceRevisionOsReleasesItemUbuntu2404:
+		return []byte(s), nil
+	case ServiceRevisionOsReleasesItemKaliRolling:
 		return []byte(s), nil
 	default:
 		return nil, errors.Errorf("invalid value: %q", s)
@@ -8354,10 +8372,13 @@ func (s ServiceRevisionUbuntuReleasesItem) MarshalText() ([]byte, error) {
 }
 
 // UnmarshalText implements encoding.TextUnmarshaler.
-func (s *ServiceRevisionUbuntuReleasesItem) UnmarshalText(data []byte) error {
-	switch ServiceRevisionUbuntuReleasesItem(data) {
-	case ServiceRevisionUbuntuReleasesItemUbuntu2404:
-		*s = ServiceRevisionUbuntuReleasesItemUbuntu2404
+func (s *ServiceRevisionOsReleasesItem) UnmarshalText(data []byte) error {
+	switch ServiceRevisionOsReleasesItem(data) {
+	case ServiceRevisionOsReleasesItemUbuntu2404:
+		*s = ServiceRevisionOsReleasesItemUbuntu2404
+		return nil
+	case ServiceRevisionOsReleasesItemKaliRolling:
+		*s = ServiceRevisionOsReleasesItemKaliRolling
 		return nil
 	default:
 		return errors.Errorf("invalid value: %q", data)

@@ -76,11 +76,11 @@ let enrollments: EnrollmentRequest[] = [
 ];
 
 const services: ServiceDefinition[] = [
-  { id: "svc-ssh", key: "ssh", name: "OpenSSH", description: "Secure shell access and fallback transport", revision: 4, adapter: "systemd", assigned: 24, healthy: 20, supportedOs: "Ubuntu 24.04 / amd64", signed: true },
-  { id: "svc-docker", key: "docker", name: "Docker Engine", description: "Container engine service and API health", revision: 7, adapter: "http", assigned: 24, healthy: 21, supportedOs: "Ubuntu 24.04 / amd64", signed: true },
-  { id: "svc-node", key: "node-exporter", name: "Node Exporter", description: "Host metrics exporter", revision: 3, adapter: "http", assigned: 18, healthy: 16, supportedOs: "Ubuntu 24.04 / amd64", signed: true },
-  { id: "svc-postgres", key: "postgresql", name: "PostgreSQL", description: "PostgreSQL server and readiness check", revision: 2, adapter: "command", assigned: 8, healthy: 7, supportedOs: "Ubuntu 24.04 / amd64", signed: true },
-  { id: "svc-nginx", key: "nginx", name: "Nginx", description: "Reverse proxy process and HTTP probe", revision: 5, adapter: "http", assigned: 10, healthy: 10, supportedOs: "Ubuntu 24.04 / amd64", signed: true },
+  { id: "svc-ssh", key: "ssh", name: "OpenSSH", description: "Secure shell access and fallback transport", revision: 4, adapter: "systemd", assigned: 24, healthy: 20, supportedOs: "Ubuntu 24.04 / Kali Rolling / amd64", signed: true },
+  { id: "svc-docker", key: "docker", name: "Docker Engine", description: "Container engine service and API health", revision: 7, adapter: "http", assigned: 24, healthy: 21, supportedOs: "Ubuntu 24.04 / Kali Rolling / amd64", signed: true },
+  { id: "svc-node", key: "node-exporter", name: "Node Exporter", description: "Host metrics exporter", revision: 3, adapter: "http", assigned: 18, healthy: 16, supportedOs: "Ubuntu 24.04 / Kali Rolling / amd64", signed: true },
+  { id: "svc-postgres", key: "postgresql", name: "PostgreSQL", description: "PostgreSQL server and readiness check", revision: 2, adapter: "command", assigned: 8, healthy: 7, supportedOs: "Ubuntu 24.04 / Kali Rolling / amd64", signed: true },
+  { id: "svc-nginx", key: "nginx", name: "Nginx", description: "Reverse proxy process and HTTP probe", revision: 5, adapter: "http", assigned: 10, healthy: 10, supportedOs: "Ubuntu 24.04 / Kali Rolling / amd64", signed: true },
 ];
 
 let dockerHosts: DockerHost[] = [

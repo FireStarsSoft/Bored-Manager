@@ -3,8 +3,15 @@ name: Trusted feasibility lab
 on:
   workflow_dispatch:
     inputs:
+      platform:
+        description: Certified platform label
+        required: true
+        type: choice
+        options:
+          - ubuntu-24.04
+          - kali-rolling
       systemd_image:
-        description: Digest-pinned Ubuntu 24.04 image
+        description: Digest-pinned image matching the selected platform
         required: true
         type: string
       dhcp_probe_image:
@@ -18,13 +25,14 @@ permissions:
 jobs:
   certify:
     name: systemd and DHCP gates
-    runs-on: [self-hosted, bored-manager-lab, ubuntu-24.04, amd64]
+    runs-on: [self-hosted, bored-manager-lab, amd64, "${{ inputs.platform }}"]
     environment: feasibility-lab
     timeout-minutes: 30
     permissions:
       contents: read
     env:
       BM_SYSTEMD_IMAGE: ${{ inputs.systemd_image }}
+      BM_EXPECTED_PLATFORM: ${{ inputs.platform }}
       BM_DHCP_PROBE_IMAGE: ${{ inputs.dhcp_probe_image }}
       BM_DHCP_DRIVER: ${{ vars.BM_DHCP_DRIVER }}
       BM_DHCP_PLUGIN_ID: ${{ vars.BM_DHCP_PLUGIN_ID }}

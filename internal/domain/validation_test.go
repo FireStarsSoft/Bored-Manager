@@ -46,6 +46,39 @@ func TestEnrollmentDisplayIdentifiers(t *testing.T) {
 	}
 }
 
+func TestInventorySupportedPlatforms(t *testing.T) {
+	t.Parallel()
+	base := Inventory{
+		Hostname:     "agent-one",
+		Architecture: "amd64",
+		AgentVersion: "0.1.0-alpha.1",
+		CPUCount:     2,
+		MemoryBytes:  1 << 30,
+		DiskBytes:    10 << 30,
+		Addresses:    []string{"192.0.2.20"},
+	}
+	for _, osRelease := range []string{"ubuntu-24.04", "kali-rolling"} {
+		inventory := base
+		inventory.OSRelease = osRelease
+		if err := inventory.Validate(); err != nil {
+			t.Errorf("supported inventory %q rejected: %v", osRelease, err)
+		}
+	}
+	for _, osRelease := range []string{"kali-2026.3", "debian-13", "ubuntu-22.04"} {
+		inventory := base
+		inventory.OSRelease = osRelease
+		if err := inventory.Validate(); err == nil || !strings.Contains(err.Error(), "os_release") {
+			t.Errorf("unsupported inventory %q accepted: %v", osRelease, err)
+		}
+	}
+	arm := base
+	arm.OSRelease = "kali-rolling"
+	arm.Architecture = "arm64"
+	if err := arm.Validate(); err == nil || !strings.Contains(err.Error(), "architecture") {
+		t.Errorf("unsupported architecture accepted: %v", err)
+	}
+}
+
 func TestEnrollmentJSONNeverReturnsCSR(t *testing.T) {
 	t.Parallel()
 	request := EnrollmentRequest{

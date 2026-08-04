@@ -365,7 +365,7 @@ export type InstallationState = 'unsupported' | 'not_installed' | 'installed' | 
 
 export type Inventory = {
     hostname: string;
-    os_release: 'ubuntu-24.04';
+    os_release: 'ubuntu-24.04' | 'kali-rolling';
     architecture: 'amd64';
     kernel_version: string;
     agent_version: string;
@@ -529,7 +529,7 @@ export type PublishNetworkProfileRevisionRequest = {
 };
 
 export type PublishServiceRevisionRequest = {
-    ubuntu_releases: Array<'ubuntu-24.04'>;
+    os_releases: Array<'ubuntu-24.04' | 'kali-rolling'>;
     architectures: Array<'amd64'>;
     systemd_unit?: string;
     version_command?: string;
@@ -690,7 +690,7 @@ export type ServiceRevision = {
     service_revision_id: UuiDv7;
     service_definition_id: UuiDv7;
     revision: number;
-    ubuntu_releases: Array<'ubuntu-24.04'>;
+    os_releases: Array<'ubuntu-24.04' | 'kali-rolling'>;
     architectures: Array<'amd64'>;
     systemd_unit?: string;
     version_command?: string;

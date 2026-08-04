@@ -90,7 +90,7 @@ function enrollmentFrom(value: unknown): EnrollmentRequest {
   return {
     id: string(raw.enrollment_id ?? raw.id), alias: string(raw.agent_name ?? raw.alias, string(inventory.hostname, "Unnamed agent")), sourceAddress: string(raw.source_address ?? raw.source_ip ?? raw.sourceAddress, "unknown"),
     requestedAt: timestamp(raw.requested_at ?? raw.created_at ?? raw.requestedAt), expiresAt: timestamp(raw.expires_at ?? raw.expiresAt), fingerprint: string(raw.csr_fingerprint ?? raw.fingerprint), verificationCode: string(raw.verification_code ?? raw.verificationCode),
-    os: string(inventory.os_release ?? inventory.os ?? inventory.os_name, "ubuntu-24.04"), architecture: string(inventory.architecture ?? inventory.arch, "amd64"), agentVersion: string(raw.version ?? raw.agent_version ?? inventory.agent_version, "unknown"), replayProtected: true,
+    os: string(inventory.os_release ?? inventory.os ?? inventory.os_name, "unknown"), architecture: string(inventory.architecture ?? inventory.arch, "amd64"), agentVersion: string(raw.version ?? raw.agent_version ?? inventory.agent_version, "unknown"), replayProtected: true,
   };
 }
 
@@ -180,7 +180,7 @@ export class HttpApiClient implements ApiClient {
   }
   async listEnrollments(signal?: AbortSignal) { return (await this.optionalItems("/enrollment-requests", signal)).map(enrollmentFrom); }
   decideEnrollment(id: string, decision: "approve" | "reject", confirmation: { verificationCode?: string; alias?: string; tags?: string[]; reason?: string }) { return this.request<void>(`/enrollment-requests/${encodeURIComponent(id)}/${decision}`, { method: "POST", body: decision === "approve" ? { verification_code: confirmation.verificationCode, alias: confirmation.alias, tags: confirmation.tags ?? [] } : { reason: confirmation.reason || "Rejected after operator review" } }); }
-  async listServices(signal?: AbortSignal) { return (await this.optionalItems("/service-definitions?limit=250", signal)).map((value) => { const raw = object(value); return { id: string(raw.id), key: string(raw.key), name: string(raw.name), description: string(raw.description), revision: number(raw.revision), adapter: string(raw.adapter, "command"), assigned: number(raw.assigned), healthy: number(raw.healthy), supportedOs: string(raw.supported_os, "Ubuntu 24.04 / amd64"), signed: Boolean(raw.signed) } as ServiceDefinition; }); }
+  async listServices(signal?: AbortSignal) { return (await this.optionalItems("/service-definitions?limit=250", signal)).map((value) => { const raw = object(value); return { id: string(raw.id), key: string(raw.key), name: string(raw.name), description: string(raw.description), revision: number(raw.revision), adapter: string(raw.adapter, "command"), assigned: number(raw.assigned), healthy: number(raw.healthy), supportedOs: string(raw.supported_os, "Ubuntu 24.04 / Kali Rolling / amd64"), signed: Boolean(raw.signed) } as ServiceDefinition; }); }
   async listDockerHosts(signal?: AbortSignal) { return (await this.optionalItems("/docker-hosts", signal)).map(dockerHostFrom); }
   async createDockerHost(input: { name: string; address: string; port: number; user: string; credentialRef: string; fingerprint: string; knownHostLine: string }) {
     const algorithm = input.knownHostLine.trim().split(/\s+/)[1] || "ssh-ed25519";

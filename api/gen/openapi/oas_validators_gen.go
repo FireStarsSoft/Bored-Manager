@@ -3660,6 +3660,8 @@ func (s InventoryOsRelease) Validate() error {
 	switch s {
 	case "ubuntu-24.04":
 		return nil
+	case "kali-rolling":
+		return nil
 	default:
 		return errors.Errorf("invalid value: %v", s)
 	}
@@ -4979,7 +4981,7 @@ func (s *PublishServiceRevisionRequest) Validate() error {
 
 	var failures []validate.FieldError
 	if err := func() error {
-		if s.UbuntuReleases == nil {
+		if s.OsReleases == nil {
 			return errors.New("nil is invalid value")
 		}
 		if err := (validate.Array{
@@ -4987,14 +4989,14 @@ func (s *PublishServiceRevisionRequest) Validate() error {
 			MinLengthSet: true,
 			MaxLength:    0,
 			MaxLengthSet: false,
-		}).ValidateLength(len(s.UbuntuReleases)); err != nil {
+		}).ValidateLength(len(s.OsReleases)); err != nil {
 			return errors.Wrap(err, "array")
 		}
-		if err := validate.UniqueItems(s.UbuntuReleases); err != nil {
+		if err := validate.UniqueItems(s.OsReleases); err != nil {
 			return errors.Wrap(err, "array")
 		}
 		var failures []validate.FieldError
-		for i, elem := range s.UbuntuReleases {
+		for i, elem := range s.OsReleases {
 			if err := func() error {
 				if err := elem.Validate(); err != nil {
 					return err
@@ -5013,7 +5015,7 @@ func (s *PublishServiceRevisionRequest) Validate() error {
 		return nil
 	}(); err != nil {
 		failures = append(failures, validate.FieldError{
-			Name:  "ubuntu_releases",
+			Name:  "os_releases",
 			Error: err,
 		})
 	}
@@ -5203,9 +5205,11 @@ func (s PublishServiceRevisionRequestArchitecturesItem) Validate() error {
 	}
 }
 
-func (s PublishServiceRevisionRequestUbuntuReleasesItem) Validate() error {
+func (s PublishServiceRevisionRequestOsReleasesItem) Validate() error {
 	switch s {
 	case "ubuntu-24.04":
+		return nil
+	case "kali-rolling":
 		return nil
 	default:
 		return errors.Errorf("invalid value: %v", s)
@@ -6908,7 +6912,7 @@ func (s *ServiceRevision) Validate() error {
 		})
 	}
 	if err := func() error {
-		if s.UbuntuReleases == nil {
+		if s.OsReleases == nil {
 			return errors.New("nil is invalid value")
 		}
 		if err := (validate.Array{
@@ -6916,14 +6920,14 @@ func (s *ServiceRevision) Validate() error {
 			MinLengthSet: true,
 			MaxLength:    0,
 			MaxLengthSet: false,
-		}).ValidateLength(len(s.UbuntuReleases)); err != nil {
+		}).ValidateLength(len(s.OsReleases)); err != nil {
 			return errors.Wrap(err, "array")
 		}
-		if err := validate.UniqueItems(s.UbuntuReleases); err != nil {
+		if err := validate.UniqueItems(s.OsReleases); err != nil {
 			return errors.Wrap(err, "array")
 		}
 		var failures []validate.FieldError
-		for i, elem := range s.UbuntuReleases {
+		for i, elem := range s.OsReleases {
 			if err := func() error {
 				if err := elem.Validate(); err != nil {
 					return err
@@ -6942,7 +6946,7 @@ func (s *ServiceRevision) Validate() error {
 		return nil
 	}(); err != nil {
 		failures = append(failures, validate.FieldError{
-			Name:  "ubuntu_releases",
+			Name:  "os_releases",
 			Error: err,
 		})
 	}
@@ -7132,9 +7136,11 @@ func (s ServiceRevisionArchitecturesItem) Validate() error {
 	}
 }
 
-func (s ServiceRevisionUbuntuReleasesItem) Validate() error {
+func (s ServiceRevisionOsReleasesItem) Validate() error {
 	switch s {
 	case "ubuntu-24.04":
+		return nil
+	case "kali-rolling":
 		return nil
 	default:
 		return errors.Errorf("invalid value: %v", s)

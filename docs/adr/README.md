@@ -15,3 +15,4 @@ Statuses are `proposed`, `accepted`, `rejected`, `deprecated`, or `superseded by
 - [ADR 0001: Release trust and package updates](0001-release-trust-and-package-updates.md)
 - [ADR 0002: Feasibility gates block production](0002-feasibility-gates-block-production.md)
 - [ADR 0003: Generate clients from versioned contracts](0003-generated-contract-clients.md)
+- [ADR 0004: Support Kali Linux Rolling alongside Ubuntu 24.04](0004-kali-rolling-platform-support.md)

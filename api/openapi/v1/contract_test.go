@@ -91,6 +91,20 @@ func TestSecurityInvariantsAreDeclared(t *testing.T) {
 	}
 }
 
+func TestSupportedPlatformContractIncludesKali(t *testing.T) {
+	t.Parallel()
+	components := readContractFile(t, "components.yaml")
+	if !strings.Contains(components, "enum: [ubuntu-24.04, kali-rolling]") {
+		t.Fatal("platform enum does not include Ubuntu 24.04 and Kali Rolling")
+	}
+	if !strings.Contains(components, "os_releases:") {
+		t.Fatal("service revision contract does not expose os_releases")
+	}
+	if strings.Contains(components, "ubuntu_releases") {
+		t.Fatal("legacy Ubuntu-only service revision field remains in the contract")
+	}
+}
+
 func TestEveryPublicRuntimeRouteIsDeclared(t *testing.T) {
 	t.Parallel()
 	spec := readContractFile(t, "openapi.yaml")

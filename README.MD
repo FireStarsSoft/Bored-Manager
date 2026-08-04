@@ -9,8 +9,9 @@
 Vietnamese operator guide: [docs/README.MD](docs/README.MD). The English README remains the
 canonical reference when the two translations differ.
 
-Bored Manager is a small, self-hosted control plane for operating service-oriented Ubuntu
-containers across one or more Docker hosts. It combines inventory, service health, durable
+Bored Manager is a small, self-hosted control plane for operating service-oriented Ubuntu 24.04
+LTS and Kali Linux Rolling containers across one or more Docker hosts. It combines inventory,
+service health, durable
 actions, terminal access, provisioning, networking, and controlled updates in one LAN-oriented
 Web application. It is intended for operators who need to manage many conventional systemd
 services without introducing Kubernetes, Docker Swarm, PostgreSQL, Redis, or a separate message
@@ -28,7 +29,7 @@ exists today, so stable publication fails closed.
 
 - A central `bored-managerd` control plane, SQLite database, Web UI, REST API, live event feed,
   and agent endpoint.
-- A root `bored-agentd` inside each managed Ubuntu container. The agent opens an outbound mTLS
+- A root `bored-agentd` inside each managed Ubuntu or Kali container. The agent opens an outbound mTLS
   connection and does not expose a control port.
 - Local Docker Engine access over `/var/run/docker.sock`, only after an explicit root-equivalent
   permission warning.
@@ -67,16 +68,25 @@ displaying silently stale state.
 
 The v1 certification target is deliberately narrow:
 
-- Manager: Ubuntu Desktop 24.04 LTS, amd64, systemd.
-- Managed containers and Docker hosts: Ubuntu 24.04 LTS, amd64, cgroup v2.
+- Manager: Ubuntu Desktop 24.04 LTS or Kali Linux Rolling, amd64, systemd.
+- Managed containers and Docker hosts: Ubuntu 24.04 LTS or Kali Linux Rolling, amd64, cgroup v2.
 - Docker Engine: rootful Engine 28.5.1 or newer; reference certification uses 29.6.2.
 - Browser: a current Firefox, Chromium, Chrome, or Edge release with JavaScript enabled.
 
-The following are not supported in v1: ARM, non-Ubuntu distributions, rootless Docker, Docker
-Desktop as a production host, Kubernetes, Docker Swarm, LXD, high-availability managers,
-Docker-in-Docker by default, automatic Docker installation, and public Internet exposure without
-an operator-managed reverse proxy and certificate. Bored Manager does not provide a DHCP plugin;
-an external plugin must pass the compatibility gate before DHCP mode is enabled.
+Kali is identified by the exact `/etc/os-release` pair `ID=kali` and
+`VERSION_CODENAME=kali-rolling`; its numeric `VERSION_ID` changes as the distribution advances.
+Either the official `kali-rolling` suite or the safer frozen `kali-last-snapshot` suite is
+supported. A host must use one suite consistently; mixed Ubuntu, Debian, multiple Kali-suite, or
+third-party distribution repositories are unsupported. Certification records the actual suite,
+point-release metadata, and package snapshot because `/etc/os-release` alone cannot distinguish
+the two supported Kali suites.
+
+The following are not supported in v1: ARM, distributions other than Ubuntu 24.04 LTS and Kali
+Linux Rolling, rootless Docker, Docker Desktop as a production host, Kubernetes, Docker Swarm,
+LXD, high-availability managers, Docker-in-Docker by default, automatic Docker installation, and
+public Internet exposure without an operator-managed reverse proxy and certificate. Bored Manager
+does not provide a DHCP plugin; an external plugin must pass the compatibility gate before DHCP
+mode is enabled.
 
 ## Requirements
 
@@ -92,7 +102,8 @@ declares quota enforcement available.
 
 The host must have:
 
-- Ubuntu Desktop 24.04 LTS amd64, systemd, `sudo`, `curl`, OpenSSL, Python 3, and dpkg tools.
+- Ubuntu Desktop 24.04 LTS or Kali Linux Rolling on amd64, with systemd, `sudo`, `curl`, OpenSSL,
+  Python 3, and dpkg tools.
 - Reliable LAN or VPN routing to managed containers and remote Docker hosts.
 - Working DNS or stable addresses and synchronized time.
 - Outbound HTTPS to GitHub Releases for manager updates, unless releases are mirrored.
@@ -132,16 +143,25 @@ separate private CA and mTLS; accepting the Web UI certificate does not enroll a
 
 There is currently no supported release. Confirm that the repository's
 [Releases page](https://github.com/FireStarsSoft/Bored-Manager/releases) contains a published,
-non-draft release and read its notes before using either procedure below. Do not run the command
-against `main`, a pull-request artifact, or an unsigned asset.
+non-draft release whose notes explicitly identify it as installer-enabled. Its **Assets** list must
+contain `install-manager.sh`, `install-agent.sh`, `release-manifest-v1.json`,
+`release-manifest-v1.json.sig`, `SHA256SUMS`, `SHA256SUMS.sig`, both versioned `.deb` packages, the
+SPDX SBOM, and the provenance bundle. GitHub's automatically generated source archives do not count
+as release assets. Do not run the command against `main`, a pull-request artifact, an empty/source-
+only release, or an unsigned asset.
 
 ### One-line manager installation
 
-After the first signed release is published, the official command will be:
+After the first signed stable, non-prerelease release is published and selected by GitHub as
+**Latest**, the official command will be:
 
 ```bash
 tmp="$(mktemp)" && { curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fL --retry 3 -o "$tmp" https://github.com/FireStarsSoft/Bored-Manager/releases/latest/download/install-manager.sh && bash "$tmp"; rc=$?; rm -f "$tmp"; (exit "$rc"); }
 ```
+
+GitHub's `/releases/latest/` alias does not select prereleases. For an installer-enabled
+prerelease, use its exact `vX.Y.Z-suffix` tag and the checksum-pinned procedure below; never replace
+the tag-specific URL with `/latest/`.
 
 The bootstrap runs as the current user. It downloads the signed manifest, checks the embedded
 release-key fingerprint, verifies the manifest and checksums, validates both Debian packages,
@@ -542,8 +562,9 @@ SQLite database, browser cookies, terminal transcripts, or `/etc/bored-manager` 
 
 | Symptom | Diagnostic | Likely cause | Corrective action |
 | --- | --- | --- | --- |
+| Installer URL returns HTTP 404 | Inspect the selected release's **Assets** list and exact tag | No eligible stable **Latest** release, a prerelease was requested through `/latest/`, or `install-manager.sh` was never uploaded | Stop. For stable releases require the complete signed asset set; for prereleases use the exact tag-specific, checksum-pinned URL. Do not execute the raw template from `main`. |
 | Installer signature/hash failure | Rerun with `--dry-run`; compare release tag and asset names | Tampered/truncated asset, wrong mirror, unsigned draft, or stale cache | Stop. Delete the temporary downloads, verify the published signing-key fingerprint through a second channel, and retry the exact release. Never use a skip-verification flag. |
-| Unsupported OS/architecture | `source /etc/os-release; printf '%s %s\n' "$ID" "$VERSION_ID"; dpkg --print-architecture` | Not Ubuntu 24.04/amd64 | Use a certified host; do not override the check in production. |
+| Unsupported OS/architecture | `source /etc/os-release; printf '%s %s %s\n' "$ID" "${VERSION_ID:-}" "${VERSION_CODENAME:-}"; dpkg --print-architecture` | Not Ubuntu 24.04/amd64 or Kali Rolling/amd64, or Kali uses a mixed/unsupported repository set | Use a certified host with one official suite, `kali-rolling` or `kali-last-snapshot`; do not override the check or mix Ubuntu, Debian, or multiple Kali suites. |
 | Dpkg lock | `sudo fuser /var/lib/dpkg/lock-frontend` | apt/dpkg is active | Let the owning process finish. Do not delete lock files. Run `sudo dpkg --audit` afterward. |
 | Insufficient disk | `df -h /var/lib/bored-manager /var/cache/bored-manager` | Package, backup, DB, or image cache exceeds free space | Remove unrelated data or expire verified cache entries through the manager; preserve the current package and rollback backup. |
 | Manager will not start | `systemctl status` and `journalctl` commands above | Invalid config, permission, migration, missing credential, port collision | Restore the last valid config/package pair; do not edit SQLite. Check `ss -ltnp` for 8443/9443. |
@@ -598,7 +619,8 @@ Never report a vulnerability in a public issue. Follow [SECURITY.md](SECURITY.md
 ### Windows 11 and WSL2 Ubuntu 24.04
 
 Use WSL2 Ubuntu 24.04 for Go, Node, Bash, dpkg, systemd, and Docker-oriented development. Avoid
-building release artifacts with the Windows toolchain.
+building release artifacts with the Windows toolchain. Kali Linux Rolling is a certified runtime
+and package-installation target, not the reproducible release-build host.
 
 From an elevated Windows PowerShell session, install/select the correct distribution (this does
 not replace an existing distribution unless Windows explicitly asks):

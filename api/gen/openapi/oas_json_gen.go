@@ -9526,6 +9526,8 @@ func (s *InventoryOsRelease) Decode(d *jx.Decoder) error {
 	switch InventoryOsRelease(v) {
 	case InventoryOsReleaseUbuntu2404:
 		*s = InventoryOsReleaseUbuntu2404
+	case InventoryOsReleaseKaliRolling:
+		*s = InventoryOsReleaseKaliRolling
 	default:
 		*s = InventoryOsRelease(v)
 	}
@@ -13427,9 +13429,9 @@ func (s *PublishServiceRevisionRequest) Encode(e *jx.Encoder) {
 // encodeFields encodes fields.
 func (s *PublishServiceRevisionRequest) encodeFields(e *jx.Encoder) {
 	{
-		e.FieldStart("ubuntu_releases")
+		e.FieldStart("os_releases")
 		e.ArrStart()
-		for _, elem := range s.UbuntuReleases {
+		for _, elem := range s.OsReleases {
 			elem.Encode(e)
 		}
 		e.ArrEnd()
@@ -13477,7 +13479,7 @@ func (s *PublishServiceRevisionRequest) encodeFields(e *jx.Encoder) {
 }
 
 var jsonFieldsNameOfPublishServiceRevisionRequest = [7]string{
-	0: "ubuntu_releases",
+	0: "os_releases",
 	1: "architectures",
 	2: "systemd_unit",
 	3: "version_command",
@@ -13495,23 +13497,23 @@ func (s *PublishServiceRevisionRequest) Decode(d *jx.Decoder) error {
 
 	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
 		switch string(k) {
-		case "ubuntu_releases":
+		case "os_releases":
 			requiredBitSet[0] |= 1 << 0
 			if err := func() error {
-				s.UbuntuReleases = make([]PublishServiceRevisionRequestUbuntuReleasesItem, 0)
+				s.OsReleases = make([]PublishServiceRevisionRequestOsReleasesItem, 0)
 				if err := d.Arr(func(d *jx.Decoder) error {
-					var elem PublishServiceRevisionRequestUbuntuReleasesItem
+					var elem PublishServiceRevisionRequestOsReleasesItem
 					if err := elem.Decode(d); err != nil {
 						return err
 					}
-					s.UbuntuReleases = append(s.UbuntuReleases, elem)
+					s.OsReleases = append(s.OsReleases, elem)
 					return nil
 				}); err != nil {
 					return err
 				}
 				return nil
 			}(); err != nil {
-				return errors.Wrap(err, "decode field \"ubuntu_releases\"")
+				return errors.Wrap(err, "decode field \"os_releases\"")
 			}
 		case "architectures":
 			requiredBitSet[0] |= 1 << 1
@@ -13693,40 +13695,42 @@ func (s *PublishServiceRevisionRequestArchitecturesItem) UnmarshalJSON(data []by
 	return s.Decode(d)
 }
 
-// Encode encodes PublishServiceRevisionRequestUbuntuReleasesItem as json.
-func (s PublishServiceRevisionRequestUbuntuReleasesItem) Encode(e *jx.Encoder) {
+// Encode encodes PublishServiceRevisionRequestOsReleasesItem as json.
+func (s PublishServiceRevisionRequestOsReleasesItem) Encode(e *jx.Encoder) {
 	e.Str(string(s))
 }
 
-// Decode decodes PublishServiceRevisionRequestUbuntuReleasesItem from json.
-func (s *PublishServiceRevisionRequestUbuntuReleasesItem) Decode(d *jx.Decoder) error {
+// Decode decodes PublishServiceRevisionRequestOsReleasesItem from json.
+func (s *PublishServiceRevisionRequestOsReleasesItem) Decode(d *jx.Decoder) error {
 	if s == nil {
-		return errors.New("invalid: unable to decode PublishServiceRevisionRequestUbuntuReleasesItem to nil")
+		return errors.New("invalid: unable to decode PublishServiceRevisionRequestOsReleasesItem to nil")
 	}
 	v, err := d.StrBytes()
 	if err != nil {
 		return err
 	}
 	// Try to use constant string.
-	switch PublishServiceRevisionRequestUbuntuReleasesItem(v) {
-	case PublishServiceRevisionRequestUbuntuReleasesItemUbuntu2404:
-		*s = PublishServiceRevisionRequestUbuntuReleasesItemUbuntu2404
+	switch PublishServiceRevisionRequestOsReleasesItem(v) {
+	case PublishServiceRevisionRequestOsReleasesItemUbuntu2404:
+		*s = PublishServiceRevisionRequestOsReleasesItemUbuntu2404
+	case PublishServiceRevisionRequestOsReleasesItemKaliRolling:
+		*s = PublishServiceRevisionRequestOsReleasesItemKaliRolling
 	default:
-		*s = PublishServiceRevisionRequestUbuntuReleasesItem(v)
+		*s = PublishServiceRevisionRequestOsReleasesItem(v)
 	}
 
 	return nil
 }
 
 // MarshalJSON implements stdjson.Marshaler.
-func (s PublishServiceRevisionRequestUbuntuReleasesItem) MarshalJSON() ([]byte, error) {
+func (s PublishServiceRevisionRequestOsReleasesItem) MarshalJSON() ([]byte, error) {
 	e := jx.Encoder{}
 	s.Encode(&e)
 	return e.Bytes(), nil
 }
 
 // UnmarshalJSON implements stdjson.Unmarshaler.
-func (s *PublishServiceRevisionRequestUbuntuReleasesItem) UnmarshalJSON(data []byte) error {
+func (s *PublishServiceRevisionRequestOsReleasesItem) UnmarshalJSON(data []byte) error {
 	d := jx.DecodeBytes(data)
 	return s.Decode(d)
 }
@@ -17624,9 +17628,9 @@ func (s *ServiceRevision) encodeFields(e *jx.Encoder) {
 		e.Int(s.Revision)
 	}
 	{
-		e.FieldStart("ubuntu_releases")
+		e.FieldStart("os_releases")
 		e.ArrStart()
-		for _, elem := range s.UbuntuReleases {
+		for _, elem := range s.OsReleases {
 			elem.Encode(e)
 		}
 		e.ArrEnd()
@@ -17681,7 +17685,7 @@ var jsonFieldsNameOfServiceRevision = [11]string{
 	0:  "service_revision_id",
 	1:  "service_definition_id",
 	2:  "revision",
-	3:  "ubuntu_releases",
+	3:  "os_releases",
 	4:  "architectures",
 	5:  "systemd_unit",
 	6:  "version_command",
@@ -17732,23 +17736,23 @@ func (s *ServiceRevision) Decode(d *jx.Decoder) error {
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"revision\"")
 			}
-		case "ubuntu_releases":
+		case "os_releases":
 			requiredBitSet[0] |= 1 << 3
 			if err := func() error {
-				s.UbuntuReleases = make([]ServiceRevisionUbuntuReleasesItem, 0)
+				s.OsReleases = make([]ServiceRevisionOsReleasesItem, 0)
 				if err := d.Arr(func(d *jx.Decoder) error {
-					var elem ServiceRevisionUbuntuReleasesItem
+					var elem ServiceRevisionOsReleasesItem
 					if err := elem.Decode(d); err != nil {
 						return err
 					}
-					s.UbuntuReleases = append(s.UbuntuReleases, elem)
+					s.OsReleases = append(s.OsReleases, elem)
 					return nil
 				}); err != nil {
 					return err
 				}
 				return nil
 			}(); err != nil {
-				return errors.Wrap(err, "decode field \"ubuntu_releases\"")
+				return errors.Wrap(err, "decode field \"os_releases\"")
 			}
 		case "architectures":
 			requiredBitSet[0] |= 1 << 4
@@ -17941,40 +17945,42 @@ func (s *ServiceRevisionArchitecturesItem) UnmarshalJSON(data []byte) error {
 	return s.Decode(d)
 }
 
-// Encode encodes ServiceRevisionUbuntuReleasesItem as json.
-func (s ServiceRevisionUbuntuReleasesItem) Encode(e *jx.Encoder) {
+// Encode encodes ServiceRevisionOsReleasesItem as json.
+func (s ServiceRevisionOsReleasesItem) Encode(e *jx.Encoder) {
 	e.Str(string(s))
 }
 
-// Decode decodes ServiceRevisionUbuntuReleasesItem from json.
-func (s *ServiceRevisionUbuntuReleasesItem) Decode(d *jx.Decoder) error {
+// Decode decodes ServiceRevisionOsReleasesItem from json.
+func (s *ServiceRevisionOsReleasesItem) Decode(d *jx.Decoder) error {
 	if s == nil {
-		return errors.New("invalid: unable to decode ServiceRevisionUbuntuReleasesItem to nil")
+		return errors.New("invalid: unable to decode ServiceRevisionOsReleasesItem to nil")
 	}
 	v, err := d.StrBytes()
 	if err != nil {
 		return err
 	}
 	// Try to use constant string.
-	switch ServiceRevisionUbuntuReleasesItem(v) {
-	case ServiceRevisionUbuntuReleasesItemUbuntu2404:
-		*s = ServiceRevisionUbuntuReleasesItemUbuntu2404
+	switch ServiceRevisionOsReleasesItem(v) {
+	case ServiceRevisionOsReleasesItemUbuntu2404:
+		*s = ServiceRevisionOsReleasesItemUbuntu2404
+	case ServiceRevisionOsReleasesItemKaliRolling:
+		*s = ServiceRevisionOsReleasesItemKaliRolling
 	default:
-		*s = ServiceRevisionUbuntuReleasesItem(v)
+		*s = ServiceRevisionOsReleasesItem(v)
 	}
 
 	return nil
 }
 
 // MarshalJSON implements stdjson.Marshaler.
-func (s ServiceRevisionUbuntuReleasesItem) MarshalJSON() ([]byte, error) {
+func (s ServiceRevisionOsReleasesItem) MarshalJSON() ([]byte, error) {
 	e := jx.Encoder{}
 	s.Encode(&e)
 	return e.Bytes(), nil
 }
 
 // UnmarshalJSON implements stdjson.Unmarshaler.
-func (s *ServiceRevisionUbuntuReleasesItem) UnmarshalJSON(data []byte) error {
+func (s *ServiceRevisionOsReleasesItem) UnmarshalJSON(data []byte) error {
 	d := jx.DecodeBytes(data)
 	return s.Decode(d)
 }

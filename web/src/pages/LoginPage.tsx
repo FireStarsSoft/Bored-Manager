@@ -38,7 +38,7 @@ export function LoginPage({ status, onAuthenticated }: { status: SetupStatus; on
         <Brand />
         <div className="auth-story-copy">
           <p className="eyebrow">Operations, without the noise</p>
-          <h1>One clear view across every Ubuntu service.</h1>
+          <h1>One clear view across every supported Linux service.</h1>
           <p>Monitor health, act across your fleet and keep every change accountable from a single, private control plane.</p>
           <div className="auth-proof">
             <span><ShieldCheck size={18} /> mTLS agent identity</span>
@@ -46,7 +46,7 @@ export function LoginPage({ status, onAuthenticated }: { status: SetupStatus; on
           </div>
         </div>
         <div className="auth-orbit" aria-hidden="true"><i /><i /><i /><b>24</b><span>agents<br />observed</span></div>
-        <footer>Built for Ubuntu 24.04 LTS / Private by default</footer>
+        <footer>Built for Ubuntu 24.04 LTS and Kali Rolling / Private by default</footer>
       </section>
       <section className="auth-form-wrap">
         <form className="auth-form" onSubmit={submit}>

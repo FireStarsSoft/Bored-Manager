@@ -64,9 +64,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
+          notes_file="docs/release/notes/${RELEASE_TAG}.md"
+          test -s "$notes_file"
           if [[ "$RELEASE_TAG" == *-* ]]; then
-            gh release edit "$RELEASE_TAG" --draft=false --prerelease=true
+            gh release edit "$RELEASE_TAG" --notes-file "$notes_file" --draft=false --prerelease=true
           else
-            gh release edit "$RELEASE_TAG" --draft=false --prerelease=false
+            gh release edit "$RELEASE_TAG" --notes-file "$notes_file" --draft=false --prerelease=false
           fi
           [[ "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" == false ]]

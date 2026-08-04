@@ -10,8 +10,9 @@
 Đây là bản hướng dẫn vận hành bằng tiếng Việt. Tài liệu tiếng Anh tại
 [README.MD](../README.MD) là tài liệu chuẩn chính thức.
 
-Bored Manager là một control plane nhỏ, tự lưu trữ để vận hành các container Ubuntu chạy theo mô
-hình dịch vụ trên một hoặc nhiều Docker host. Dự án hợp nhất kiểm kê, tình trạng dịch vụ, thao tác
+Bored Manager là một control plane nhỏ, tự lưu trữ để vận hành các container Ubuntu 24.04 LTS và
+Kali Linux Rolling chạy theo mô hình dịch vụ trên một hoặc nhiều Docker host. Dự án hợp nhất kiểm
+kê, tình trạng dịch vụ, thao tác
 bền vững, truy cập terminal, cấp phát, mạng và cập nhật có kiểm soát trong một ứng dụng Web hướng
 đến mạng LAN. Đối tượng sử dụng là những người vận hành cần quản lý nhiều dịch vụ systemd thông
 thường mà không phải đưa vào Kubernetes, Docker Swarm, PostgreSQL, Redis hay một message broker
@@ -30,7 +31,7 @@ sẽ dừng an toàn.
 
 - Một control plane trung tâm `bored-managerd`, cơ sở dữ liệu SQLite, Web UI, REST API, luồng sự
   kiện trực tiếp và endpoint dành cho agent.
-- Một tiến trình `bored-agentd` chạy bằng root bên trong mỗi container Ubuntu được quản lý. Agent
+- Một tiến trình `bored-agentd` chạy bằng root bên trong mỗi container Ubuntu hoặc Kali được quản lý. Agent
   chủ động mở kết nối mTLS ra ngoài và không công khai cổng điều khiển.
 - Truy cập Docker Engine cục bộ qua `/var/run/docker.sock`, chỉ sau khi người vận hành xác nhận rõ
   cảnh báo rằng quyền này tương đương quyền root.
@@ -68,16 +69,25 @@ một dải sự kiện sẽ được yêu cầu đồng bộ lại thay vì âm
 
 Mục tiêu chứng nhận v1 được chủ đích giới hạn:
 
-- Manager: Ubuntu Desktop 24.04 LTS, amd64, systemd.
-- Container được quản lý và Docker host: Ubuntu 24.04 LTS, amd64, cgroup v2.
+- Manager: Ubuntu Desktop 24.04 LTS hoặc Kali Linux Rolling, amd64, systemd.
+- Container được quản lý và Docker host: Ubuntu 24.04 LTS hoặc Kali Linux Rolling, amd64, cgroup v2.
 - Docker Engine: Engine rootful 28.5.1 trở lên; phiên bản chứng nhận tham chiếu là 29.6.2.
 - Trình duyệt: bản Firefox, Chromium, Chrome hoặc Edge hiện hành, có bật JavaScript.
 
-Các nền tảng sau không được hỗ trợ trong v1: ARM, bản phân phối không phải Ubuntu, rootless Docker,
-Docker Desktop làm production host, Kubernetes, Docker Swarm, LXD, manager high-availability,
-Docker-in-Docker theo mặc định, tự động cài Docker và phơi dịch vụ ra Internet công cộng khi không
-có reverse proxy cùng chứng chỉ do người vận hành quản lý. Bored Manager không cung cấp DHCP
-plugin; một plugin bên ngoài phải vượt qua compatibility gate trước khi bật chế độ DHCP.
+Kali được nhận diện bằng đúng cặp `/etc/os-release` `ID=kali` và
+`VERSION_CODENAME=kali-rolling`; `VERSION_ID` dạng số sẽ thay đổi khi distribution tiến lên. Cả
+suite chính thức `kali-rolling` và suite đóng băng an toàn hơn `kali-last-snapshot` đều được hỗ trợ.
+Mỗi host phải dùng nhất quán một suite; việc trộn repository Ubuntu, Debian, nhiều Kali suite hoặc
+repository của bản phân phối bên thứ ba không được hỗ trợ. Certification ghi lại suite thực tế,
+metadata point release và package snapshot vì chỉ `/etc/os-release` không phân biệt được hai Kali
+suite được hỗ trợ.
+
+Các nền tảng sau không được hỗ trợ trong v1: ARM, bản phân phối ngoài Ubuntu 24.04 LTS và Kali Linux
+Rolling, rootless Docker, Docker Desktop làm production host, Kubernetes, Docker Swarm, LXD,
+manager high-availability, Docker-in-Docker theo mặc định, tự động cài Docker và phơi dịch vụ ra
+Internet công cộng khi không có reverse proxy cùng chứng chỉ do người vận hành quản lý. Bored
+Manager không cung cấp DHCP plugin; một plugin bên ngoài phải vượt qua compatibility gate trước khi
+bật chế độ DHCP.
 
 ## Yêu cầu
 
@@ -93,7 +103,8 @@ lifecycle gate công bố quota enforcement đã sẵn sàng.
 
 Host phải có:
 
-- Ubuntu Desktop 24.04 LTS amd64, systemd, `sudo`, `curl`, OpenSSL, Python 3 và các công cụ dpkg.
+- Ubuntu Desktop 24.04 LTS hoặc Kali Linux Rolling trên amd64, cùng systemd, `sudo`, `curl`, OpenSSL,
+  Python 3 và các công cụ dpkg.
 - Định tuyến LAN hoặc VPN ổn định đến container được quản lý và Docker host từ xa.
 - DNS hoạt động hoặc địa chỉ ổn định, cùng thời gian hệ thống được đồng bộ.
 - HTTPS đi ra đến GitHub Releases để cập nhật manager, trừ khi release được mirror.
@@ -132,17 +143,25 @@ một CA riêng và mTLS; việc chấp nhận chứng chỉ Web UI không đồ
 ### Kiểm tra tính sẵn sàng của release
 
 Hiện chưa có release được hỗ trợ. Hãy xác nhận trang
-[Releases](https://github.com/FireStarsSoft/Bored-Manager/releases) của repository có một release
-đã phát hành, không phải draft, và đọc release notes trước khi dùng một trong hai quy trình dưới
-đây. Không chạy lệnh với `main`, artifact của pull request hoặc asset chưa được ký.
+[Releases](https://github.com/FireStarsSoft/Bored-Manager/releases) của repository có release đã
+phát hành, không phải draft, và release notes ghi rõ release đó hỗ trợ installer. Danh sách
+**Assets** phải có `install-manager.sh`, `install-agent.sh`, `release-manifest-v1.json`,
+`release-manifest-v1.json.sig`, `SHA256SUMS`, `SHA256SUMS.sig`, hai package `.deb` có phiên bản, SPDX
+SBOM và provenance bundle. Source archive do GitHub tự sinh không được tính là release asset. Không
+chạy lệnh với `main`, artifact của pull request, release rỗng/chỉ có source hoặc asset chưa được ký.
 
 ### Cài manager bằng một dòng lệnh
 
-Sau khi release có chữ ký đầu tiên được phát hành, lệnh chính thức sẽ là:
+Sau khi stable release có chữ ký đầu tiên, không phải prerelease, được phát hành và GitHub chọn làm
+**Latest**, lệnh chính thức sẽ là:
 
 ```bash
 tmp="$(mktemp)" && { curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fL --retry 3 -o "$tmp" https://github.com/FireStarsSoft/Bored-Manager/releases/latest/download/install-manager.sh && bash "$tmp"; rc=$?; rm -f "$tmp"; (exit "$rc"); }
 ```
+
+Alias `/releases/latest/` của GitHub không chọn prerelease. Với prerelease có hỗ trợ installer, hãy
+dùng đúng tag `vX.Y.Z-suffix` và quy trình pin checksum bên dưới; không thay URL theo tag bằng
+`/latest/`.
 
 Bootstrap chạy dưới user hiện tại. Nó tải manifest có chữ ký, kiểm tra fingerprint của release key
 được nhúng, xác minh manifest và checksum, kiểm tra cả hai Debian package rồi mới yêu cầu `sudo`.
@@ -541,8 +560,9 @@ browser cookie, terminal transcript hoặc `/etc/bored-manager` vào support bun
 
 | Triệu chứng | Chẩn đoán | Nguyên nhân có thể | Cách khắc phục |
 | --- | --- | --- | --- |
+| URL installer trả HTTP 404 | Kiểm tra danh sách **Assets** của release được chọn và tag chính xác | Không có stable release đủ điều kiện làm **Latest**, dùng `/latest/` cho prerelease hoặc `install-manager.sh` chưa được upload | Dừng lại. Với stable release, yêu cầu đủ tập asset có chữ ký; với prerelease, dùng URL pin checksum theo đúng tag. Không chạy raw template từ `main`. |
 | Lỗi chữ ký/hash trình cài đặt | Chạy lại với `--dry-run`; so sánh release tag và tên asset | Asset bị sửa/cụt, mirror sai, draft chưa ký hoặc cache cũ | Dừng lại. Xóa file tải tạm, xác minh fingerprint của signing key đã công bố qua kênh thứ hai rồi thử lại đúng release. Không bao giờ dùng flag bỏ qua xác minh. |
-| OS/kiến trúc không được hỗ trợ | `source /etc/os-release; printf '%s %s\n' "$ID" "$VERSION_ID"; dpkg --print-architecture` | Không phải Ubuntu 24.04/amd64 | Dùng host đã chứng nhận; không override kiểm tra trong production. |
+| OS/kiến trúc không được hỗ trợ | `source /etc/os-release; printf '%s %s %s\n' "$ID" "${VERSION_ID:-}" "${VERSION_CODENAME:-}"; dpkg --print-architecture` | Không phải Ubuntu 24.04/amd64 hoặc Kali Rolling/amd64, hoặc Kali dùng bộ repository bị trộn/không được hỗ trợ | Dùng host đã chứng nhận với một suite chính thức `kali-rolling` hoặc `kali-last-snapshot`; không override kiểm tra hay trộn Ubuntu, Debian hoặc nhiều Kali suite. |
 | Dpkg bị lock | `sudo fuser /var/lib/dpkg/lock-frontend` | apt/dpkg đang hoạt động | Chờ tiến trình sở hữu hoàn tất. Không xóa lock file. Chạy `sudo dpkg --audit` sau đó. |
 | Không đủ dung lượng | `df -h /var/lib/bored-manager /var/cache/bored-manager` | Package, backup, DB hoặc image cache vượt dung lượng trống | Xóa dữ liệu không liên quan hoặc hết hạn cache entry đã xác minh qua manager; bảo toàn package hiện tại và rollback backup. |
 | Manager không khởi động | Các lệnh `systemctl status` và `journalctl` ở trên | Cấu hình không hợp lệ, permission, migration, thiếu credential hoặc xung đột cổng | Phục hồi cặp config/package hợp lệ gần nhất; không chỉnh SQLite. Dùng `ss -ltnp` kiểm tra 8443/9443. |
@@ -596,7 +616,8 @@ Không bao giờ báo lỗ hổng qua public issue. Làm theo [SECURITY.md](../S
 ### Windows 11 và WSL2 Ubuntu 24.04
 
 Dùng WSL2 Ubuntu 24.04 để phát triển Go, Node, Bash, dpkg, systemd và chức năng liên quan Docker.
-Tránh build release artifact bằng Windows toolchain.
+Tránh build release artifact bằng Windows toolchain. Kali Linux Rolling là runtime target và target
+cài package được chứng nhận, không phải release-build host tái lập.
 
 Từ phiên Windows PowerShell chạy elevated, cài/chọn đúng distribution (thao tác này không thay thế
 distribution hiện có trừ khi Windows hỏi rõ):

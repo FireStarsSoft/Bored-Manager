@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/FireStarsSoft/Bored-Manager/internal/platform"
 )
 
 type Role string
@@ -101,10 +103,10 @@ func (i Inventory) Validate() error {
 	if err := validateName(i.Hostname, 253); err != nil {
 		validation.add("hostname", err.Error())
 	}
-	if i.OSRelease != "ubuntu-24.04" {
-		validation.add("os_release", "must be ubuntu-24.04")
+	if !platform.IsSupportedOSRelease(i.OSRelease) {
+		validation.add("os_release", "must be ubuntu-24.04 or kali-rolling")
 	}
-	if i.Architecture != "amd64" {
+	if i.Architecture != platform.AMD64 {
 		validation.add("architecture", "must be amd64")
 	}
 	if err := validateRequired(i.AgentVersion); err != nil {

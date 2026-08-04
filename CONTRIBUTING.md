@@ -5,7 +5,9 @@ changes must be reviewable, reproducible, and conservative about privileges and 
 
 ## Development environment
 
-Use Ubuntu 24.04 amd64, directly or under WSL2. The pinned toolchains are Go 1.26.5, Node 24.18.x,
+Use Ubuntu 24.04 amd64, directly or under WSL2, as the reproducible development and release-build
+environment. Ubuntu 24.04 LTS and Kali Linux Rolling amd64 are separate runtime/package-installation
+targets and both require target-platform tests. The pinned toolchains are Go 1.26.5, Node 24.18.x,
 TypeScript 6.0.x, and React 19.2.x. Contract generation additionally pins ogen 1.23.0, Buf 1.72.0,
 and `@hey-api/openapi-ts` 0.99.0. Use npm with the committed lockfile.
 
@@ -18,8 +20,9 @@ make test
 make build
 ```
 
-Do not develop release packaging on Kali, alter generated files by hand, or commit local secrets,
-keys, databases, coverage output, binaries, package artifacts, or support bundles.
+Do not produce release artifacts on Kali, alter generated files by hand, or commit local secrets,
+keys, databases, coverage output, binaries, package artifacts, or support bundles. Kali is a
+certified install target, not the canonical build host.
 
 ## Change workflow
 
@@ -67,7 +70,8 @@ be explicitly marked planned/unavailable. Links and documented CLI commands are 
 
 - Unit tests cover state transitions and failure paths.
 - Integration tests use real SQLite and manager/agent transports where relevant.
-- Packaging changes test install, repeat install, upgrade, rollback, remove, and residue.
+- Packaging changes test install, repeat install, upgrade, rollback, remove, and residue on both
+  Ubuntu 24.04 LTS and Kali Linux Rolling amd64.
 - Security-sensitive changes include negative tests.
 - Scale or networking claims need a reproducible lab report; simulations do not replace required
   real-container gates.

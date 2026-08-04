@@ -4,8 +4,9 @@
 
 - **Tên dự án:** Bored Manager
 - **Loại dự án:** Greenfield; thư mục dự án chưa có source code hoặc kiến trúc cũ cần tương thích.
-- **Nền tảng quản lý:** Ubuntu Desktop 24.04 LTS amd64, chạy 24/7.
-- **Đối tượng được quản lý:** Ubuntu 24.04 LTS amd64 chạy trong Docker container trên một hoặc nhiều Ubuntu Docker host.
+- **Nền tảng quản lý:** Ubuntu Desktop 24.04 LTS hoặc Kali Linux Rolling amd64, chạy 24/7 bằng systemd.
+- **Đối tượng được quản lý:** Ubuntu 24.04 LTS hoặc Kali Linux Rolling amd64 chạy trong Docker
+  container trên một hoặc nhiều Docker host thuộc cùng ma trận nền tảng được hỗ trợ.
 - **Hình thức giao diện:** Web UI truy cập trong LAN bằng IP và port cấu hình được.
 - **Người dùng:** Một tài khoản quản trị ở v1.
 - **Mục đích của tài liệu:** Khóa mục tiêu, kiến trúc, interface, trình tự triển khai, tiêu chí kiểm thử và điều kiện nghiệm thu trước khi viết source code.
@@ -14,11 +15,13 @@
 
 ## 2. Tầm nhìn và mục tiêu
 
-ServicesManager gồm một control plane trung tâm gọi là **A**, các **agent** chạy trong Ubuntu container, và các **Docker host connector** dùng SSH để A quản lý Docker Engine từ xa.
+ServicesManager gồm một control plane trung tâm gọi là **A**, các **agent** chạy trong container
+Ubuntu hoặc Kali được hỗ trợ, và các **Docker host connector** dùng SSH để A quản lý Docker Engine
+từ xa.
 
 Hệ thống phải giúp một người quản trị:
 
-1. Quan sát tập trung tối đa 1.000 Ubuntu container. (có thể mở rộng lên nhiều container hơn)
+1. Quan sát tập trung tối đa 1.000 container Ubuntu/Kali được hỗ trợ. (có thể mở rộng lên nhiều container hơn)
 2. Theo dõi tối đa 20 service trên mỗi agent. (có thể mở rộng lên nhiều service hơn)
 3. Nhìn thấy ngay agent hoặc service nào offline, stale, stopped, failed hoặc unhealthy.
 4. Cài đặt, gỡ, start, stop, restart, update và kiểm tra service bằng các service definition có version.
@@ -57,7 +60,7 @@ Theo dõi service là tính năng quan trọng nhất. Dashboard phải thể hi
 - High availability cho manager hoặc database cluster.
 - Public Internet exposure không thông qua LAN/VPN tin cậy.
 - Quản lý Kubernetes, Docker Swarm hoặc LXD.
-- Agent trên Ubuntu vật lý hoặc máy ảo.
+- Agent nằm ngoài managed container, dù chạy trên máy vật lý hay máy ảo.
 - Tự cài đặt/nâng cấp Docker Engine trên Docker host.
 - Batch terminal mirror raw keystroke hoặc chạy full-screen TUI đồng bộ.
 - Email, Telegram, Slack, webhook hoặc cảnh báo bên ngoài.
@@ -86,7 +89,7 @@ Mọi dependency phải được khóa bằng `go.mod`, `go.sum` và frontend lo
 
 #### `managerd`
 
-- Systemd service chạy 24/7 trên máy Ubuntu Desktop.
+- Systemd service chạy 24/7 trên Ubuntu Desktop 24.04 LTS hoặc Kali Linux Rolling amd64.
 - Phục vụ SPA, REST API, WebSocket và agent gRPC endpoint.
 - Quản lý database, PKI, agent connections, service catalog, jobs, alerts, Docker hosts, templates, provisioning và updates.
 - Chạy bằng user hệ thống riêng, không chạy root.
@@ -256,7 +259,7 @@ Mỗi revision bất biến gồm:
 
 - Stable service key và display name.
 - Catalog/revision version.
-- Ubuntu release và architecture hỗ trợ.
+- OS release (`ubuntu-24.04` hoặc `kali-rolling`) và architecture hỗ trợ.
 - Detection adapter.
 - Runtime check và optional health probes.
 - Install, uninstall, start, stop, restart, update và remediation action.
@@ -440,7 +443,7 @@ A chỉ dùng Docker Engine có sẵn; không cài hoặc nâng cấp Docker.
 
 ### 9.2. Host preflight
 
-- Ubuntu 24.04 amd64.
+- Ubuntu 24.04 LTS hoặc Kali Linux Rolling, amd64.
 - Docker Engine/API compatibility.
 - cgroup v2 và systemd-container profile.
 - BuildKit availability.
@@ -667,7 +670,8 @@ Agent uninstall không tự gỡ monitored services. Manager uninstall không t�
 2. Tạo module boundaries cho manager, agent, CLI, updater, API, web, catalog, packaging và lab.
 3. Khóa toolchain/dependencies.
 4. PoC Docker Engine API qua SSH với strict host-key checking.
-5. PoC systemd PID 1 từ official Ubuntu 24.04 image:
+5. PoC systemd PID 1 riêng cho official Ubuntu 24.04 image và digest-pinned Kali Linux Rolling
+   image:
    - `STOPSIGNAL SIGRTMIN+3`
    - tmpfs `/run` và `/run/lock`
    - private cgroup namespace/cgroup v2
@@ -876,7 +880,7 @@ Agent uninstall không tự gỡ monitored services. Manager uninstall không t�
 
 - Real manager + agent + SQLite.
 - Enrollment/reconnect/rotation/revocation.
-- Real systemd-enabled Ubuntu container.
+- Real systemd-enabled Ubuntu 24.04 và Kali Linux Rolling container.
 - Service install/control/check/remediation.
 - Docker API over SSH.
 - Image build/distribution.
@@ -978,7 +982,11 @@ Agent uninstall không tự gỡ monitored services. Manager uninstall không t�
 
 ## 16. Giả định và mặc định cuối cùng
 
-- Manager, Docker hosts và managed containers dùng Ubuntu 24.04 amd64 ở v1.
+- Manager, Docker hosts và managed containers dùng Ubuntu 24.04 LTS hoặc Kali Linux Rolling amd64 ở
+  v1. Kali được chuẩn hóa thành `kali-rolling` từ `ID=kali` và
+  `VERSION_CODENAME=kali-rolling`; certification vẫn ghi `VERSION_ID` thực tế.
+- Kali chỉ dùng một suite chính thức nhất quán: `kali-rolling` hoặc `kali-last-snapshot`. Không trộn
+  repository Ubuntu, Debian, nhiều Kali suite hoặc repository của bản phân phối khác.
 - Docker Engine đã có sẵn; A không cài/nâng cấp Docker.
 - Web UI dùng HTTPS tự ký, single admin và LAN/VPN tin cậy.
 - Agent endpoint luôn dùng mTLS.

@@ -27,6 +27,10 @@ done
   die "agent package is not amd64"
 [[ "$(dpkg-deb --field "$manager_deb" Version)" == \
    "$(dpkg-deb --field "$agent_deb" Version)" ]] || die "package versions do not match"
+for package in "$manager_deb" "$agent_deb"; do
+  dpkg-deb --field "$package" Depends | grep -Eq '(^|, )systemd \(>= 250\)($|, )' || \
+    die "package does not require the systemd credential baseline: ${package}"
+done
 
 work_dir="$(mktemp -d)"
 cleanup() {

@@ -19,7 +19,7 @@ work_dir=""
 
 usage() {
   cat <<'USAGE'
-Install a signed Bored Manager release on Ubuntu Desktop 24.04 amd64.
+Install a signed Bored Manager release on Ubuntu 24.04 or Kali Rolling amd64.
 
 Usage: install-manager.sh [options]
 
@@ -104,8 +104,13 @@ done
 [[ -r /etc/os-release ]] || die "/etc/os-release is missing"
 # shellcheck disable=SC1091
 source /etc/os-release
-[[ "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "24.04" ]] || \
-  die "Ubuntu 24.04 is required (found ${ID:-unknown} ${VERSION_ID:-unknown})"
+case "${ID:-}:${VERSION_ID:-}:${VERSION_CODENAME:-}" in
+  ubuntu:24.04:*) detected_os="ubuntu-24.04" ;;
+  kali:*:kali-rolling) detected_os="kali-rolling" ;;
+  *)
+    die "Ubuntu 24.04 or Kali Rolling is required (found ${ID:-unknown} ${VERSION_ID:-unknown} ${VERSION_CODENAME:-unknown})"
+    ;;
+esac
 [[ "$(dpkg --print-architecture)" == "amd64" ]] || die "amd64 is required"
 [[ -d /run/systemd/system ]] || die "a running systemd instance is required"
 
@@ -170,12 +175,12 @@ openssl pkeyutl -verify -pubin -inkey "$public_key" -rawin \
   -in "$manifest" -sigfile "$manifest_signature" >/dev/null 2>&1 || \
   die "release manifest signature verification failed"
 
-mapfile -t manifest_records < <(python3 - "$manifest" "$requested_version" <<'PY'
+mapfile -t manifest_records < <(python3 - "$manifest" "$requested_version" "$detected_os" <<'PY'
 import json
 import re
 import sys
 
-path, requested = sys.argv[1:]
+path, requested, detected_os = sys.argv[1:]
 safe_name = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 safe_hash = re.compile(r"^[0-9a-f]{64}$")
 semver = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$")
@@ -201,8 +206,11 @@ source = document.get("source", {})
 if source.get("repository") != "https://github.com/FireStarsSoft/Bored-Manager":
     raise SystemExit("unexpected source repository")
 compatibility = document.get("compatibility", {})
-if compatibility.get("ubuntu") != "24.04" or compatibility.get("architecture") != "amd64":
-    raise SystemExit("release is not compatible with Ubuntu 24.04 amd64")
+operating_systems = compatibility.get("operating_systems")
+if operating_systems != ["kali-rolling", "ubuntu-24.04"] or compatibility.get("architecture") != "amd64":
+    raise SystemExit("release compatibility record is not the supported Ubuntu/Kali amd64 set")
+if detected_os not in operating_systems:
+    raise SystemExit(f"release is not compatible with {detected_os} amd64")
 
 artifacts = document.get("artifacts")
 if not isinstance(artifacts, list):

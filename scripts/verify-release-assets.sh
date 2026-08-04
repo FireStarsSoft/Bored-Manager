@@ -122,7 +122,7 @@ if source.get("repository") != "https://github.com/FireStarsSoft/Bored-Manager":
 if source.get("commit") != expected_commit:
     raise SystemExit("source commit does not match the release checkout")
 compat = manifest.get("compatibility", {})
-if compat.get("ubuntu") != "24.04" or compat.get("architecture") != "amd64":
+if compat.get("operating_systems") != ["kali-rolling", "ubuntu-24.04"] or compat.get("architecture") != "amd64":
     raise SystemExit("unsupported compatibility record")
 
 records = {}

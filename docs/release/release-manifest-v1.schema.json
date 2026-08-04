@@ -39,9 +39,19 @@
     "compatibility": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["ubuntu", "architecture", "manager_supports_agent"],
+      "required": ["operating_systems", "architecture", "manager_supports_agent"],
       "properties": {
-        "ubuntu": { "const": "24.04" },
+        "operating_systems": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "prefixItems": [
+            { "const": "kali-rolling" },
+            { "const": "ubuntu-24.04" }
+          ],
+          "items": false
+        },
         "architecture": { "const": "amd64" },
         "manager_supports_agent": {
           "type": "array",

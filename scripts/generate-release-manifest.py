@@ -175,7 +175,7 @@ def main() -> int:
             "commit": args.commit,
         },
         "compatibility": {
-            "ubuntu": "24.04",
+            "operating_systems": ["kali-rolling", "ubuntu-24.04"],
             "architecture": "amd64",
             "manager_supports_agent": sorted(set(args.agent_compat)),
         },

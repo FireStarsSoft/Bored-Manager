@@ -38,6 +38,10 @@ REQUIRED_GATES = {
     "batch_start_skew_p95",
     "resource_limits",
 }
+REQUIRED_PLATFORMS = {
+    "Kali Linux Rolling amd64",
+    "Ubuntu Desktop 24.04 LTS amd64",
+}
 
 
 def fail(message: str) -> None:
@@ -72,8 +76,13 @@ def main() -> int:
         fail("unsupported certification schema")
     if report.get("release_tag") != args.tag or report.get("release_commit") != args.commit:
         fail("certification tag/commit does not match the release checkout")
-    if report.get("certified_platform") != "Ubuntu Desktop 24.04 LTS amd64":
-        fail("certified platform must be Ubuntu Desktop 24.04 LTS amd64")
+    certified_platforms = report.get("certified_platforms")
+    if (
+        not isinstance(certified_platforms, list)
+        or len(certified_platforms) != len(set(certified_platforms))
+        or set(certified_platforms) != REQUIRED_PLATFORMS
+    ):
+        fail("certified platforms must include Ubuntu Desktop 24.04 LTS and Kali Linux Rolling amd64")
     docker = report.get("docker", {})
     if docker != {"reference": "29.6.2", "compatibility_floor": "28.5.1", "rootful": True}:
         fail("Docker certification record is incomplete or unsupported")

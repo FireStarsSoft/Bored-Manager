@@ -5,8 +5,8 @@ Priority: optional
 Architecture: @@ARCHITECTURE@@
 Installed-Size: @@INSTALLED_SIZE@@
 Maintainer: FireStarsSoft <noreply@firestarssoft.invalid>
-Depends: adduser, ca-certificates, systemd
+Depends: adduser, ca-certificates, systemd (>= 250)
 Homepage: https://github.com/FireStarsSoft/Bored-Manager
 Description: Bored Manager control plane and local CLI
  Bored Manager provides the manager daemon, local bmctl client, and guarded
- update helper for operating managed Ubuntu service containers.
+ update helper for operating managed Ubuntu and Kali service containers.

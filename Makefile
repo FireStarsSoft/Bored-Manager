@@ -1,5 +1,6 @@
 GO ?= go
 NPM ?= npm
+CGO_ENABLED ?= 0
 VERSION ?= 0.1.0-dev
 COMMIT ?= unknown
 BUILD_TIME ?= unknown
@@ -27,10 +28,10 @@ web:
 	cd web && $(NPM) ci && $(NPM) run build
 
 build: web
-	$(GO) build -buildvcs=false -trimpath -ldflags "$(LDFLAGS)" -o bin/bored-managerd ./cmd/bored-managerd
-	$(GO) build -buildvcs=false -trimpath -ldflags "$(LDFLAGS)" -o bin/bored-agentd ./cmd/bored-agentd
-	$(GO) build -buildvcs=false -trimpath -ldflags "$(LDFLAGS)" -o bin/bmctl ./cmd/bmctl
-	$(GO) build -buildvcs=false -trimpath -ldflags "$(LDFLAGS)" -o bin/bored-update-helper ./cmd/bored-update-helper
+	CGO_ENABLED=$(CGO_ENABLED) $(GO) build -buildvcs=false -trimpath -ldflags "$(LDFLAGS)" -o bin/bored-managerd ./cmd/bored-managerd
+	CGO_ENABLED=$(CGO_ENABLED) $(GO) build -buildvcs=false -trimpath -ldflags "$(LDFLAGS)" -o bin/bored-agentd ./cmd/bored-agentd
+	CGO_ENABLED=$(CGO_ENABLED) $(GO) build -buildvcs=false -trimpath -ldflags "$(LDFLAGS)" -o bin/bmctl ./cmd/bmctl
+	CGO_ENABLED=$(CGO_ENABLED) $(GO) build -buildvcs=false -trimpath -ldflags "$(LDFLAGS)" -o bin/bored-update-helper ./cmd/bored-update-helper
 
 clean:
 	rm -rf bin web/dist coverage

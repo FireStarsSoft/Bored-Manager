@@ -32,7 +32,7 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: Ubuntu/Docker versions, topology, and relevant configuration without secrets.
+      description: Ubuntu or Kali OS-release/suite, architecture, Docker versions, topology, and relevant configuration without secrets.
     validations:
       required: true
   - type: textarea

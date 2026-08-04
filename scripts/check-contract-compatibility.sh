@@ -15,6 +15,12 @@ if [[ -z "$base_ref" || "$base_ref" =~ ^0+$ ]] || \
   exit 0
 fi
 
+if ! git tag --merged "$base_ref" --list 'v*' | \
+     grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+  printf 'contract-compatibility: no valid released v1 baseline; pre-release contract accepted\n'
+  exit 0
+fi
+
 work_dir="$(mktemp -d)"
 cleanup() {
   rm -rf -- "$work_dir"

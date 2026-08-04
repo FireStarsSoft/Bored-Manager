@@ -31,6 +31,7 @@ import (
 	"github.com/FireStarsSoft/Bored-Manager/internal/clienttls"
 	"github.com/FireStarsSoft/Bored-Manager/internal/config"
 	"github.com/FireStarsSoft/Bored-Manager/internal/pki"
+	"github.com/FireStarsSoft/Bored-Manager/internal/platform"
 	"github.com/FireStarsSoft/Bored-Manager/internal/version"
 )
 
@@ -425,11 +426,9 @@ func collectInventory(ctx context.Context) (map[string]any, []string) {
 	inventory := map[string]any{"hostname": hostname, "os_release": "unknown", "architecture": runtime.GOARCH, "kernel_version": commandFirstLine(ctx, "uname", "-r"), "agent_version": version.Version, "systemd_version": commandFirstLine(ctx, "systemd", "--version"), "cpu_count": runtime.NumCPU(), "addresses": hostAddresses()}
 	if contents, err := os.ReadFile("/etc/os-release"); err == nil {
 		release := parseOSRelease(string(contents))
-		if release["ID"] == "ubuntu" && release["VERSION_ID"] == "24.04" {
-			inventory["os_release"] = "ubuntu-24.04"
-		} else {
-			inventory["os_release"] = release["ID"] + "-" + release["VERSION_ID"]
-		}
+		inventory["os_release"] = platform.CanonicalOSRelease(
+			release["ID"], release["VERSION_ID"], release["VERSION_CODENAME"],
+		)
 	}
 	machineID, _ := os.ReadFile("/etc/machine-id")
 	if len(bytes.TrimSpace(machineID)) == 0 {
@@ -524,7 +523,7 @@ func parseOSRelease(contents string) map[string]string {
 	result := map[string]string{}
 	for _, line := range strings.Split(contents, "\n") {
 		key, value, ok := strings.Cut(line, "=")
-		if ok && (key == "ID" || key == "VERSION_ID" || key == "PRETTY_NAME") {
+		if ok && (key == "ID" || key == "VERSION_ID" || key == "VERSION_CODENAME" || key == "PRETTY_NAME") {
 			result[key] = strings.Trim(value, "\"")
 		}
 	}

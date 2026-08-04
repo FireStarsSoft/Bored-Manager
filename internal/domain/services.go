@@ -84,7 +84,7 @@ type ServiceRevision struct {
 	ID                  string              `json:"service_revision_id"`
 	ServiceDefinitionID string              `json:"service_definition_id"`
 	Revision            uint32              `json:"revision"`
-	UbuntuReleases      []string            `json:"ubuntu_releases"`
+	OSReleases          []string            `json:"os_releases"`
 	Architectures       []string            `json:"architectures"`
 	SystemdUnit         string              `json:"systemd_unit,omitempty"`
 	VersionCommand      string              `json:"version_command,omitempty"`
@@ -105,8 +105,8 @@ func (s ServiceRevision) Validate() error {
 	if s.Revision == 0 {
 		validation.add("revision", "must be at least 1")
 	}
-	if len(s.UbuntuReleases) == 0 {
-		validation.add("ubuntu_releases", "must not be empty")
+	if len(s.OSReleases) == 0 {
+		validation.add("os_releases", "must not be empty")
 	}
 	if len(s.Architectures) == 0 {
 		validation.add("architectures", "must not be empty")

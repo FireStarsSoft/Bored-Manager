@@ -11,7 +11,7 @@
     "commit": "0123456789abcdef0123456789abcdef01234567"
   },
   "compatibility": {
-    "ubuntu": "24.04",
+    "operating_systems": ["kali-rolling", "ubuntu-24.04"],
     "architecture": "amd64",
     "manager_supports_agent": ["0.1.x"]
   },

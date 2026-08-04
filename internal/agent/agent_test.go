@@ -83,3 +83,16 @@ func TestCertificateValidRequiresConfiguredAgentCA(t *testing.T) {
 		t.Fatal("certificate signed by another CA was accepted")
 	}
 }
+
+func TestParseOSReleaseIncludesKaliRollingIdentity(t *testing.T) {
+	t.Parallel()
+	release := parseOSRelease(`PRETTY_NAME="Kali GNU/Linux Rolling"
+ID=kali
+VERSION_ID="2026.3"
+VERSION_CODENAME=kali-rolling
+ID_LIKE=debian
+`)
+	if release["ID"] != "kali" || release["VERSION_ID"] != "2026.3" || release["VERSION_CODENAME"] != "kali-rolling" {
+		t.Fatalf("unexpected parsed Kali identity: %#v", release)
+	}
+}

@@ -20,8 +20,18 @@ printf 'BLOCKED\n' >"$status_file"
 }
 # shellcheck disable=SC1091
 source /etc/os-release
-[[ "${ID:-}" == 'ubuntu' && "${VERSION_ID:-}" == '24.04' ]] || {
-  printf 'feasibility-gates: BLOCKED: Ubuntu 24.04 is required\n' >&2
+case "${ID:-}:${VERSION_ID:-}:${VERSION_CODENAME:-}" in
+  ubuntu:24.04:*) detected_platform='ubuntu-24.04' ;;
+  kali:*:kali-rolling) detected_platform='kali-rolling' ;;
+  *)
+    printf 'feasibility-gates: BLOCKED: Ubuntu 24.04 or Kali Rolling is required\n' >&2
+    exit 1
+    ;;
+esac
+expected_platform="${BM_EXPECTED_PLATFORM:-$detected_platform}"
+[[ "$detected_platform" == "$expected_platform" ]] || {
+  printf 'feasibility-gates: BLOCKED: expected %s host, found %s\n' \
+    "$expected_platform" "$detected_platform" >&2
   exit 1
 }
 [[ "$(uname -m)" == 'x86_64' ]] || {
@@ -45,7 +55,8 @@ security_options="$(docker info --format '{{json .SecurityOptions}}')"
 
 {
   printf 'utc_started=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  printf 'os=%s %s\n' "$ID" "$VERSION_ID"
+  printf 'platform=%s\n' "$detected_platform"
+  printf 'os=%s %s %s\n' "$ID" "${VERSION_ID:-unknown}" "${VERSION_CODENAME:-unknown}"
   printf 'architecture=%s\n' "$(uname -m)"
   printf 'kernel=%s\n' "$(uname -r)"
   printf 'docker_server=%s\n' "$(docker version --format '{{.Server.Version}}')"

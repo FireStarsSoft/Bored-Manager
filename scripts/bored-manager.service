@@ -5,6 +5,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=%DIR%
+Environment=PATH=%PATH%
 ExecStart=%DIR%/run.sh
 Restart=on-failure
 RestartSec=3

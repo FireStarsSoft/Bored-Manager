@@ -310,7 +310,12 @@ elif ! command -v systemctl >/dev/null 2>&1; then
 else
   UNIT_DIR="${HOME}/.config/systemd/user"
   mkdir -p "$UNIT_DIR"
-  sed "s|%DIR%|$DIR|g" "$DIR/scripts/bored-manager.service" > "$UNIT_DIR/bored-manager.service"
+  # systemd user services get a minimal PATH of their own (no ~/.nvm, no
+  # user-local Node install) - it does not inherit this login shell's PATH.
+  # Bake in the PATH node/npm were actually found on so run.sh's bare `node`
+  # and `npm` calls resolve the same way here as they just did above.
+  awk -v dir="$DIR" -v path="$PATH" '{ gsub(/%DIR%/, dir); gsub(/%PATH%/, path); print }' \
+    "$DIR/scripts/bored-manager.service" > "$UNIT_DIR/bored-manager.service"
   if systemctl --user daemon-reload \
      && systemctl --user enable --now bored-manager; then
     SERVICE_OK=1

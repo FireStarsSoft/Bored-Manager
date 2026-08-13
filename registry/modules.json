@@ -1,4 +1,17 @@
 {
   "registryVersion": 1,
-  "modules": []
+  "modules": [
+    {
+      "id": "hello",
+      "name": "Hello",
+      "description": "Uptime demo module",
+      "author": "Bored Manager",
+      "homepage": "https://github.com/FireStarsSoft/Bored-Manager",
+      "version": "2.0.0",
+      "minAppVersion": "0.1.0",
+      "download": "https://github.com/FireStarsSoft/Bored-Manager/releases/download/v0.1.0/hello-2.0.0.zip",
+      "sha256": "a1237e40330c54acad49765a9afaabbcd39d7b7457674e7f676efe4474b3de5b",
+      "verifiedAt": "2026-08-14"
+    }
+  ]
 }

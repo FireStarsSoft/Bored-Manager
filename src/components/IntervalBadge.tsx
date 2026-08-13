@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { REFRESH_INTERVAL_MS } from '@shared/types'
 import { useApp } from '@/state/store'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn, formatInterval } from '@/lib/utils'
 
 /**
@@ -60,7 +61,7 @@ export function IntervalBadge({
       speed === 'paused' ? 'paused' : formatInterval(REFRESH_INTERVAL_MS[speed ?? 'normal'] / 1000)
   }
   const what = (fast ? FAST_LABELS[fast] : slow ? SLOW_LABELS[slow] : '') || 'This section'
-  const title =
+  const explanation =
     label === 'off'
       ? `${what}: the collector is turned off`
       : label === 'paused'
@@ -70,14 +71,16 @@ export function IntervalBadge({
           : `${what}: updated every ${label}`
 
   return (
-    <span
-      title={title}
-      className={cn(
-        'shrink-0 rounded bg-input px-1 py-px text-[0.6rem] font-normal normal-case tracking-normal text-muted',
-        className
-      )}
-    >
-      {label}
-    </span>
+    <Tooltip>
+      <TooltipTrigger
+        className={cn(
+          'shrink-0 rounded bg-muted px-1 py-px text-[0.6rem] font-normal normal-case tracking-normal text-muted-foreground',
+          className
+        )}
+      >
+        {label}
+      </TooltipTrigger>
+      <TooltipContent>{explanation}</TooltipContent>
+    </Tooltip>
   )
 }

@@ -11,7 +11,7 @@ export function ListBlockView({ block, ctx }: { block: ListBlock; ctx: BlockCtx 
   const shown = block.limit ? rows.slice(0, block.limit) : rows
 
   if (shown.length === 0) {
-    return <div className="text-xs text-muted">{block.emptyText ?? 'Nothing to show yet'}</div>
+    return <div className="text-xs text-muted-foreground">{block.emptyText ?? 'Nothing to show yet'}</div>
   }
 
   return (

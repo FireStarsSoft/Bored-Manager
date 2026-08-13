@@ -104,9 +104,3 @@ export async function copyText(text: string): Promise<boolean> {
     return false
   }
 }
-
-export function pctColor(pct: number): string {
-  if (pct >= 90) return 'var(--color-bad)'
-  if (pct >= 70) return 'var(--color-warn)'
-  return 'var(--color-good)'
-}

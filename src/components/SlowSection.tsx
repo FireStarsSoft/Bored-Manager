@@ -2,6 +2,8 @@ import * as React from 'react'
 import { RefreshCw } from 'lucide-react'
 import { useApp } from '@/state/store'
 import { IntervalBadge } from '@/components/IntervalBadge'
+import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 
 /** "12s ago" / "3m ago" / "1h 4m ago" */
@@ -43,22 +45,26 @@ export function SlowRefresh({
   }, [])
 
   return (
-    <div className={cn('flex items-center gap-1.5 text-[0.65rem] text-muted', className)}>
+    <div className={cn('flex items-center gap-1.5 text-[0.65rem] text-muted-foreground', className)}>
       <IntervalBadge slow={target} />
       <span>{formatAge(at, now)}</span>
-      <button
-        type="button"
-        title="Refresh now"
-        aria-label="Refresh now"
-        disabled={refreshing}
-        onClick={(e) => {
-          e.stopPropagation()
-          void refreshSlow(target)
-        }}
-        className="rounded p-0.5 text-muted transition-colors hover:bg-card-hover hover:text-fg disabled:opacity-50 cursor-pointer"
-      >
-        <RefreshCw className={cn('h-3 w-3', refreshing && 'animate-spin')} />
-      </button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Refresh now"
+            disabled={refreshing}
+            onClick={(e) => {
+              e.stopPropagation()
+              void refreshSlow(target)
+            }}
+          >
+            <RefreshCw className={cn(refreshing && 'animate-spin')} aria-hidden />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Refresh now</TooltipContent>
+      </Tooltip>
     </div>
   )
 }

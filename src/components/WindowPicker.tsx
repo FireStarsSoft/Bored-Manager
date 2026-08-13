@@ -2,7 +2,7 @@ import * as React from 'react'
 import { HISTORY_WINDOW_OPTIONS } from '@shared/types'
 import { useApp } from '@/state/store'
 import { LIVE_WINDOW_SEC } from '@/lib/history'
-import { cn } from '@/lib/utils'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 
 /**
  * Chart time range selector. Ranges longer than the live buffer are only
@@ -28,20 +28,24 @@ export function WindowPicker({
   const options = HISTORY_WINDOW_OPTIONS.filter((o) => o.value <= maxSec)
 
   return (
-    <div className={cn('flex items-center gap-0.5 rounded-md border border-border p-0.5', className)}>
+    <ToggleGroup
+      type="single"
+      size="sm"
+      variant="outline"
+      spacing={0}
+      aria-label="Chart time range"
+      value={String(value)}
+      // Radix clears the value when the active item is pressed again; a chart
+      // always has to have some range, so an empty result is ignored.
+      onValueChange={(next) => next && onChange(Number(next))}
+      className={className}
+    >
       {options.map((w) => (
-        <button
-          key={w.value}
-          onClick={() => onChange(w.value)}
-          className={cn(
-            'rounded px-2 py-1 text-xs transition-colors cursor-pointer',
-            value === w.value ? 'bg-accent/15 font-medium text-accent' : 'text-muted hover:text-fg'
-          )}
-        >
+        <ToggleGroupItem key={w.value} value={String(w.value)} className="text-xs">
           {w.label}
-        </button>
+        </ToggleGroupItem>
       ))}
-    </div>
+    </ToggleGroup>
   )
 }
 

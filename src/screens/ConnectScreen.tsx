@@ -3,10 +3,14 @@ import { Loader2, Monitor, Server, Trash2 } from 'lucide-react'
 import type { SavedConnection } from '@shared/types'
 import { api } from '@/lib/api'
 import { useApp } from '@/state/store'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
-import { cn } from '@/lib/utils'
+import { Label } from '@/components/ui/label'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 export function ConnectScreen(): React.JSX.Element {
   const connect = useApp((s) => s.connect)
@@ -75,138 +79,189 @@ export function ConnectScreen(): React.JSX.Element {
     if (ok) void loadSaved()
   }
 
+  const localOption = (
+    <ToggleGroupItem value="local" disabled={isWindows} size="lg" className="flex-1">
+      <Monitor aria-hidden /> Local machine
+    </ToggleGroupItem>
+  )
+
   return (
-    <div className="flex h-full items-center justify-center overflow-y-auto bg-bg p-6">
+    <div className="flex h-full items-center justify-center overflow-y-auto bg-background p-6">
       <div className="w-full max-w-md">
         <div className="mb-6 text-center">
           <h1 className="text-2xl font-bold tracking-tight">
-            Bored <span className="text-gpu">Manager</span>
+            Bored <span className="text-metric-gpu">Manager</span>
           </h1>
-          <p className="mt-1 text-sm text-muted">
+          <p className="mt-1 text-sm text-muted-foreground">
             Monitor Linux processes, network, disk, packages, NVIDIA GPU and Docker
           </p>
         </div>
 
         <Card className="p-4">
-          <div className="mb-4 grid grid-cols-2 gap-2">
-            <button
-              onClick={() => !isWindows && setMode('local')}
-              disabled={isWindows}
-              className={cn(
-                'flex items-center justify-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors cursor-pointer',
-                mode === 'local'
-                  ? 'border-accent bg-accent/10 text-accent'
-                  : 'border-border text-muted hover:text-fg',
-                isWindows && 'cursor-not-allowed opacity-40'
-              )}
-              title={isWindows ? 'Local mode requires running on Linux' : undefined}
+          <form
+            className="flex flex-col gap-2.5"
+            onSubmit={(e) => {
+              e.preventDefault()
+              void submit()
+            }}
+          >
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              value={mode}
+              onValueChange={(next) => next && setMode(next as 'local' | 'ssh')}
+              aria-label="Where to monitor"
+              className="w-full"
             >
-              <Monitor className="h-4 w-4" /> Local machine
-            </button>
-            <button
-              onClick={() => setMode('ssh')}
-              className={cn(
-                'flex items-center justify-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors cursor-pointer',
-                mode === 'ssh'
-                  ? 'border-accent bg-accent/10 text-accent'
-                  : 'border-border text-muted hover:text-fg'
+              {isWindows ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="flex flex-1">{localOption}</span>
+                  </TooltipTrigger>
+                  <TooltipContent>Local mode requires running on Linux</TooltipContent>
+                </Tooltip>
+              ) : (
+                localOption
               )}
-            >
-              <Server className="h-4 w-4" /> Remote (SSH)
-            </button>
-          </div>
+              <ToggleGroupItem value="ssh" size="lg" className="flex-1">
+                <Server aria-hidden /> Remote (SSH)
+              </ToggleGroupItem>
+            </ToggleGroup>
 
-          {mode === 'ssh' && (
-            <div className="space-y-2.5">
-              <div className="grid grid-cols-[1fr_5.5rem] gap-2">
-                <Input placeholder="Host (e.g. 192.168.1.10)" value={host} onChange={(e) => setHost(e.target.value)} />
-                <Input placeholder="Port" value={port} onChange={(e) => setPort(e.target.value)} />
-              </div>
-              <Input placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} />
-              <Input
-                type="password"
-                placeholder="Password (or key passphrase)"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-              <div>
-                <Input
-                  placeholder="Private key path (optional)"
-                  value={keyPath}
-                  onChange={(e) => setKeyPath(e.target.value)}
-                />
-                {/* The key is read by the server, so the path is one on the
-                    host - not on the machine the browser runs on. */}
-                <div className="mt-1 text-xs text-muted">
-                  Path on the server, e.g. <span className="mono">~/.ssh/id_ed25519</span>
+            {mode === 'ssh' && (
+              <>
+                <div className="grid grid-cols-[1fr_5.5rem] gap-2">
+                  <div className="flex flex-col gap-1.5">
+                    <Label htmlFor="connect-host">Host</Label>
+                    <Input
+                      id="connect-host"
+                      placeholder="e.g. 192.168.1.10"
+                      autoComplete="off"
+                      value={host}
+                      onChange={(e) => setHost(e.target.value)}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <Label htmlFor="connect-port">Port</Label>
+                    <Input
+                      id="connect-port"
+                      inputMode="numeric"
+                      value={port}
+                      onChange={(e) => setPort(e.target.value)}
+                    />
+                  </div>
                 </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="connect-username">Username</Label>
+                  <Input
+                    id="connect-username"
+                    autoComplete="username"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="connect-password">Password or key passphrase</Label>
+                  <Input
+                    id="connect-password"
+                    type="password"
+                    autoComplete="current-password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="connect-key">Private key path (optional)</Label>
+                  <Input
+                    id="connect-key"
+                    aria-describedby="connect-key-hint"
+                    value={keyPath}
+                    onChange={(e) => setKeyPath(e.target.value)}
+                  />
+                  {/* The key is read by the server, so the path is one on the
+                      host - not on the machine the browser runs on. */}
+                  <div id="connect-key-hint" className="text-xs text-muted-foreground">
+                    Path on the server, e.g. <span className="mono">~/.ssh/id_ed25519</span>
+                  </div>
+                </div>
+              </>
+            )}
+
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="connect-sudo">Sudo password (optional)</Label>
+              <Input
+                id="connect-sudo"
+                type="password"
+                aria-describedby="connect-sudo-hint"
+                autoComplete="off"
+                value={sudoPassword}
+                onChange={(e) => setSudoPassword(e.target.value)}
+              />
+              <div id="connect-sudo-hint" className="text-xs text-muted-foreground">
+                Needed for GPU controls and killing another user's process.
               </div>
             </div>
-          )}
 
-          <div className="mt-2.5">
-            <Input
-              type="password"
-              placeholder="Sudo password (optional - needed for GPU controls, kill as root)"
-              value={sudoPassword}
-              onChange={(e) => setSudoPassword(e.target.value)}
-            />
-          </div>
+            {mode === 'ssh' && (
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="connect-remember"
+                  checked={remember}
+                  onCheckedChange={(v) => setRemember(v === true)}
+                />
+                <Label htmlFor="connect-remember" className="text-xs text-muted-foreground">
+                  Remember passwords (encrypted on the server with data/secret.key)
+                </Label>
+              </div>
+            )}
 
-          {mode === 'ssh' && (
-            <label className="mt-3 flex cursor-pointer items-center gap-2 text-xs text-muted">
-              <input
-                type="checkbox"
-                checked={remember}
-                onChange={(e) => setRemember(e.target.checked)}
-                className="accent-[var(--color-accent)]"
-              />
-              Remember passwords (encrypted on the server with data/secret.key)
-            </label>
-          )}
+            {error && (
+              <Alert variant="destructive">
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
 
-          {error && (
-            <div className="mt-3 rounded-md border border-bad/40 bg-bad/10 px-3 py-2 text-xs text-bad">
-              {error}
-            </div>
-          )}
-
-          <Button className="mt-4 w-full" size="lg" onClick={() => void submit()} disabled={connecting}>
-            {connecting && <Loader2 className="h-4 w-4 animate-spin" />}
-            {connecting ? 'Connecting…' : 'Connect'}
-          </Button>
+            <Button type="submit" className="mt-1 w-full" size="lg" disabled={connecting}>
+              {connecting && <Loader2 className="animate-spin" aria-hidden />}
+              {connecting ? 'Connecting…' : 'Connect'}
+            </Button>
+          </form>
         </Card>
 
         {saved.length > 0 && (
           <div className="mt-4">
-            <div className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted">
+            <div className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Recent connections
             </div>
-            <div className="space-y-1.5">
+            <div className="flex flex-col gap-1.5">
               {saved.map((c) => (
-                <Card
-                  key={c.id}
-                  className="flex cursor-pointer items-center justify-between px-3 py-2 hover:bg-card-hover"
-                  onClick={() => void fillFromSaved(c)}
-                >
-                  <div className="min-w-0">
+                <Card key={c.id} className="flex flex-row items-center gap-1 p-1 pl-3">
+                  <button
+                    type="button"
+                    className="min-w-0 flex-1 rounded-md py-1 text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                    onClick={() => void fillFromSaved(c)}
+                  >
                     <div className="truncate text-sm">{c.label}</div>
-                    <div className="truncate text-xs text-muted">
+                    <div className="truncate text-xs text-muted-foreground">
                       {c.username}@{c.host}:{c.port}
                       {c.hasSavedPassword ? ' · saved password' : ''}
                     </div>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={async (e) => {
-                      e.stopPropagation()
-                      setSaved(await api.connection.deleteSaved(c.id))
-                    }}
-                    title="Remove"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
+                  </button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={`Remove ${c.label}`}
+                        onClick={async () => {
+                          setSaved(await api.connection.deleteSaved(c.id))
+                        }}
+                      >
+                        <Trash2 aria-hidden />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Remove</TooltipContent>
+                  </Tooltip>
                 </Card>
               ))}
             </div>

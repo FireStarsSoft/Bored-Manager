@@ -11,19 +11,67 @@ import {
   Trash2,
   X
 } from 'lucide-react'
-import type { PackageSearchResult, PackagesOverview, PkgAction, PkgActionState } from '@shared/types'
+import type {
+  PackageHistoryEntry,
+  PackageInfo,
+  PackageSearchResult,
+  PackagesOverview,
+  PkgAction,
+  PkgActionState,
+  UpgradablePackage
+} from '@shared/types'
 import { api } from '@/lib/api'
 import { useApp } from '@/state/store'
 import { StatCard } from '@/components/StatCard'
+import { DataTable, type DataTableColumns } from '@/components/data-table'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { ConfirmDialog } from '@/components/ui/dialog'
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Input } from '@/components/ui/input'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn, formatBytes } from '@/lib/utils'
 
+/** Rows per page of the installed list; the full list can be many thousands. */
 const MAX_INSTALLED_ROWS = 500
 const MAX_LOG_CHARS = 200_000
+
+const historyColumns: DataTableColumns<PackageHistoryEntry> = [
+  {
+    accessorKey: 'date',
+    header: 'When',
+    cell: (c) => <span className="mono text-muted-foreground">{c.getValue<string>()}</span>
+  },
+  {
+    accessorKey: 'action',
+    header: 'Action',
+    cell: (c) => {
+      const action = c.getValue<string>()
+      return (
+        <Badge
+          variant={
+            /remove|purge/i.test(action)
+              ? 'destructive'
+              : /upgrade/i.test(action)
+                ? 'default'
+                : 'success'
+          }
+        >
+          {action}
+        </Badge>
+      )
+    }
+  },
+  {
+    accessorKey: 'packages',
+    header: 'Packages',
+    cell: (c) => (
+      <span className="text-muted-foreground" title={c.getValue<string>()}>
+        {c.getValue<string>()}
+      </span>
+    )
+  }
+]
 
 interface PendingConfirm {
   action: PkgAction
@@ -117,23 +165,209 @@ export function PackagesTab({ active }: { active: boolean }): React.JSX.Element 
     }
   }
 
-  const filteredInstalled = React.useMemo(() => {
-    const list = overview?.installed ?? []
-    const q = filter.trim().toLowerCase()
-    if (!q) return list
-    return list.filter(
-      (p) => p.name.toLowerCase().includes(q) || p.summary.toLowerCase().includes(q)
-    )
-  }, [overview?.installed, filter])
-
   const busy = opState.running
   const manager = overview?.manager
+  const installedRows = overview?.installed ?? []
+
+  // Only what the header counter needs; the table itself filters through
+  // TanStack's global filter so sorting and paging stay in step with it.
+  const matchCount = React.useMemo(() => {
+    const q = filter.trim().toLowerCase()
+    if (!q) return installedRows.length
+    return installedRows.filter(
+      (p) => p.name.toLowerCase().includes(q) || p.summary.toLowerCase().includes(q)
+    ).length
+  }, [installedRows, filter])
+
+  const upgradableColumns = React.useMemo<DataTableColumns<UpgradablePackage>>(
+    () => [
+      { accessorKey: 'name', header: 'Package', cell: (c) => <span className="font-medium">{c.getValue<string>()}</span> },
+      {
+        accessorKey: 'currentVersion',
+        header: 'Current',
+        cell: (c) => <span className="mono text-muted-foreground">{c.getValue<string>() || '—'}</span>
+      },
+      {
+        accessorKey: 'newVersion',
+        header: 'New version',
+        cell: (c) => <span className="mono text-success">{c.getValue<string>()}</span>
+      },
+      {
+        accessorKey: 'repo',
+        header: 'Repo',
+        cell: (c) => <span className="text-muted-foreground">{c.getValue<string>() || '—'}</span>
+      },
+      {
+        id: 'actions',
+        header: '',
+        enableSorting: false,
+        meta: { align: 'right' },
+        cell: (c) => (
+          <Button
+            variant="secondary"
+            size="xs"
+            disabled={busy}
+            onClick={() => void runAction('upgrade', c.row.original.name)}
+          >
+            Upgrade
+          </Button>
+        )
+      }
+    ],
+    [busy]
+  )
+
+  const searchColumns = React.useMemo<DataTableColumns<PackageSearchResult>>(
+    () => [
+      { accessorKey: 'name', header: 'Package', cell: (c) => <span className="font-medium">{c.getValue<string>()}</span> },
+      {
+        accessorKey: 'summary',
+        header: 'Description',
+        cell: (c) => <span className="text-muted-foreground">{c.getValue<string>()}</span>
+      },
+      {
+        id: 'actions',
+        header: '',
+        enableSorting: false,
+        meta: { align: 'right' },
+        cell: (c) => (
+          <Button
+            variant="secondary"
+            size="xs"
+            disabled={busy}
+            onClick={() => void runAction('install', c.row.original.name)}
+          >
+            Install
+          </Button>
+        )
+      }
+    ],
+    [busy]
+  )
+
+  const installedColumns = React.useMemo<DataTableColumns<PackageInfo>>(
+    () => [
+      {
+        accessorKey: 'name',
+        header: 'Package',
+        // Truncated data cells keep the native tooltip: a Radix one per cell
+        // would mean hundreds of instances on a page of packages.
+        cell: (c) => (
+          <span className="font-medium" title={c.getValue<string>()}>
+            {c.getValue<string>()}
+          </span>
+        )
+      },
+      {
+        accessorKey: 'version',
+        header: 'Version',
+        cell: (c) => (
+          <span className="mono text-muted-foreground" title={c.getValue<string>()}>
+            {c.getValue<string>()}
+          </span>
+        )
+      },
+      {
+        accessorKey: 'arch',
+        header: 'Arch',
+        cell: (c) => <span className="text-muted-foreground">{c.getValue<string>() || '—'}</span>
+      },
+      {
+        accessorKey: 'sizeKb',
+        header: 'Size',
+        meta: { align: 'right' },
+        cell: (c) => {
+          const kb = c.getValue<number>()
+          return <span className="text-muted-foreground">{kb ? formatBytes(kb * 1024) : '—'}</span>
+        }
+      },
+      {
+        accessorKey: 'summary',
+        header: 'Description',
+        cell: (c) => (
+          <span className="text-muted-foreground" title={c.getValue<string>()}>
+            {c.getValue<string>() || '—'}
+          </span>
+        )
+      },
+      {
+        id: 'actions',
+        header: '',
+        enableSorting: false,
+        enableGlobalFilter: false,
+        meta: { align: 'right' },
+        cell: (c) => {
+          const p = c.row.original
+          return (
+            <div className="flex justify-end gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={`Remove ${p.name}`}
+                    className="hover:bg-warning/20 hover:text-warning"
+                    disabled={busy}
+                    onClick={() =>
+                      setConfirm({
+                        action: 'remove',
+                        pkg: p.name,
+                        title: 'Remove package',
+                        message: (
+                          <>
+                            Remove <b>{p.name}</b> ({p.version})? Configuration files are kept.
+                          </>
+                        ),
+                        confirmLabel: 'Remove'
+                      })
+                    }
+                  >
+                    <X aria-hidden />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Remove (keep config)</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={`Purge ${p.name}`}
+                    className="hover:bg-destructive/20 hover:text-destructive"
+                    disabled={busy}
+                    onClick={() =>
+                      setConfirm({
+                        action: 'purge',
+                        pkg: p.name,
+                        title: 'Purge package',
+                        message: (
+                          <>
+                            Purge <b>{p.name}</b> ({p.version})? The package and its configuration
+                            files are removed.
+                          </>
+                        ),
+                        confirmLabel: 'Purge'
+                      })
+                    }
+                  >
+                    <Trash2 aria-hidden />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Purge (remove including config)</TooltipContent>
+              </Tooltip>
+            </div>
+          )
+        }
+      }
+    ],
+    [busy]
+  )
 
   if (overview && manager === 'none') {
     return (
       <div className="h-full overflow-y-auto p-3">
         <h2 className="mb-3 text-base font-semibold">Packages</h2>
-        <Card className="p-4 text-sm text-muted">
+        <Card className="p-4 text-sm text-muted-foreground">
           No supported package manager (apt, dnf or pacman) was found on the target machine.
         </Card>
       </div>
@@ -146,19 +380,19 @@ export function PackagesTab({ active }: { active: boolean }): React.JSX.Element 
       <div className="mb-3 flex items-center justify-between">
         <div>
           <h2 className="text-base font-semibold leading-tight">Packages</h2>
-          <div className="text-xs text-muted">
+          <div className="text-xs text-muted-foreground">
             {overview ? `manager: ${overview.manager}` : loading ? 'loading…' : 'not loaded yet'}
           </div>
         </div>
         <div className="flex items-center gap-2">
           {!status.hasSudo && (
-            <Badge kind="warn">no sudo - install/remove/upgrade will likely fail</Badge>
+            <Badge variant="warning">no sudo - install/remove/upgrade will likely fail</Badge>
           )}
           <Button variant="secondary" size="sm" onClick={() => void load()} disabled={loading || busy}>
-            <RefreshCw className={cn('h-3 w-3', loading && 'animate-spin')} /> Reload
+            <RefreshCw className={cn('size-3', loading && 'animate-spin')} /> Reload
           </Button>
           <Button variant="secondary" size="sm" onClick={() => void runAction('update')} disabled={busy}>
-            <Download className="h-3 w-3" /> Update lists
+            <Download className="size-3" /> Update lists
           </Button>
           <Button
             variant="secondary"
@@ -178,7 +412,7 @@ export function PackagesTab({ active }: { active: boolean }): React.JSX.Element 
               })
             }
           >
-            <ArrowUpCircle className="h-3 w-3" /> Upgrade all
+            <ArrowUpCircle className="size-3" /> Upgrade all
           </Button>
           <Button
             variant="secondary"
@@ -193,7 +427,7 @@ export function PackagesTab({ active }: { active: boolean }): React.JSX.Element 
               })
             }
           >
-            <Trash2 className="h-3 w-3" /> Autoremove
+            <Trash2 className="size-3" /> Autoremove
           </Button>
         </div>
       </div>
@@ -203,21 +437,21 @@ export function PackagesTab({ active }: { active: boolean }): React.JSX.Element 
         <StatCard
           title="Installed"
           icon={Box}
-          color="var(--color-accent)"
+          color="primary"
           value={overview ? String(overview.installedCount) : '…'}
           sub="packages on the system"
         />
         <StatCard
           title="Upgradable"
           icon={ArrowUpCircle}
-          color={overview?.upgradableCount ? 'var(--color-warn)' : 'var(--color-good)'}
+          color={overview?.upgradableCount ? 'warning' : 'success'}
           value={overview ? String(overview.upgradableCount) : '…'}
           sub={overview?.upgradableCount ? 'updates available' : 'everything up to date'}
         />
         <StatCard
           title="Lists updated"
           icon={Clock}
-          color="var(--color-cpu)"
+          color="cpu"
           value={
             overview?.lastListUpdate ? new Date(overview.lastListUpdate).toLocaleDateString() : '—'
           }
@@ -230,7 +464,7 @@ export function PackagesTab({ active }: { active: boolean }): React.JSX.Element 
         <StatCard
           title="Installed size"
           icon={PackageIcon}
-          color="var(--color-mem)"
+          color="mem"
           value={
             overview?.totalInstalledSizeKb != null
               ? formatBytes(overview.totalInstalledSizeKb * 1024)
@@ -244,8 +478,8 @@ export function PackagesTab({ active }: { active: boolean }): React.JSX.Element 
       {(log || busy) && (
         <Card className="mt-3 overflow-hidden">
           <div className="flex items-center justify-between px-3 pt-3">
-            <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted">
-              <RefreshCw className={cn('h-3.5 w-3.5 text-accent', busy && 'animate-spin')} />
+            <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              <RefreshCw className={cn('size-3.5 text-primary', busy && 'animate-spin')} />
               {busy
                 ? `Running: ${opState.action}${opState.target ? ` ${opState.target}` : ''}`
                 : 'Last operation output'}
@@ -253,19 +487,19 @@ export function PackagesTab({ active }: { active: boolean }): React.JSX.Element 
             <div className="flex gap-1.5">
               {busy && (
                 <Button variant="secondary" size="sm" onClick={() => void api.packages.cancel()}>
-                  <X className="h-3 w-3" /> Cancel
+                  <X className="size-3" /> Cancel
                 </Button>
               )}
               {!busy && log && (
                 <Button variant="secondary" size="sm" onClick={() => setLog('')}>
-                  <X className="h-3 w-3" /> Clear
+                  <X className="size-3" /> Clear
                 </Button>
               )}
             </div>
           </div>
           <pre
             ref={logRef}
-            className="mono m-3 mt-2 max-h-64 overflow-y-auto whitespace-pre-wrap rounded-md bg-input p-2 text-[0.7rem] leading-4 text-fg"
+            className="mono m-3 mt-2 max-h-64 overflow-y-auto whitespace-pre-wrap rounded-md bg-muted p-2 text-[0.7rem] leading-4 text-foreground"
           >
             {log || 'starting…'}
           </pre>
@@ -275,53 +509,28 @@ export function PackagesTab({ active }: { active: boolean }): React.JSX.Element 
       {/* Upgradable */}
       {!!overview?.upgradable.length && (
         <Card className="mt-3 overflow-hidden">
-          <div className="flex items-center gap-1.5 px-3 pt-3 text-xs font-semibold uppercase tracking-wider text-muted">
-            <ArrowUpCircle className="h-3.5 w-3.5 text-warn" /> Upgradable ({overview.upgradable.length})
+          <div className="flex items-center gap-1.5 px-3 pt-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            <ArrowUpCircle className="size-3.5 text-warning" /> Upgradable ({overview.upgradable.length})
           </div>
-          <div className="overflow-x-auto p-3 pt-2">
-            <table className="w-full text-xs">
-              <thead className="text-muted">
-                <tr>
-                  <th className="px-2 py-1.5 text-left font-medium">Package</th>
-                  <th className="px-2 py-1.5 text-left font-medium">Current</th>
-                  <th className="px-2 py-1.5 text-left font-medium">New version</th>
-                  <th className="px-2 py-1.5 text-left font-medium">Repo</th>
-                  <th className="w-24 px-2 py-1.5" />
-                </tr>
-              </thead>
-              <tbody>
-                {overview.upgradable.map((u) => (
-                  <tr key={u.name} className="group border-t border-border/50 hover:bg-card-hover">
-                    <td className="px-2 py-1 font-medium">{u.name}</td>
-                    <td className="px-2 py-1 mono text-muted">{u.currentVersion || '—'}</td>
-                    <td className="px-2 py-1 mono text-good">{u.newVersion}</td>
-                    <td className="max-w-40 truncate px-2 py-1 text-muted">{u.repo || '—'}</td>
-                    <td className="px-2 py-0.5 text-right">
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        disabled={busy}
-                        onClick={() => void runAction('upgrade', u.name)}
-                      >
-                        Upgrade
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="p-3 pt-2">
+            <DataTable
+              data={overview.upgradable}
+              columns={upgradableColumns}
+              getRowId={(u) => u.name}
+              initialSorting={[{ id: 'name', desc: false }]}
+            />
           </div>
         </Card>
       )}
 
       {/* Install new packages */}
       <Card className="mt-3 overflow-hidden">
-        <div className="flex items-center gap-1.5 px-3 pt-3 text-xs font-semibold uppercase tracking-wider text-muted">
-          <Download className="h-3.5 w-3.5 text-good" /> Install new package
+        <div className="flex items-center gap-1.5 px-3 pt-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          <Download className="size-3.5 text-success" /> Install new package
         </div>
         <div className="flex items-center gap-2 px-3 pt-2">
           <div className="relative max-w-sm flex-1">
-            <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
+            <Search className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
               className="pl-7"
               placeholder="Search the package repositories…"
@@ -331,37 +540,21 @@ export function PackagesTab({ active }: { active: boolean }): React.JSX.Element 
             />
           </div>
           <Button variant="secondary" size="sm" onClick={() => void doSearch()} disabled={searching}>
-            <Search className={cn('h-3 w-3', searching && 'animate-pulse')} /> Search
+            <Search className={cn('size-3', searching && 'animate-pulse')} /> Search
           </Button>
         </div>
         <div className="p-3 pt-2">
           {searchResults == null ? (
-            <div className="px-2 py-2 text-xs text-muted">
+            <div className="px-2 py-2 text-xs text-muted-foreground">
               Search the repositories, then install with one click.
             </div>
-          ) : searchResults.length === 0 ? (
-            <div className="px-2 py-2 text-xs text-muted">No packages found.</div>
           ) : (
-            <table className="w-full text-xs">
-              <tbody>
-                {searchResults.map((r) => (
-                  <tr key={r.name} className="group border-t border-border/50 hover:bg-card-hover">
-                    <td className="w-56 px-2 py-1 font-medium">{r.name}</td>
-                    <td className="truncate px-2 py-1 text-muted">{r.summary}</td>
-                    <td className="w-24 px-2 py-0.5 text-right">
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        disabled={busy}
-                        onClick={() => void runAction('install', r.name)}
-                      >
-                        Install
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <DataTable
+              data={searchResults}
+              columns={searchColumns}
+              getRowId={(r) => r.name}
+              emptyText="No packages found."
+            />
           )}
         </div>
       </Card>
@@ -369,11 +562,11 @@ export function PackagesTab({ active }: { active: boolean }): React.JSX.Element 
       {/* Installed */}
       <Card className="mt-3 overflow-hidden">
         <div className="flex flex-wrap items-center gap-2 px-3 pt-3">
-          <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted">
-            <Box className="h-3.5 w-3.5 text-accent" /> Installed
+          <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            <Box className="size-3.5 text-primary" /> Installed
           </div>
           <div className="relative ml-2 w-64">
-            <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
+            <Search className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
               className="pl-7"
               placeholder="Filter installed packages…"
@@ -381,132 +574,33 @@ export function PackagesTab({ active }: { active: boolean }): React.JSX.Element 
               onChange={(e) => setFilter(e.target.value)}
             />
           </div>
-          <div className="text-xs text-muted">
-            {filteredInstalled.length} of {overview?.installedCount ?? 0}
-            {filteredInstalled.length > MAX_INSTALLED_ROWS
-              ? ` (showing first ${MAX_INSTALLED_ROWS})`
-              : ''}
+          <div className="text-xs text-muted-foreground">
+            {matchCount} of {overview?.installedCount ?? 0}
           </div>
         </div>
-        <div className="overflow-x-auto p-3 pt-2">
-          <table className="w-full text-xs">
-            <thead className="text-muted">
-              <tr>
-                <th className="w-56 px-2 py-1.5 text-left font-medium">Package</th>
-                <th className="w-40 px-2 py-1.5 text-left font-medium">Version</th>
-                <th className="w-16 px-2 py-1.5 text-left font-medium">Arch</th>
-                <th className="w-20 px-2 py-1.5 text-right font-medium">Size</th>
-                <th className="px-2 py-1.5 text-left font-medium">Description</th>
-                <th className="w-20 px-2 py-1.5" />
-              </tr>
-            </thead>
-            <tbody>
-              {filteredInstalled.slice(0, MAX_INSTALLED_ROWS).map((p) => (
-                <tr key={`${p.name}-${p.arch}`} className="group border-t border-border/50 hover:bg-card-hover">
-                  <td className="truncate px-2 py-1 font-medium" title={p.name}>
-                    {p.name}
-                  </td>
-                  <td className="truncate px-2 py-1 mono text-muted" title={p.version}>
-                    {p.version}
-                  </td>
-                  <td className="px-2 py-1 text-muted">{p.arch || '—'}</td>
-                  <td className="px-2 py-1 text-right text-muted">
-                    {p.sizeKb ? formatBytes(p.sizeKb * 1024) : '—'}
-                  </td>
-                  <td className="truncate px-2 py-1 text-muted" title={p.summary}>
-                    {p.summary || '—'}
-                  </td>
-                  <td className="px-2 py-0.5">
-                    <div className="flex justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-                      <button
-                        title="Remove (keep config)"
-                        className="rounded p-1 text-muted hover:bg-warn/20 hover:text-warn cursor-pointer disabled:opacity-30"
-                        disabled={busy}
-                        onClick={() =>
-                          setConfirm({
-                            action: 'remove',
-                            pkg: p.name,
-                            title: 'Remove package',
-                            message: (
-                              <>
-                                Remove <b>{p.name}</b> ({p.version})? Configuration files are kept.
-                              </>
-                            ),
-                            confirmLabel: 'Remove'
-                          })
-                        }
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                      <button
-                        title="Purge (remove including config)"
-                        className="rounded p-1 text-muted hover:bg-bad/20 hover:text-bad cursor-pointer disabled:opacity-30"
-                        disabled={busy}
-                        onClick={() =>
-                          setConfirm({
-                            action: 'purge',
-                            pkg: p.name,
-                            title: 'Purge package',
-                            message: (
-                              <>
-                                Purge <b>{p.name}</b> ({p.version})? The package and its
-                                configuration files are removed.
-                              </>
-                            ),
-                            confirmLabel: 'Purge'
-                          })
-                        }
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-              {filteredInstalled.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="px-3 py-4 text-center text-muted">
-                    {loading ? 'Loading…' : overview ? 'No packages match the filter' : 'Not loaded yet'}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+        <div className="p-3 pt-2">
+          <DataTable
+            data={installedRows}
+            columns={installedColumns}
+            globalFilter={filter}
+            getRowId={(p) => `${p.name}-${p.arch}`}
+            initialSorting={[{ id: 'name', desc: false }]}
+            pageSize={MAX_INSTALLED_ROWS}
+            emptyText={
+              loading ? 'Loading…' : overview ? 'No packages match the filter' : 'Not loaded yet'
+            }
+          />
         </div>
       </Card>
 
       {/* History */}
       {!!overview?.history.length && (
         <Card className="mt-3 mb-3 overflow-hidden">
-          <div className="flex items-center gap-1.5 px-3 pt-3 text-xs font-semibold uppercase tracking-wider text-muted">
-            <History className="h-3.5 w-3.5 text-mem" /> Recent operations
+          <div className="flex items-center gap-1.5 px-3 pt-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            <History className="size-3.5 text-metric-mem" /> Recent operations
           </div>
-          <div className="overflow-x-auto p-3 pt-2">
-            <table className="w-full text-xs">
-              <tbody>
-                {overview.history.map((h, i) => (
-                  <tr key={i} className="border-t border-border/50 hover:bg-card-hover">
-                    <td className="w-44 px-2 py-1 mono text-muted">{h.date}</td>
-                    <td className="w-32 px-2 py-1">
-                      <Badge
-                        kind={
-                          /remove|purge/i.test(h.action)
-                            ? 'bad'
-                            : /upgrade/i.test(h.action)
-                              ? 'accent'
-                              : 'good'
-                        }
-                      >
-                        {h.action}
-                      </Badge>
-                    </td>
-                    <td className="truncate px-2 py-1 text-muted" title={h.packages}>
-                      {h.packages}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="p-3 pt-2">
+            <DataTable data={overview.history} columns={historyColumns} />
           </div>
         </Card>
       )}

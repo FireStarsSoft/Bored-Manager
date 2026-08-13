@@ -4,8 +4,17 @@ import type { ActionSpec } from '@shared/module-ui'
 import { moduleCall } from '@/lib/modules'
 import { useApp } from '@/state/store'
 import { Button } from '@/components/ui/button'
-import { ConfirmDialog, Dialog } from '@/components/ui/dialog'
+import { ConfirmDialog } from '@/components/confirm-dialog'
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { resolveActionArgs, resolvePath } from './binding'
 
 function message(err: unknown): string {
@@ -80,7 +89,7 @@ export function ActionButton({
         disabled={disabled || busy}
         onClick={handleClick}
       >
-        {busy && <Loader2 className="h-3 w-3 animate-spin" />}
+        {busy && <Loader2 className="size-3 animate-spin" aria-hidden />}
         {action.label}
       </Button>
       {action.confirm && (
@@ -132,22 +141,37 @@ function ActionPromptDialog({
   }, [open, initialValue])
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange} title={label}>
-      <div className="space-y-3">
-        <Input
-          type={input === 'number' ? 'number' : 'text'}
-          value={value}
-          autoFocus
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && onSubmit(value)}
-        />
-        <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button onClick={() => onSubmit(value)}>OK</Button>
-        </div>
-      </div>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        onSubmit={(e) => {
+          e.preventDefault()
+          onSubmit(value)
+        }}
+        asChild
+      >
+        <form>
+          <DialogHeader>
+            <DialogTitle asChild>
+              <Label htmlFor="action-prompt-value">{label}</Label>
+            </DialogTitle>
+          </DialogHeader>
+          <Input
+            id="action-prompt-value"
+            type={input === 'number' ? 'number' : 'text'}
+            value={value}
+            autoFocus
+            onChange={(e) => setValue(e.target.value)}
+          />
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button type="button" variant="outline">
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button type="submit">OK</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
     </Dialog>
   )
 }

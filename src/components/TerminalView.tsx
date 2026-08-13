@@ -1,8 +1,26 @@
 import * as React from 'react'
 import { Terminal } from '@xterm/xterm'
+import type { ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { api } from '@/lib/api'
+import { useApp } from '@/state/store'
 import { cn } from '@/lib/utils'
+
+/**
+ * xterm paints on a canvas, so it cannot inherit any of the theme's CSS
+ * variables - the resolved values have to be handed to it, and handed over
+ * again whenever the light/dark setting changes.
+ */
+function readTheme(): ITheme {
+  const s = getComputedStyle(document.documentElement)
+  const v = (name: string): string => s.getPropertyValue(name).trim()
+  return {
+    background: v('--background'),
+    foreground: v('--foreground'),
+    cursor: v('--primary'),
+    selectionBackground: `color-mix(in oklab, ${v('--primary')} 35%, transparent)`
+  }
+}
 
 /**
  * One xterm.js view onto a server-side terminal. The terminal itself lives on
@@ -14,6 +32,7 @@ export function TerminalView({ terminalId, visible }: { terminalId: string; visi
   const containerRef = React.useRef<HTMLDivElement>(null)
   const termRef = React.useRef<Terminal | null>(null)
   const fitRef = React.useRef<FitAddon | null>(null)
+  const dark = useApp((s) => s.dark)
 
   React.useEffect(() => {
     const el = containerRef.current
@@ -23,12 +42,7 @@ export function TerminalView({ terminalId, visible }: { terminalId: string; visi
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace",
       cursorBlink: true,
       scrollback: 5000,
-      theme: {
-        background: '#0b0f14',
-        foreground: '#e6edf3',
-        cursor: '#3b82f6',
-        selectionBackground: '#1d4ed855'
-      }
+      theme: readTheme()
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
@@ -66,6 +80,10 @@ export function TerminalView({ terminalId, visible }: { terminalId: string; visi
       termRef.current = null
     }
   }, [terminalId])
+
+  React.useEffect(() => {
+    if (termRef.current) termRef.current.options.theme = readTheme()
+  }, [dark])
 
   React.useEffect(() => {
     if (visible && fitRef.current && termRef.current) {

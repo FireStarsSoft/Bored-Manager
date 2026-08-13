@@ -2,6 +2,8 @@ import * as React from 'react'
 import { Pause, Play } from 'lucide-react'
 import type { LogBlock } from '@shared/module-ui'
 import { moduleCall, moduleOn } from '@/lib/modules'
+import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { callAction } from '../action-runner'
 import { resolvePath } from '../binding'
@@ -69,19 +71,26 @@ export function LogBlockView({ block, ctx }: { block: LogBlock; ctx: BlockCtx })
 
   return (
     <div className="relative">
-      <button
-        type="button"
-        onClick={() => setPaused((p) => !p)}
-        title={paused ? 'Resume auto-scroll' : 'Pause auto-scroll'}
-        className="absolute right-2 top-2 z-10 rounded bg-card/80 p-1 text-muted transition-colors hover:bg-card-hover hover:text-fg cursor-pointer"
-      >
-        {paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
-      </button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => setPaused((p) => !p)}
+            aria-label={paused ? 'Resume auto-scroll' : 'Pause auto-scroll'}
+            aria-pressed={paused}
+            className="absolute right-2 top-2 z-10 bg-card/80"
+          >
+            {paused ? <Play aria-hidden /> : <Pause aria-hidden />}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>{paused ? 'Resume auto-scroll' : 'Pause auto-scroll'}</TooltipContent>
+      </Tooltip>
       <pre
         ref={preRef}
         className={cn(
-          'h-64 overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-bg p-2.5 text-[0.7rem] leading-relaxed mono',
-          startError && 'text-bad',
+          'h-64 overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-background p-2.5 text-[0.7rem] leading-relaxed mono',
+          startError && 'text-destructive',
           ctx.compact && 'h-40'
         )}
       >

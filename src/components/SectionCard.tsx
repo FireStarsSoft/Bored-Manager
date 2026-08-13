@@ -2,6 +2,7 @@ import * as React from 'react'
 import { GripVertical } from 'lucide-react'
 import { IntervalBadge } from '@/components/IntervalBadge'
 import { Card } from '@/components/ui/card'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 
 /**
@@ -10,13 +11,16 @@ import { cn } from '@/lib/utils'
  */
 export function DragHandle(): React.JSX.Element {
   return (
-    <span
-      className="tm-drag-handle -ml-1 cursor-grab text-muted/30 transition-colors hover:text-muted active:cursor-grabbing"
-      title="Drag to rearrange"
-      onClick={(e) => e.stopPropagation()}
-    >
-      <GripVertical className="h-3.5 w-3.5" />
-    </span>
+    <Tooltip>
+      <TooltipTrigger
+        aria-label="Drag to rearrange"
+        className="tm-drag-handle -ml-1 cursor-grab text-muted-foreground/30 transition-colors hover:text-muted-foreground active:cursor-grabbing"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <GripVertical className="size-3.5" aria-hidden />
+      </TooltipTrigger>
+      <TooltipContent>Drag to rearrange</TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -46,12 +50,12 @@ export function SectionCard({
   return (
     <Card
       onClick={onClick}
-      className={cn('p-3', onClick && 'cursor-pointer transition-colors hover:bg-card-hover')}
+      className={cn('p-3', onClick && 'cursor-pointer transition-colors hover:bg-accent')}
     >
       <div className="mb-2 flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted">
+        <div className="flex min-w-0 items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           <DragHandle />
-          <Icon className={`h-3.5 w-3.5 ${iconClass}`} />
+          <Icon className={`size-3.5 ${iconClass}`} />
           <span className="truncate">{title}</span>
           {fast && <IntervalBadge fast={fast} />}
         </div>

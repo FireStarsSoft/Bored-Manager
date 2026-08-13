@@ -14,6 +14,10 @@ import { WindowPicker, useOverviewWindow } from '@/components/WindowPicker'
 import { OverviewGrid, type GridBreakpoint, type OverviewCard } from '@/components/OverviewGrid'
 import { MeterBar, type ChartPoint } from '@/components/charts'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Separator } from '@/components/ui/separator'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatBytes, formatInterval, formatPct, formatRate, formatUptime } from '@/lib/utils'
 
 /** Sparklines are ~250px wide; more points than that is wasted work. */
@@ -52,16 +56,17 @@ const storedDisk = (p: HistoryPoint): ChartPoint => ({
 const PerCoreCard = React.memo(function PerCoreCard(): React.JSX.Element {
   const perCore = useApp((s) => s.system.at(-1)?.cpu.perCore) ?? []
   return (
-    <SectionCard title="Per-core CPU" icon={Cpu} iconClass="text-cpu" fast="system">
+    <SectionCard title="Per-core CPU" icon={Cpu} iconClass="text-metric-cpu" fast="system">
       <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
         {perCore.map((pct, i) => (
           <div key={i} className="flex items-center gap-1.5">
-            <span className="w-7 shrink-0 text-right text-[0.65rem] text-muted">{i}</span>
-            <MeterBar pct={pct} color="var(--color-cpu)" />
-            <span className="w-8 shrink-0 text-[0.65rem] text-muted">{pct.toFixed(0)}%</span>
+            <span className="w-7 shrink-0 text-right text-[0.65rem] text-muted-foreground">{i}</span>
+            <MeterBar pct={pct} color="cpu" />
+            <span className="w-8 shrink-0 text-[0.65rem] text-muted-foreground">{pct.toFixed(0)}%</span>
           </div>
         ))}
-        {perCore.length === 0 && <div className="text-xs text-muted">waiting for data…</div>}
+        {perCore.length === 0 &&
+          Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-3.5 w-full" />)}
       </div>
     </SectionCard>
   )
@@ -70,17 +75,21 @@ const PerCoreCard = React.memo(function PerCoreCard(): React.JSX.Element {
 const LoadUptimeCard = React.memo(function LoadUptimeCard(): React.JSX.Element {
   const cur = useApp((s) => s.system.at(-1))
   return (
-    <SectionCard title="Load & uptime" icon={Timer} iconClass="text-accent" fast="system">
+    <SectionCard title="Load & uptime" icon={Timer} iconClass="text-primary" fast="system">
       <div className="grid grid-cols-3 gap-2 text-center">
         {(cur?.load ?? [0, 0, 0]).map((l, i) => (
-          <div key={i} className="rounded-md bg-input py-2">
+          <div key={i} className="rounded-md bg-muted py-2">
             <div className="text-sm font-semibold">{l.toFixed(2)}</div>
-            <div className="text-[0.65rem] text-muted">{['1 min', '5 min', '15 min'][i]}</div>
+            <div className="text-[0.65rem] text-muted-foreground">{['1 min', '5 min', '15 min'][i]}</div>
           </div>
         ))}
       </div>
-      <div className="mt-2 text-xs text-muted">
-        {cur ? `Uptime: ${formatUptime(cur.uptimeSec)} · host ${cur.hostname}` : 'waiting for data…'}
+      <div className="mt-2 text-xs text-muted-foreground">
+        {cur ? (
+          `Uptime: ${formatUptime(cur.uptimeSec)} · host ${cur.hostname}`
+        ) : (
+          <Skeleton className="h-4 w-44" />
+        )}
       </div>
     </SectionCard>
   )
@@ -95,22 +104,23 @@ const TopProcessesCard = React.memo(function TopProcessesCard(): React.JSX.Eleme
     <SectionCard
       title="Top processes"
       icon={ListTree}
-      iconClass="text-cpu"
+      iconClass="text-metric-cpu"
       fast="processes"
       onClick={hasProcesses ? () => setActiveTab(modulePageTab('processes', 'main')) : undefined}
     >
-      <div className="space-y-1">
+      <div className="flex flex-col gap-1">
         {(top?.cpu ?? []).slice(0, 5).map((p) => (
           <div key={p.pid} className="flex items-center gap-2 text-xs">
-            <span className="w-12 shrink-0 text-muted mono">{p.pid}</span>
+            <span className="w-12 shrink-0 text-muted-foreground mono">{p.pid}</span>
             <span className="min-w-0 flex-1 truncate">{p.name}</span>
-            <span className="w-14 shrink-0 text-right text-cpu">{formatPct(p.value)}</span>
-            <span className="w-16 shrink-0 text-right text-mem">
+            <span className="w-14 shrink-0 text-right text-metric-cpu">{formatPct(p.value)}</span>
+            <span className="w-16 shrink-0 text-right text-metric-mem">
               {byPid.has(p.pid) ? formatBytes(byPid.get(p.pid) as number) : '—'}
             </span>
           </div>
         ))}
-        {!top?.cpu.length && <div className="text-xs text-muted">waiting for data…</div>}
+        {!top?.cpu.length &&
+          Array.from({ length: 3 }, (_, i) => <Skeleton key={i} className="h-4 w-full" />)}
       </div>
     </SectionCard>
   )
@@ -119,34 +129,35 @@ const TopProcessesCard = React.memo(function TopProcessesCard(): React.JSX.Eleme
 /** Visual treatment per ServiceEntry.kind - self stands out, the rest are neutral-ish. */
 const SERVICE_KIND_BADGE: Record<
   ServiceEntry['kind'],
-  { label: string; kind: 'default' | 'good' | 'warn' | 'accent' }
+  { label: string; variant: 'secondary' | 'success' | 'warning' | 'default' }
 > = {
-  self: { label: 'self', kind: 'accent' },
-  poller: { label: 'poller', kind: 'default' },
-  stream: { label: 'stream', kind: 'good' },
-  shell: { label: 'shell', kind: 'warn' }
+  self: { label: 'self', variant: 'default' },
+  poller: { label: 'poller', variant: 'secondary' },
+  stream: { label: 'stream', variant: 'success' },
+  shell: { label: 'shell', variant: 'warning' }
 }
 
 function ServiceRow({ entry }: { entry: ServiceEntry }): React.JSX.Element {
   const badge = SERVICE_KIND_BADGE[entry.kind]
   return (
     <div className="flex items-center gap-1.5 text-[0.7rem]">
-      <Badge kind={badge.kind} className="w-11 shrink-0 justify-center px-1">
+      <Badge variant={badge.variant} className="h-4 w-11 shrink-0 justify-center px-1">
         {badge.label}
       </Badge>
-      <span className="min-w-0 flex-1 truncate" title={entry.command ?? entry.label}>
-        {entry.label}
-      </span>
-      <span className="w-12 shrink-0 truncate text-right text-muted" title={entry.owner}>
-        {entry.owner}
-      </span>
+      <Tooltip>
+        <TooltipTrigger className="min-w-0 flex-1 truncate text-left">{entry.label}</TooltipTrigger>
+        <TooltipContent>{entry.command ?? entry.label}</TooltipContent>
+      </Tooltip>
+      <span className="w-12 shrink-0 truncate text-right text-muted-foreground">{entry.owner}</span>
       {entry.kind === 'poller' ? (
-        <span
-          className="w-10 shrink-0 text-right text-muted"
-          title="Estimated from the tick's own duration, not a real CPU reading"
-        >
-          ~{formatPct(entry.estCostPct ?? 0)}
-        </span>
+        <Tooltip>
+          <TooltipTrigger className="w-10 shrink-0 text-right text-muted-foreground">
+            ~{formatPct(entry.estCostPct ?? 0)}
+          </TooltipTrigger>
+          <TooltipContent>
+            Estimated from the tick's own duration, not a real CPU reading
+          </TooltipContent>
+        </Tooltip>
       ) : (
         <span className="w-10 shrink-0 text-right font-medium">
           {entry.cpu != null ? formatPct(entry.cpu) : '—'}
@@ -155,7 +166,7 @@ function ServiceRow({ entry }: { entry: ServiceEntry }): React.JSX.Element {
       <span className="w-12 shrink-0 text-right font-medium">
         {entry.memBytes != null ? formatBytes(entry.memBytes) : '—'}
       </span>
-      <span className="w-8 shrink-0 text-right text-muted">
+      <span className="w-8 shrink-0 text-right text-muted-foreground">
         {entry.intervalMs != null ? formatInterval(entry.intervalMs / 1000) : '—'}
       </span>
     </div>
@@ -179,15 +190,19 @@ const AppServicesCard = React.memo(function AppServicesCard(): React.JSX.Element
   )
 
   return (
-    <SectionCard title="App services" icon={Server} iconClass="text-accent" fast="system">
+    <SectionCard title="App services" icon={Server} iconClass="text-primary" fast="system">
       {!snap ? (
-        <div className="text-xs text-muted">waiting for data…</div>
+        <div className="flex flex-col gap-1.5">
+          {Array.from({ length: 4 }, (_, i) => (
+            <Skeleton key={i} className="h-4 w-full" />
+          ))}
+        </div>
       ) : (
         <>
-          <div className="text-xs text-muted">
-            <span className="font-medium text-fg">{snap.entries.length}</span> services · CPU{' '}
-            <span className="font-medium text-fg">{formatPct(snap.totalCpu)}</span> · RAM{' '}
-            <span className="font-medium text-fg">{formatBytes(snap.totalMemBytes)}</span>
+          <div className="text-xs text-muted-foreground">
+            <span className="font-medium text-foreground">{snap.entries.length}</span> services · CPU{' '}
+            <span className="font-medium text-foreground">{formatPct(snap.totalCpu)}</span> · RAM{' '}
+            <span className="font-medium text-foreground">{formatBytes(snap.totalMemBytes)}</span>
             {self && (
               <span>
                 {' '}
@@ -195,7 +210,7 @@ const AppServicesCard = React.memo(function AppServicesCard(): React.JSX.Element
               </span>
             )}
           </div>
-          <div className="mt-2 flex items-center gap-1.5 text-[0.6rem] uppercase tracking-wide text-muted/70">
+          <div className="mt-2 flex items-center gap-1.5 text-[0.6rem] uppercase tracking-wide text-muted-foreground/70">
             <span className="w-11 shrink-0">Kind</span>
             <span className="min-w-0 flex-1">Name</span>
             <span className="w-12 shrink-0 text-right">Owner</span>
@@ -203,7 +218,7 @@ const AppServicesCard = React.memo(function AppServicesCard(): React.JSX.Element
             <span className="w-12 shrink-0 text-right">RAM</span>
             <span className="w-8 shrink-0 text-right">Tick</span>
           </div>
-          <div className="mt-1 space-y-1">
+          <div className="mt-1 flex flex-col gap-1">
             {rows.map((e) => (
               <ServiceRow key={e.id} entry={e} />
             ))}
@@ -211,16 +226,20 @@ const AppServicesCard = React.memo(function AppServicesCard(): React.JSX.Element
         </>
       )}
       {hasProcesses && (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation()
-            setActiveTab(modulePageTab('processes', 'subservices'))
-          }}
-          className="mt-2 flex w-full items-center justify-end gap-1 border-t border-border/50 pt-1.5 text-[0.7rem] font-medium text-accent transition-colors hover:text-fg cursor-pointer"
-        >
-          Details <ArrowRight className="h-3 w-3" />
-        </button>
+        <>
+          <Separator className="mt-2" />
+          <Button
+            variant="link"
+            size="xs"
+            className="mt-1 ml-auto"
+            onClick={(e) => {
+              e.stopPropagation()
+              setActiveTab(modulePageTab('processes', 'subservices'))
+            }}
+          >
+            Details <ArrowRight aria-hidden />
+          </Button>
+        </>
       )}
     </SectionCard>
   )
@@ -287,7 +306,7 @@ export function OverviewTab({ active }: { active: boolean }): React.JSX.Element 
       <StatCard
         title="CPU"
         icon={Cpu}
-        color="var(--color-cpu)"
+        color="cpu"
         handle={<DragHandle />}
         badge={<IntervalBadge fast="system" />}
         value={`${(curSys?.cpu.total ?? 0).toFixed(0)}%`}
@@ -297,12 +316,12 @@ export function OverviewTab({ active }: { active: boolean }): React.JSX.Element 
             : 'waiting for data…'
         }
         data={cpuData}
-        series={[{ key: 'cpu', color: 'var(--color-cpu)', name: 'CPU %' }]}
+        series={[{ key: 'cpu', color: 'cpu', name: 'CPU %' }]}
         max={100}
         formatValue={formatPct}
         onClick={linkTo('processes', 'main')}
       >
-        <TopConsumers entries={top?.cpu} format={formatPct} color="var(--color-cpu)" />
+        <TopConsumers entries={top?.cpu} format={formatPct} color="cpu" />
       </StatCard>
     )
   }
@@ -313,7 +332,7 @@ export function OverviewTab({ active }: { active: boolean }): React.JSX.Element 
       <StatCard
         title="Memory"
         icon={MemoryStick}
-        color="var(--color-mem)"
+        color="mem"
         handle={<DragHandle />}
         badge={<IntervalBadge fast="system" />}
         value={`${memPct.toFixed(0)}%`}
@@ -324,12 +343,12 @@ export function OverviewTab({ active }: { active: boolean }): React.JSX.Element 
             : 'waiting for data…'
         }
         data={memData}
-        series={[{ key: 'mem', color: 'var(--color-mem)', name: 'Memory %' }]}
+        series={[{ key: 'mem', color: 'mem', name: 'Memory %' }]}
         max={100}
         formatValue={formatPct}
         onClick={linkTo('processes', 'main')}
       >
-        <TopConsumers entries={top?.memory} format={formatBytes} color="var(--color-mem)" />
+        <TopConsumers entries={top?.memory} format={formatBytes} color="mem" />
       </StatCard>
     )
   }
@@ -340,15 +359,15 @@ export function OverviewTab({ active }: { active: boolean }): React.JSX.Element 
       <StatCard
         title="Network"
         icon={Network}
-        color="var(--color-net)"
+        color="net"
         handle={<DragHandle />}
         badge={<IntervalBadge fast="system" />}
         value={curSys ? formatRate(curSys.netRx + curSys.netTx) : '…'}
         sub={curSys ? `↓ ${formatRate(curSys.netRx)} · ↑ ${formatRate(curSys.netTx)}` : undefined}
         data={netData}
         series={[
-          { key: 'rx', color: 'var(--color-download)', name: '↓ Download' },
-          { key: 'tx', color: 'var(--color-upload)', name: '↑ Upload' }
+          { key: 'rx', color: 'download', name: '↓ Download' },
+          { key: 'tx', color: 'upload', name: '↑ Upload' }
         ]}
         formatValue={formatRate}
         onClick={linkTo('network', 'traffic')}
@@ -356,7 +375,7 @@ export function OverviewTab({ active }: { active: boolean }): React.JSX.Element 
         <TopConsumers
           entries={top?.network}
           format={formatRate}
-          color="var(--color-net)"
+          color="net"
           emptyText={
             top
               ? 'No per-process traffic this tick (rates come from TCP sockets; other users need sudo)'
@@ -373,7 +392,7 @@ export function OverviewTab({ active }: { active: boolean }): React.JSX.Element 
       <StatCard
         title="Disk I/O"
         icon={HardDrive}
-        color="var(--color-disk)"
+        color="disk"
         handle={<DragHandle />}
         badge={<IntervalBadge fast="system" />}
         value={curSys ? formatRate(curSys.diskRead + curSys.diskWrite) : '…'}
@@ -384,8 +403,8 @@ export function OverviewTab({ active }: { active: boolean }): React.JSX.Element 
         }
         data={diskData}
         series={[
-          { key: 'read', color: 'var(--color-disk)', name: 'Read' },
-          { key: 'write', color: 'var(--color-warn)', name: 'Write' }
+          { key: 'read', color: 'disk', name: 'Read' },
+          { key: 'write', color: 'warning', name: 'Write' }
         ]}
         formatValue={formatRate}
         onClick={linkTo('disk', 'devices')}
@@ -393,7 +412,7 @@ export function OverviewTab({ active }: { active: boolean }): React.JSX.Element 
         <TopConsumers
           entries={top?.disk}
           format={formatRate}
-          color="var(--color-disk)"
+          color="disk"
           emptyText={
             top
               ? 'No process I/O this tick - cache hits, kernel writeback and other users are not attributed to a process'
@@ -418,13 +437,18 @@ export function OverviewTab({ active }: { active: boolean }): React.JSX.Element 
 
   return (
     <div className="h-full overflow-y-auto p-3">
-      <div className="mb-3 flex items-center justify-between">
-        <div>
-          <h2 className="text-base font-semibold leading-tight">Overview</h2>
-          <div className="text-xs text-muted">
-            {curSys?.hostname ?? '…'}
-            {curSys ? ` · up ${formatUptime(curSys.uptimeSec)}` : ''}
-          </div>
+      {/* The page name is in the header bar now, so this row only carries what
+          is specific to the machine and the chart range. */}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0 text-xs text-muted-foreground">
+          {curSys ? (
+            <>
+              <span className="font-medium text-foreground">{curSys.hostname}</span> · up{' '}
+              {formatUptime(curSys.uptimeSec)}
+            </>
+          ) : (
+            <Skeleton className="h-4 w-40" />
+          )}
         </div>
         <WindowPicker value={win} onChange={setOverviewWindow} />
       </div>

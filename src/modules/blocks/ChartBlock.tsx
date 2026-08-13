@@ -28,7 +28,7 @@ export function ChartBlockView({ block, ctx }: { block: ChartBlock; ctx: BlockCt
   return (
     <div>
       {block.title && (
-        <div className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted">{block.title}</div>
+        <div className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">{block.title}</div>
       )}
       {ctx.compact ? (
         <Sparkline data={data} series={series} formatValue={formatValue} />

@@ -2,7 +2,8 @@ import * as React from 'react'
 import type { LucideIcon } from 'lucide-react'
 import type { TopProcEntry } from '@shared/types'
 import { Card } from '@/components/ui/card'
-import { Sparkline, type ChartPoint, type SeriesDef } from '@/components/charts'
+import { Sparkline, type ChartColor, type ChartPoint, type SeriesDef } from '@/components/charts'
+import { getColorClassName } from '@/components/charts/chart-colors'
 import { cn } from '@/lib/utils'
 
 /**
@@ -35,7 +36,7 @@ function SplitRate({
       <span className={downClass}>
         {downLabel} {format(down)}
       </span>
-      <span className="mx-1 text-muted/60">·</span>
+      <span className="mx-1 text-muted-foreground/60">·</span>
       <span className={upClass}>
         {upLabel} {format(up)}
       </span>
@@ -56,7 +57,7 @@ export function TopConsumers({
 }: {
   entries: TopProcEntry[] | undefined
   format: (v: number) => string
-  color: string
+  color: ChartColor
   count?: number
   /** Shown instead of nothing when no process could be measured. */
   emptyText?: React.ReactNode
@@ -65,16 +66,16 @@ export function TopConsumers({
   if (!top.length) {
     if (!emptyText) return null
     return (
-      <div className="mt-2 border-t border-border/50 pt-1.5 text-[0.7rem] text-muted">
+      <div className="mt-2 border-t border-border/50 pt-1.5 text-[0.7rem] text-muted-foreground">
         {emptyText}
       </div>
     )
   }
   return (
-    <div className="mt-2 space-y-0.5 border-t border-border/50 pt-1.5">
+    <div className="mt-2 flex flex-col gap-0.5 border-t border-border/50 pt-1.5">
       {top.map((e) => (
         <div key={e.pid} className="flex items-baseline gap-2 text-[0.7rem]">
-          <span className="min-w-0 flex-1 truncate text-muted" title={`PID ${e.pid}`}>
+          <span className="min-w-0 flex-1 truncate text-muted-foreground" title={`PID ${e.pid}`}>
             {e.name}
           </span>
           {e.rx != null && e.tx != null ? (
@@ -83,8 +84,8 @@ export function TopConsumers({
               up={e.tx}
               downLabel="↓"
               upLabel="↑"
-              downClass="text-download"
-              upClass="text-upload"
+              downClass="text-metric-download"
+              upClass="text-metric-upload"
               format={format}
             />
           ) : e.read != null && e.write != null ? (
@@ -93,12 +94,12 @@ export function TopConsumers({
               up={e.write}
               downLabel="R"
               upLabel="W"
-              downClass="text-disk"
-              upClass="text-warn"
+              downClass="text-metric-disk"
+              upClass="text-warning"
               format={format}
             />
           ) : (
-            <span className="shrink-0 font-medium tabular-nums" style={{ color }}>
+            <span className={cn('shrink-0 font-medium tabular-nums', getColorClassName(color, 'text'))}>
               {format(e.value)}
             </span>
           )}
@@ -127,7 +128,7 @@ export function StatCard({
 }: {
   title: string
   icon: LucideIcon
-  color: string
+  color: ChartColor
   value: string
   sub?: React.ReactNode
   data?: ChartPoint[]
@@ -147,22 +148,27 @@ export function StatCard({
       onClick={onClick}
       className={cn(
         'flex flex-col p-3 transition-colors',
-        onClick && 'cursor-pointer hover:bg-card-hover',
+        onClick && 'cursor-pointer hover:bg-accent',
         className
       )}
     >
       <div className="flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted">
+        <div className="flex min-w-0 items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           {handle}
-          <Icon className="h-3.5 w-3.5 shrink-0" style={{ color }} />
+          <Icon className={cn('size-3.5 shrink-0', getColorClassName(color, 'text'))} aria-hidden />
           <span className="truncate">{title}</span>
           {badge}
         </div>
-        <div className="shrink-0 text-base font-semibold leading-none" style={{ color }}>
+        <div
+          className={cn(
+            'shrink-0 text-base font-semibold leading-none',
+            getColorClassName(color, 'text')
+          )}
+        >
           {value}
         </div>
       </div>
-      {sub != null && <div className="mt-1 text-xs text-muted">{sub}</div>}
+      {sub != null && <div className="mt-1 text-xs text-muted-foreground">{sub}</div>}
       {data && series && (
         <div className="mt-2">
           <Sparkline data={data} series={series} max={max} formatValue={formatValue} />

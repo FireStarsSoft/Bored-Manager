@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { toast } from 'sonner'
 import type {
   AppSettings,
   AuthSettings,
@@ -10,6 +11,7 @@ import type {
   ServicesSnapshot,
   SystemSnapshot,
   TerminalInfo,
+  Theme,
   TopConsumersSnapshot,
   UpdateSettings
 } from '@shared/types'
@@ -73,6 +75,8 @@ interface AppState {
   auth: AuthStatus | null
   status: ConnectionStatus
   settings: AppSettings | null
+  /** The theme after resolving 'system'; see applyTheme. */
+  dark: boolean
   activeTab: TabId
   /** Installed modules as the main process reports them. */
   modules: ModuleDescriptor[]
@@ -87,7 +91,6 @@ interface AppState {
   /** Slow sections with a manual refresh in flight, keyed by settings key. */
   slowRefreshing: Record<string, boolean>
   terminals: TerminalInfo[]
-  notice: { kind: 'error' | 'info'; text: string } | null
   connecting: boolean
 
   init(): Promise<void>
@@ -105,6 +108,7 @@ interface AppState {
   updateSettings(patch: SettingsPatch): Promise<SavedSettings>
   setSettingsFull(s: AppSettings): void
   setModules(list: ModuleDescriptor[]): void
+  /** Raises a toast; the signature predates sonner and is kept for its callers. */
   showNotice(kind: 'error' | 'info', text: string): void
   refreshTerminals(): Promise<void>
   refreshSlow(target: string): Promise<void>
@@ -116,13 +120,13 @@ export const useApp = create<AppState>((set, get) => ({
   auth: null,
   status: { connected: false },
   settings: null,
+  dark: document.documentElement.classList.contains('dark'),
   activeTab: 'overview',
   modules: [],
   enabledModules: [],
   ...emptySession(),
   overviewWindow: 60,
   slowRefreshing: {},
-  notice: null,
   connecting: false,
 
   async init() {
@@ -187,6 +191,7 @@ export const useApp = create<AppState>((set, get) => ({
       settings = await api.settings.set({ ...settings, density, densityAutoDetected: true })
     }
     applyDensity(settings.density)
+    applyTheme(settings.theme)
     set({ settings, overviewWindow: settings.historyWindow })
     await get().reseed()
 
@@ -312,12 +317,14 @@ export const useApp = create<AppState>((set, get) => ({
     }
     const saved = await api.settings.set(next)
     applyDensity(saved.density)
+    applyTheme(saved.theme)
     set({ settings: saved })
     return saved
   },
 
   setSettingsFull(s) {
     applyDensity(s.density)
+    applyTheme(s.theme)
     set({ settings: s })
   },
 
@@ -335,10 +342,8 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   showNotice(kind, text) {
-    set({ notice: { kind, text } })
-    setTimeout(() => {
-      if (get().notice?.text === text) set({ notice: null })
-    }, 5000)
+    if (kind === 'error') toast.error(text)
+    else toast.info(text)
   },
 
   async refreshTerminals() {
@@ -362,3 +367,25 @@ export const useApp = create<AppState>((set, get) => ({
 export function applyDensity(density: Density): void {
   document.documentElement.dataset.density = density
 }
+
+const systemDark = (): boolean => window.matchMedia('(prefers-color-scheme: dark)').matches
+
+/**
+ * Tailwind's dark variant is class-based here (see @custom-variant in
+ * styles.css). `dark` is mirrored into the store because anything painting on a
+ * canvas (xterm, the charts) cannot read a CSS variable through a class and has
+ * to be told when the resolved scheme changed - which 'system' does without the
+ * setting itself changing.
+ */
+export function applyTheme(theme: Theme): void {
+  const dark = theme === 'dark' || (theme === 'system' && systemDark())
+  document.documentElement.classList.toggle('dark', dark)
+  document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
+  if (useApp.getState().dark !== dark) useApp.setState({ dark })
+}
+
+/** Registered once for the lifetime of the page. */
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+  const theme = useApp.getState().settings?.theme
+  if (theme === 'system') applyTheme(theme)
+})

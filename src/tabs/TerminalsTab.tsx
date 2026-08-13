@@ -4,10 +4,27 @@ import type { TerminalPreset } from '@shared/types'
 import { api } from '@/lib/api'
 import { useApp } from '@/state/store'
 import { Button } from '@/components/ui/button'
-import { Dialog } from '@/components/ui/dialog'
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog'
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle
+} from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { TerminalView } from '@/components/TerminalView'
-import { cn } from '@/lib/utils'
 
 const PRESETS: Array<{ preset: TerminalPreset; label: string }> = [
   { preset: 'shell', label: 'Shell' },
@@ -47,61 +64,70 @@ export function TerminalsTab({ active }: { active: boolean }): React.JSX.Element
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <div className="flex items-center gap-1 border-b border-border bg-surface px-3 py-2">
+      <div className="flex flex-wrap items-center gap-1 border-b border-border bg-sidebar px-3 py-2">
         {PRESETS.map((p) => (
           <Button key={p.preset} variant="secondary" size="sm" onClick={() => void create(p.preset)}>
-            <Plus className="h-3 w-3" /> {p.label}
+            <Plus className="size-3" aria-hidden /> {p.label}
           </Button>
         ))}
         <Button variant="secondary" size="sm" onClick={() => setCustomOpen(true)}>
-          <Plus className="h-3 w-3" /> Custom…
+          <Plus className="size-3" aria-hidden /> Custom…
         </Button>
       </div>
 
-      {/* terminal tabs */}
+      {/* The panels are not TabsContent: every TerminalView has to stay mounted
+          so xterm keeps its scrollback, so this drives selection only. */}
       {terminals.length > 0 && (
-        <div className="flex items-center gap-1 overflow-x-auto border-b border-border px-2 py-1.5">
-          {terminals.map((t) => (
-            <div
-              key={t.id}
-              onClick={() => setActiveId(t.id)}
-              className={cn(
-                'flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition-colors',
-                activeId === t.id
-                  ? 'bg-accent/15 font-medium text-accent'
-                  : 'text-muted hover:bg-card-hover hover:text-fg'
-              )}
-            >
-              <TerminalSquare className="h-3 w-3" />
-              {t.title}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  void close(t.id)
-                }}
-                className="ml-0.5 rounded p-0.5 hover:bg-bad/20 hover:text-bad cursor-pointer"
-                title="Close terminal"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </div>
-          ))}
-        </div>
+        <Tabs
+          value={activeId}
+          onValueChange={setActiveId}
+          className="shrink-0 border-b border-border"
+        >
+          <TabsList variant="line" className="h-auto w-full justify-start overflow-x-auto px-2 py-1.5">
+            {terminals.map((t) => (
+              <div key={t.id} className="relative flex shrink-0 items-center">
+                <TabsTrigger value={t.id} className="pr-7 text-xs">
+                  <TerminalSquare className="size-3" aria-hidden />
+                  {t.title}
+                </TabsTrigger>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={`Close ${t.title}`}
+                      className="absolute right-0.5 hover:bg-destructive/20 hover:text-destructive"
+                      onClick={() => void close(t.id)}
+                    >
+                      <X aria-hidden />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Close terminal</TooltipContent>
+                </Tooltip>
+              </div>
+            ))}
+          </TabsList>
+        </Tabs>
       )}
 
-      <div className="relative min-h-0 flex-1 bg-bg">
+      <div
+        className="relative min-h-0 flex-1 bg-background"
+        role="tabpanel"
+        aria-label="Terminal output"
+      >
         {terminals.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-center text-muted">
-            <div>
-              <TerminalSquare className="mx-auto mb-2 h-8 w-8 opacity-40" />
-              <div className="text-sm">No terminals yet</div>
-              <div className="mt-1 text-xs">
-                Open a shell or a preset like watch nvidia-smi, glances, lazydocker.
-                <br />
-                Everything is cleaned up automatically when the app closes.
-              </div>
-            </div>
-          </div>
+          <Empty className="h-full">
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <TerminalSquare aria-hidden />
+              </EmptyMedia>
+              <EmptyTitle>No terminals yet</EmptyTitle>
+              <EmptyDescription>
+                Open a shell or a preset like watch nvidia-smi, glances, lazydocker. Everything is
+                cleaned up automatically when the app closes.
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
         ) : (
           terminals.map((t) => (
             <TerminalView key={t.id} terminalId={t.id} visible={active && activeId === t.id} />
@@ -109,34 +135,44 @@ export function TerminalsTab({ active }: { active: boolean }): React.JSX.Element
         )}
       </div>
 
-      <Dialog open={customOpen} onOpenChange={setCustomOpen} title="Run custom command">
-        <div className="space-y-3">
-          <Input
-            placeholder="e.g. htop, journalctl -f, docker compose logs -f"
-            value={customCmd}
-            onChange={(e) => setCustomCmd(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && customCmd.trim()) {
-                setCustomOpen(false)
-                void create('custom', customCmd.trim())
-              }
-            }}
-          />
-          <div className="flex justify-end gap-2">
-            <Button variant="secondary" onClick={() => setCustomOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              disabled={!customCmd.trim()}
-              onClick={() => {
-                setCustomOpen(false)
-                void create('custom', customCmd.trim())
-              }}
-            >
-              Run
-            </Button>
-          </div>
-        </div>
+      <Dialog open={customOpen} onOpenChange={setCustomOpen}>
+        <DialogContent
+          asChild
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (!customCmd.trim()) return
+            setCustomOpen(false)
+            void create('custom', customCmd.trim())
+          }}
+        >
+          <form>
+            <DialogHeader>
+              <DialogTitle>Run custom command</DialogTitle>
+              <DialogDescription>
+                Runs in a pty on the target machine, exactly as typed.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="terminal-custom-command">Command</Label>
+              <Input
+                id="terminal-custom-command"
+                placeholder="e.g. htop, journalctl -f, docker compose logs -f"
+                value={customCmd}
+                onChange={(e) => setCustomCmd(e.target.value)}
+              />
+            </div>
+            <DialogFooter>
+              <DialogClose asChild>
+                <Button type="button" variant="outline">
+                  Cancel
+                </Button>
+              </DialogClose>
+              <Button type="submit" disabled={!customCmd.trim()}>
+                Run
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
       </Dialog>
     </div>
   )

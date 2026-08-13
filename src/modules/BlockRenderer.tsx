@@ -83,7 +83,7 @@ class BlockErrorBoundary extends React.Component<{ children: React.ReactNode }, 
   render(): React.ReactNode {
     if (this.state.error) {
       return (
-        <div className="rounded-md border border-bad/30 bg-bad/10 p-2.5 text-xs text-bad">
+        <div className="rounded-md border border-destructive/30 bg-destructive/10 p-2.5 text-xs text-destructive">
           This block failed to render: {this.state.error.message}
         </div>
       )

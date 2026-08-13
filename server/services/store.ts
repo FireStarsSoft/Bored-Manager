@@ -8,7 +8,8 @@ import {
   type SavedConnection,
   type ServerSettings,
   type SessionIdle,
-  type SessionIdleUnit
+  type SessionIdleUnit,
+  type Theme
 } from '@shared/types'
 import type { ModuleRuntimeState } from '@shared/modules'
 import { decryptString, encryptString, isEncrypted } from './secret'
@@ -209,8 +210,12 @@ function mergeSettings(partial: Partial<AppSettings> | null | undefined): AppSet
   if (fromV3 && typeof legacy.lastUpdateUrl === 'string') update.lastUrl = legacy.lastUpdateUrl
   const auth = pickKnown(DEFAULT_SETTINGS.auth, p.auth)
   auth.sessionIdle = normalizeIdle(p.auth?.sessionIdle)
+  // Before v5 the UI was dark and had no say in it. Defaulting those files to
+  // 'system' would silently turn somebody's dashboard white after an update.
+  const fromV4 = (p.settingsVersion ?? 0) < 5
   return {
     settingsVersion: SETTINGS_VERSION,
+    theme: fromV4 ? 'dark' : normalizeTheme(p.theme),
     density: p.density ?? DEFAULT_SETTINGS.density,
     densityAutoDetected: p.densityAutoDetected ?? DEFAULT_SETTINGS.densityAutoDetected,
     historyWindow: p.historyWindow ?? DEFAULT_SETTINGS.historyWindow,
@@ -225,6 +230,11 @@ function mergeSettings(partial: Partial<AppSettings> | null | undefined): AppSet
     auth,
     update
   }
+}
+
+function normalizeTheme(value: unknown): Theme {
+  const themes: Theme[] = ['dark', 'light', 'system']
+  return themes.includes(value as Theme) ? (value as Theme) : DEFAULT_SETTINGS.theme
 }
 
 /** A port or host the settings file cannot be trusted about must not stick. */

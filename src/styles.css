@@ -1,29 +1,190 @@
 @import 'tailwindcss';
+@import 'tw-animate-css';
 @import '@xterm/xterm/css/xterm.css';
 
-@theme {
-  --color-bg: #0b0f14;
-  --color-surface: #0f141b;
-  --color-card: #121923;
-  --color-card-hover: #16202d;
-  --color-border: #1f2b3a;
-  --color-input: #0c121b;
-  --color-fg: #e6edf3;
-  --color-muted: #8b98a9;
-  --color-accent: #3b82f6;
-  --color-good: #34d399;
-  --color-warn: #fbbf24;
-  --color-bad: #f87171;
-  --color-cpu: #38bdf8;
-  --color-mem: #a78bfa;
-  --color-gpu: #76b900;
-  --color-docker: #2496ed;
-  --color-net: #f472b6;
-  --color-disk: #fb923c;
+/* Theme is chosen by a class on <html> (see applyTheme in src/state/store.ts)
+   rather than by prefers-color-scheme, because it is a saved setting. */
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Light theme. Cool blue-grey to stay in the same family as the dark one, with
+ * the accent blues darkened enough to keep contrast on white surfaces.
+ */
+:root {
+  --background: #f6f8fa;
+  --foreground: #0d1520;
+  --card: #ffffff;
+  --card-foreground: #0d1520;
+  --popover: #ffffff;
+  --popover-foreground: #0d1520;
+  --primary: #1d6ae5;
+  --primary-foreground: #ffffff;
+  --secondary: #e8edf3;
+  --secondary-foreground: #0d1520;
+  --muted: #eef1f6;
+  --muted-foreground: #5a6a7d;
+  --accent: #e8edf3;
+  --accent-foreground: #0d1520;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+  --border: #d8e0e9;
+  /* shadcn semantics: --input is the *border* of a field. The surface a field
+     is painted on is --field, which the dense forms here rely on. */
+  --input: #cbd5e1;
+  --field: #ffffff;
+  --ring: #1d6ae5;
+
+  --success: #059669;
+  --success-foreground: #ffffff;
+  --warning: #b45309;
+  --warning-foreground: #ffffff;
+
+  --sidebar: #eef1f6;
+  --sidebar-foreground: #0d1520;
+  --sidebar-primary: #1d6ae5;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #e0e7ef;
+  --sidebar-accent-foreground: #0d1520;
+  --sidebar-border: #d8e0e9;
+  --sidebar-ring: #1d6ae5;
+
+  /* Per-subsystem series colours. Kept as their own scale because a chart has
+     to stay readable when several of them are on one axis. */
+  --metric-cpu: #0284c7;
+  --metric-mem: #7c3aed;
+  --metric-gpu: #4d7c0f;
+  --metric-docker: #0b74c4;
+  --metric-net: #db2777;
+  --metric-disk: #b45309;
   /* Traffic direction: kept distinct from every other series colour so a
      glance at any chart tells download from upload. */
-  --color-download: #34d399;
-  --color-upload: #f97316;
+  --metric-download: #059669;
+  --metric-upload: #ea580c;
+
+  --chart-1: var(--metric-cpu);
+  --chart-2: var(--metric-mem);
+  --chart-3: var(--metric-net);
+  --chart-4: var(--metric-disk);
+  --chart-5: var(--metric-gpu);
+
+  --scrollbar-thumb: #c2ccd8;
+  --scrollbar-thumb-hover: #9aa9ba;
+
+  --radius: 0.5rem;
+}
+
+/* Dark theme: the palette the app shipped with, unchanged. */
+.dark {
+  --background: #0b0f14;
+  --foreground: #e6edf3;
+  --card: #121923;
+  --card-foreground: #e6edf3;
+  --popover: #121923;
+  --popover-foreground: #e6edf3;
+  --primary: #3b82f6;
+  --primary-foreground: #ffffff;
+  --secondary: #16202d;
+  --secondary-foreground: #e6edf3;
+  --muted: #16202d;
+  --muted-foreground: #8b98a9;
+  --accent: #16202d;
+  --accent-foreground: #e6edf3;
+  --destructive: #f87171;
+  --destructive-foreground: #ffffff;
+  --border: #1f2b3a;
+  --input: #1f2b3a;
+  --field: #0c121b;
+  --ring: #3b82f6;
+
+  --success: #34d399;
+  --success-foreground: #06251b;
+  --warning: #fbbf24;
+  --warning-foreground: #2a1c00;
+
+  --sidebar: #0f141b;
+  --sidebar-foreground: #e6edf3;
+  --sidebar-primary: #3b82f6;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #16202d;
+  --sidebar-accent-foreground: #e6edf3;
+  --sidebar-border: #1f2b3a;
+  --sidebar-ring: #3b82f6;
+
+  --metric-cpu: #38bdf8;
+  --metric-mem: #a78bfa;
+  --metric-gpu: #76b900;
+  --metric-docker: #2496ed;
+  --metric-net: #f472b6;
+  --metric-disk: #fb923c;
+  --metric-download: #34d399;
+  --metric-upload: #f97316;
+
+  --scrollbar-thumb: #2a3a4e;
+  --scrollbar-thumb-hover: #4d6884;
+}
+
+/*
+ * `inline` so every utility resolves to the custom property itself instead of
+ * the value it had at build time - that is what lets .dark repaint the app
+ * without a second copy of every class.
+ */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-field: var(--field);
+  --color-ring: var(--ring);
+
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --color-metric-cpu: var(--metric-cpu);
+  --color-metric-mem: var(--metric-mem);
+  --color-metric-gpu: var(--metric-gpu);
+  --color-metric-docker: var(--metric-docker);
+  --color-metric-net: var(--metric-net);
+  --color-metric-disk: var(--metric-disk);
+  --color-metric-download: var(--metric-download);
+  --color-metric-upload: var(--metric-upload);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  /* --radius is 0.5rem so this scale lands on the radii the app already used:
+     rounded-sm 0.25rem, rounded-md 0.375rem, rounded-lg 0.5rem. */
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
 }
 
 /* Density: rem-based Tailwind spacing scales with the root font size.
@@ -47,35 +208,51 @@ body,
   overflow: hidden;
 }
 
-body {
-  background-color: var(--color-bg);
-  color: var(--color-fg);
-  font-family:
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    'Segoe UI',
-    Roboto,
-    'Helvetica Neue',
-    Arial,
-    sans-serif;
-  -webkit-font-smoothing: antialiased;
+@layer base {
+  * {
+    border-color: var(--border);
+    outline-color: color-mix(in oklab, var(--ring) 50%, transparent);
+  }
+
+  /* What shadcn's `pointer` option does. Saves repeating cursor-pointer on
+     every button, nav row and clickable card in the app. */
+  button:not(:disabled),
+  [role='button']:not([aria-disabled='true']),
+  [role='tab'],
+  [role='option'],
+  summary {
+    cursor: pointer;
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family:
+      ui-sans-serif,
+      system-ui,
+      -apple-system,
+      'Segoe UI',
+      Roboto,
+      'Helvetica Neue',
+      Arial,
+      sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
 }
 
-/* Only vertical scrollbars; horizontal overflow is avoided by layout. */
 ::-webkit-scrollbar {
   width: 8px;
-  height: 0px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #2a3a4e;
+  background: var(--scrollbar-thumb);
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #4d6884;
+  background: var(--scrollbar-thumb-hover);
 }
 
 .mono {
@@ -84,7 +261,7 @@ body {
 
 /* Overview drag-and-drop grid (react-grid-layout), themed to match the app. */
 .react-grid-item.react-grid-placeholder {
-  background: var(--color-accent);
+  background: var(--primary);
   opacity: 0.15;
   border-radius: 0.5rem;
 }
@@ -96,5 +273,5 @@ body {
   border-radius: 0.5rem;
 }
 .react-grid-item > .react-resizable-handle::after {
-  border-color: var(--color-muted);
+  border-color: var(--muted-foreground);
 }

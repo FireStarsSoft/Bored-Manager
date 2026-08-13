@@ -1,4 +1,5 @@
 import type { ValueFormat } from '@shared/module-ui'
+import type { ChartColor } from '@/components/charts'
 import { formatBytes, formatCount, formatDuration, formatPct, formatRate, formatTemp } from '@/lib/utils'
 
 /** Render a resolved value the way its block spec says to - the one place every block formats through. */
@@ -26,13 +27,13 @@ export function formatBlockValue(format: ValueFormat | undefined, value: unknown
 }
 
 /** A block-declared series needs a colour; block specs do not carry one, so every chart draws from this. */
-export const BLOCK_PALETTE = [
-  'var(--color-accent)',
-  'var(--color-cpu)',
-  'var(--color-mem)',
-  'var(--color-net)',
-  'var(--color-disk)',
-  'var(--color-warn)',
-  'var(--color-good)',
-  'var(--color-gpu)'
+export const BLOCK_PALETTE: ChartColor[] = [
+  'primary',
+  'cpu',
+  'mem',
+  'net',
+  'disk',
+  'warning',
+  'success',
+  'gpu'
 ]

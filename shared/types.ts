@@ -406,6 +406,9 @@ export interface AutoCapStatus extends AutoCapConfig {
 export type RefreshSpeed = 'high' | 'normal' | 'low' | 'paused'
 export type Density = 'low' | 'medium' | 'high'
 
+/** `system` follows the browser's prefers-color-scheme. */
+export type Theme = 'dark' | 'light' | 'system'
+
 /** Chart time range, in seconds. */
 export type HistoryWindow = number
 
@@ -570,8 +573,10 @@ export type SlowRefreshTarget = string
  *    fixed extended-card list turned into module state and keyed widget ids.
  * 4: the app became a web server - where it listens, whether a login is
  *    required, and the update source moved into the file.
+ * 5: the UI gained a light theme, so which one to use became a setting. A file
+ *    written before this only ever ran dark, and is carried over as such.
  */
-export const SETTINGS_VERSION = 4
+export const SETTINGS_VERSION = 5
 
 /** Where the WebUI listens. Changing either needs a restart. */
 export interface ServerSettings {
@@ -608,6 +613,7 @@ export interface UpdateSettings {
 export interface AppSettings {
   /** Format of the file this was read from; always SETTINGS_VERSION in memory. */
   settingsVersion: number
+  theme: Theme
   density: Density
   densityAutoDetected: boolean
   historyWindow: HistoryWindow
@@ -660,6 +666,7 @@ export const SLOW_REFRESH_OPTIONS: Array<{ value: number; label: string }> = [
 
 export const DEFAULT_SETTINGS: AppSettings = {
   settingsVersion: SETTINGS_VERSION,
+  theme: 'dark',
   density: 'medium',
   densityAutoDetected: false,
   historyWindow: 60,

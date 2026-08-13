@@ -19,7 +19,7 @@ export function SectionBlockView({ block, ctx }: { block: SectionBlock; ctx: Blo
       {(block.title || block.slowTarget) && (
         <div className="mb-2 flex items-center justify-between gap-2">
           {block.title ? (
-            <div className="text-xs font-semibold uppercase tracking-wider text-muted">{block.title}</div>
+            <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{block.title}</div>
           ) : (
             <span />
           )}

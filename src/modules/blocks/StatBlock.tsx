@@ -26,10 +26,10 @@ export function StatBlockView({ block, ctx }: { block: StatBlock; ctx: BlockCtx 
     <StatCard
       title={block.label}
       icon={Gauge}
-      color="var(--color-accent)"
+      color="primary"
       value={formatBlockValue(block.format, value)}
       data={block.spark ? sparkPoints : undefined}
-      series={block.spark ? [{ key: 'v', color: 'var(--color-accent)' }] : undefined}
+      series={block.spark ? [{ key: 'v', color: 'primary' }] : undefined}
       formatValue={(v) => formatBlockValue(block.format, v)}
     />
   )

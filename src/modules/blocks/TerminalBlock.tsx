@@ -4,6 +4,7 @@ import type { TerminalBlock } from '@shared/module-ui'
 import { api } from '@/lib/api'
 import { useApp } from '@/state/store'
 import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { TerminalView } from '@/components/TerminalView'
 import { resolvePath } from '../binding'
 import type { BlockCtx } from '../BlockRenderer'
@@ -53,24 +54,31 @@ export function TerminalBlockView({ block, ctx }: { block: TerminalBlock; ctx: B
   if (!terminalId) {
     return (
       <Button size="sm" variant="secondary" disabled={opening} onClick={() => void open()}>
-        <TerminalSquare className="h-3 w-3" /> {block.label}
+        <TerminalSquare aria-hidden /> {block.label}
       </Button>
     )
   }
 
   return (
     <div className="flex h-72 flex-col overflow-hidden rounded-md border border-border">
-      <div className="flex items-center justify-between border-b border-border bg-surface px-2 py-1">
-        <span className="text-xs text-muted">{block.label}</span>
-        <button
-          onClick={close}
-          title="Close"
-          className="rounded p-1 text-muted transition-colors hover:bg-bad/20 hover:text-bad cursor-pointer"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
+      <div className="flex items-center justify-between border-b border-border bg-sidebar px-2 py-1">
+        <span className="text-xs text-muted-foreground">{block.label}</span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={close}
+              aria-label={`Close ${block.label}`}
+              className="hover:bg-destructive/20 hover:text-destructive"
+            >
+              <X aria-hidden />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Close</TooltipContent>
+        </Tooltip>
       </div>
-      <div className="relative min-h-0 flex-1 bg-bg">
+      <div className="relative min-h-0 flex-1 bg-background">
         <TerminalView terminalId={terminalId} visible />
       </div>
     </div>

@@ -3,5 +3,14 @@
   "references": [
     { "path": "./tsconfig.node.json" },
     { "path": "./tsconfig.web.json" }
-  ]
+  ],
+  // Not used for compiling (the referenced projects carry their own copy of
+  // these). The shadcn CLI reads the root tsconfig to resolve `@/...` imports,
+  // and a solution-style file has no compilerOptions for it to find.
+  "compilerOptions": {
+    "paths": {
+      "@/*": ["./src/*"],
+      "@shared/*": ["./shared/*"]
+    }
+  }
 }

@@ -1,0 +1,252 @@
+import type { LucideIcon } from 'lucide-react'
+import {
+  Activity,
+  Boxes,
+  Cable,
+  Container,
+  Cpu,
+  FileText,
+  FolderTree,
+  HardDrive,
+  Info,
+  ListTree,
+  Network,
+  Puzzle,
+  Sparkles,
+  Thermometer,
+  Zap
+} from 'lucide-react'
+import { create } from 'zustand'
+import type { ModuleManifest } from '@shared/modules'
+import type { ModuleSpecsEntry, PageSpec, WidgetSpec } from '@shared/module-ui'
+import { api } from '@/lib/api'
+import { pushLatest, pushSeries, seedSeries } from '@/lib/module-bus'
+
+/**
+ * The renderer half of the module system. Every module's UI is a
+ * declarative `ui/pages/*.json` / `ui/widgets/*.json` spec, fetched from the
+ * server (`modules:specs`) and rendered by `src/modules/BlockRenderer.tsx` -
+ * nothing here is compiled into this bundle, so installing, updating,
+ * enabling or removing a module never touches it.
+ */
+
+interface ModuleSpecsState {
+  list: ModuleSpecsEntry[]
+  refresh(): Promise<void>
+}
+
+/**
+ * What every enabled module's pages and widgets render from, per
+ * `modules:specs`. Refreshed whenever the modules list changes (see
+ * `setModules` in `src/state/store.ts`) - install, uninstall, reload, enable
+ * and disable all end with a fresh copy of this.
+ */
+export const useModuleSpecs = create<ModuleSpecsState>((set) => ({
+  list: [],
+  async refresh() {
+    try {
+      set({ list: await api.modules.specs() })
+    } catch {
+      // A transient failure keeps showing the previous specs rather than
+      // blanking every module page at once.
+    }
+  }
+}))
+
+/** A module's manifest, once the specs payload carrying it has loaded. */
+export function useModuleManifest(moduleId: string): ModuleManifest | undefined {
+  return useModuleSpecs((s) => s.list.find((e) => e.id === moduleId)?.manifest)
+}
+
+/**
+ * Mirror every enabled module's declared streams into the bus: the app's own
+ * subscriptions, kept in sync with `useModuleSpecs` so a module installed,
+ * enabled or reloaded after boot is picked up without a page refresh.
+ */
+export function subscribeModuleStreams(): () => void {
+  const active = new Map<string, () => void>()
+
+  const wantedStreams = (): Array<{ id: string; event: string; kind: 'series' | 'latest' }> => {
+    const out: Array<{ id: string; event: string; kind: 'series' | 'latest' }> = []
+    for (const specEntry of useModuleSpecs.getState().list) {
+      for (const stream of specEntry.manifest.streams ?? []) out.push({ id: specEntry.id, ...stream })
+    }
+    return out
+  }
+
+  const sync = (): void => {
+    const wanted = new Map(wantedStreams().map((w) => [`${w.id}:${w.event}`, w]))
+    for (const [key, off] of active) {
+      if (!wanted.has(key)) {
+        off()
+        active.delete(key)
+      }
+    }
+    for (const [key, w] of wanted) {
+      if (active.has(key)) continue
+      active.set(
+        key,
+        api.modules.onEvent(w.id, w.event, (payload) => {
+          if (w.kind === 'latest') pushLatest(w.id, w.event, payload)
+          else if (payload && typeof (payload as { t?: number }).t === 'number') {
+            pushSeries(w.id, w.event, payload as { t: number })
+          }
+        })
+      )
+    }
+  }
+
+  sync()
+  const unsubscribeSpecs = useModuleSpecs.subscribe(sync)
+  return () => {
+    unsubscribeSpecs()
+    for (const off of active.values()) off()
+    active.clear()
+  }
+}
+
+/**
+ * Load what the main process had buffered before this renderer connected, so
+ * a chart is not empty for the first tick. A `series` stream expects an
+ * array, a `latest` stream a single value; anything else is ignored rather
+ * than trusted.
+ */
+export function seedModuleSnapshots(snapshots: Record<string, Record<string, unknown>>): void {
+  const seeded = new Set<string>()
+  for (const specEntry of useModuleSpecs.getState().list) {
+    for (const stream of specEntry.manifest.streams ?? []) {
+      const key = `${specEntry.id}:${stream.event}`
+      if (seeded.has(key)) continue
+      const value = snapshots[specEntry.id]?.[stream.event]
+      if (value == null) continue
+      seeded.add(key)
+      if (stream.kind === 'latest') pushLatest(specEntry.id, stream.event, value)
+      else if (Array.isArray(value)) seedSeries(specEntry.id, stream.event, value as Array<{ t: number }>)
+    }
+  }
+}
+
+// ---------- Sidebar / Overview ----------
+
+/** lucide-react icon names a module.json may reference; add to this as new icons are used. */
+const ICONS: Record<string, LucideIcon> = {
+  Activity,
+  Boxes,
+  Cable,
+  Container,
+  Cpu,
+  FileText,
+  FolderTree,
+  HardDrive,
+  Info,
+  ListTree,
+  Network,
+  Sparkles,
+  Thermometer,
+  Zap
+}
+
+export function iconByName(name: string | undefined): LucideIcon {
+  return (name && ICONS[name]) || Puzzle
+}
+
+export interface SidebarPageEntry {
+  id: string
+  label: string
+  icon?: LucideIcon
+  order?: number
+}
+
+/**
+ * One nav entry per enabled module that has a loaded spec for at least one
+ * declared page. `pages` is every page with a spec, sorted by `order` - the
+ * sidebar turns this into a single button or a dropdown (Dashboard.tsx).
+ */
+export interface SidebarEntry {
+  id: string
+  label: string
+  icon: LucideIcon
+  order: number
+  pages: SidebarPageEntry[]
+  specs: Record<string, PageSpec>
+}
+
+/** Route string for a module page, sent as `activeTab` / `ui:activeTab`. */
+export function modulePageTab(moduleId: string, pageId: string): string {
+  return `${moduleId}/${pageId}`
+}
+
+/**
+ * `specsList` is a parameter (not read internally) so the caller's own
+ * subscription to `useModuleSpecs` is what decides when this needs to run
+ * again.
+ */
+export function sidebarEntries(enabledIds: readonly string[], specsList: ModuleSpecsEntry[]): SidebarEntry[] {
+  const byId = new Map(specsList.map((e) => [e.id, e]))
+  const out: SidebarEntry[] = []
+  for (const id of enabledIds) {
+    const specEntry = byId.get(id)
+    if (!specEntry) continue
+    // Skip pages whose spec has not loaded yet (just after install/enable,
+    // before `modules:specs` catches up) rather than show a broken entry.
+    const pages = (specEntry.manifest.pages ?? [])
+      .filter((p) => specEntry.pages[p.id])
+      .map((p) => ({
+        id: p.id,
+        label: p.label,
+        icon: iconByName(p.icon),
+        order: p.order
+      }))
+      .sort((a, b) => (a.order ?? 50) - (b.order ?? 50) || a.id.localeCompare(b.id))
+    const first = pages[0]
+    if (!first) continue
+    out.push({
+      id,
+      label: specEntry.manifest.name,
+      icon: first.icon ?? iconByName(undefined),
+      order: first.order ?? 50,
+      pages,
+      specs: specEntry.pages
+    })
+  }
+  return out
+}
+
+/** One Overview widget of an enabled module that has a loaded spec for it. */
+export interface OverviewWidgetEntry {
+  /** `<moduleId>.<widgetId>` - also the key the saved grid layout uses. */
+  id: string
+  moduleId: string
+  widgetId: string
+  moduleName: string
+  label: string
+  defaultEnabled?: boolean
+  order?: number
+  spec: WidgetSpec
+}
+
+export function listModuleWidgets(
+  enabledIds: readonly string[],
+  specsList: ModuleSpecsEntry[]
+): OverviewWidgetEntry[] {
+  const byId = new Map(specsList.map((e) => [e.id, e]))
+  const out: OverviewWidgetEntry[] = []
+  for (const id of enabledIds) {
+    const specEntry = byId.get(id)
+    for (const decl of specEntry?.manifest.widgets ?? []) {
+      const spec = specEntry?.widgets[decl.id]
+      if (!spec) continue
+      out.push({
+        id: `${id}.${decl.id}`,
+        moduleId: id,
+        widgetId: decl.id,
+        moduleName: specEntry?.manifest.name ?? id,
+        label: decl.label,
+        defaultEnabled: decl.defaultEnabled,
+        order: decl.order,
+        spec
+      })
+    }
+  }
+  return out
+}

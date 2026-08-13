@@ -1,0 +1,79 @@
+{
+  "blocks": [
+    {
+      "type": "section",
+      "title": "Connections",
+      "blocks": [
+        {
+          "type": "table",
+          "source": { "kind": "stream", "event": "snapshot", "path": "connections" },
+          "rowKey": "id",
+          "columns": [
+            { "key": "proto", "label": "Proto" },
+            { "key": "localAddr", "label": "Local addr" },
+            { "key": "localPort", "label": "Local port", "align": "right" },
+            { "key": "remoteAddr", "label": "Remote addr" },
+            { "key": "remotePort", "label": "Remote port", "align": "right" },
+            { "key": "state", "label": "State" },
+            { "key": "process", "label": "Process" },
+            { "key": "pid", "label": "PID", "align": "right" },
+            { "key": "rxRate", "label": "Rx/s", "format": "rate", "align": "right" },
+            { "key": "txRate", "label": "Tx/s", "format": "rate", "align": "right" },
+            { "key": "rxTotal", "label": "RX total", "format": "bytes", "align": "right" },
+            { "key": "txTotal", "label": "TX total", "format": "bytes", "align": "right" }
+          ],
+          "sortDefault": { "key": "rxTotal", "dir": "desc" },
+          "filterKeys": ["process", "localAddr", "remoteAddr", "state"],
+          "rowActions": [
+            {
+              "label": "Terminate",
+              "method": "killProcess",
+              "argsFromRow": ["pid"],
+              "confirm": "Send SIGTERM to this process? All of its network connections will be closed.",
+              "kind": "danger"
+            }
+          ],
+          "emptyText": "No connections match the filter"
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "title": "Listening ports",
+      "blocks": [
+        {
+          "type": "table",
+          "source": { "kind": "stream", "event": "snapshot", "path": "listening" },
+          "rowKey": "id",
+          "columns": [
+            { "key": "proto", "label": "Proto" },
+            { "key": "port", "label": "Port", "align": "right" },
+            { "key": "addr", "label": "Bind address" },
+            { "key": "process", "label": "Process" },
+            { "key": "pid", "label": "PID", "align": "right" }
+          ],
+          "sortDefault": { "key": "port", "dir": "asc" },
+          "filterKeys": ["process", "addr"],
+          "emptyText": "No listening sockets"
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "title": "TCP quality & routing",
+      "blocks": [
+        {
+          "type": "keyValue",
+          "source": { "kind": "stream", "event": "snapshot" },
+          "rows": [
+            { "key": "proto.retransRate", "label": "TCP retransmits/s" },
+            { "key": "proto.retransTotal", "label": "TCP retransmits (total)" },
+            { "key": "info.gateway", "label": "Gateway" },
+            { "key": "info.gatewayIface", "label": "Gateway interface" },
+            { "key": "info.dnsServers", "label": "DNS servers" }
+          ]
+        }
+      ]
+    }
+  ]
+}

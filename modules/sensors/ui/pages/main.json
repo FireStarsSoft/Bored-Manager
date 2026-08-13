@@ -1,0 +1,27 @@
+{
+  "blocks": [
+    {
+      "type": "section",
+      "title": "Sensors",
+      "blocks": [
+        {
+          "type": "table",
+          "source": { "kind": "stream", "event": "snapshot", "path": "sensors" },
+          "columns": [
+            { "key": "label", "label": "Sensor" },
+            { "key": "chip", "label": "Chip" },
+            { "key": "kind", "label": "Kind" },
+            { "key": "value", "label": "Value", "align": "right" },
+            { "key": "unit", "label": "Unit" },
+            { "key": "crit", "label": "Crit", "align": "right" },
+            { "key": "max", "label": "Max", "align": "right" }
+          ],
+          "sortDefault": { "key": "kind", "dir": "asc" },
+          "filterKeys": ["label", "chip", "kind"],
+          "groupModes": [{ "id": "kind", "label": "By kind", "key": "kind" }],
+          "emptyText": "No sensor readings. This machine may expose none (no lm-sensors and no readable /sys/class/hwmon - common in VMs and containers), or polling is paused in Settings \u2192 Update intervals \u2192 Sensors."
+        }
+      ]
+    }
+  ]
+}

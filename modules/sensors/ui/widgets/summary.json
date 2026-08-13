@@ -1,0 +1,17 @@
+{
+  "blocks": [
+    {
+      "type": "section",
+      "title": "Sensors",
+      "blocks": [
+        {
+          "type": "list",
+          "source": { "kind": "stream", "event": "snapshot", "path": "sensors" },
+          "columns": [{ "key": "label" }, { "key": "value", "align": "right" }],
+          "limit": 8,
+          "emptyText": "No sensors exposed by this machine"
+        }
+      ]
+    }
+  ]
+}

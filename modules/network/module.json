@@ -1,0 +1,24 @@
+{
+  "apiVersion": 2,
+  "id": "network",
+  "name": "Network",
+  "version": "2.0.0",
+  "description": "Per-interface traffic, every TCP/UDP connection with its owning process and rate, bandwidth per process, listening ports, TCP retransmits, gateway and DNS.",
+  "author": "Bored Manager",
+  "minAppVersion": "0.0.1",
+  "entries": {
+    "main": "main/index.ts"
+  },
+  "pages": [
+    { "id": "traffic", "label": "Traffic", "icon": "Network", "order": 20 },
+    { "id": "connections", "label": "Connections", "icon": "Cable", "order": 21 }
+  ],
+  "widgets": [],
+  "streams": [
+    { "event": "snapshot", "kind": "latest" },
+    { "event": "series", "kind": "series" }
+  ],
+  "methods": ["killProcess"],
+  "fastInterval": "network",
+  "slowInterval": "network"
+}

@@ -1,0 +1,18 @@
+{
+  "blocks": [
+    {
+      "type": "section",
+      "title": "File systems",
+      "slowTarget": "storage",
+      "blocks": [
+        {
+          "type": "list",
+          "source": { "kind": "stream", "event": "storage", "path": "filesystems" },
+          "columns": [{ "key": "mount" }, { "key": "pct", "format": "pct", "align": "right" }],
+          "limit": 6,
+          "emptyText": "No mounted file systems reported by df"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# Operate the Bored Manager web UI from the install folder.
+#
+#   ./bored-manager start | stop | status | unlock
+set -euo pipefail
+APP_DIR="$(cd "$(dirname "$0")" && pwd)"
+PID_FILE="$APP_DIR/data/server.pid"
+
+has_unit() {
+  systemctl --user cat bored-manager.service >/dev/null 2>&1
+}
+
+read_port() {
+  local file="$APP_DIR/data/user-settings/settings.json"
+  if command -v node >/dev/null 2>&1 && [ -f "$file" ]; then
+    node -e "
+      try {
+        const s = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
+        const n = Number(s && s.server && s.server.port);
+        process.stdout.write(Number.isInteger(n) && n > 0 && n < 65536 ? String(n) : '8686');
+      } catch { process.stdout.write('8686'); }
+    " "$file" 2>/dev/null && return 0
+  fi
+  printf '%s' '8686'
+}
+
+print_url() {
+  local port ip
+  port="$(read_port)" || port=8686
+  ip=""
+  ip="$(hostname -I 2>/dev/null | awk '{print $1}')" || true
+  [ -n "${ip:-}" ] || ip="$(hostname -i 2>/dev/null | awk '{print $1}')" || true
+  [ -n "${ip:-}" ] || ip=127.0.0.1
+  echo "URL: http://${ip}:${port}"
+}
+
+cmd_start() {
+  if has_unit; then
+    systemctl --user start bored-manager
+    echo "Started bored-manager.service"
+    print_url
+    return
+  fi
+  if [ -f "$PID_FILE" ]; then
+    local pid
+    pid="$(tr -d ' \n' < "$PID_FILE" || true)"
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      echo "Already running (pid $pid)"
+      print_url
+      return
+    fi
+  fi
+  if [ ! -f "$APP_DIR/out/server/index.mjs" ]; then
+    "$APP_DIR/run.sh" --build-only
+  fi
+  mkdir -p "$APP_DIR/data"
+  nohup node "$APP_DIR/out/server/index.mjs" >> "$APP_DIR/data/app.log" 2>&1 &
+  echo "Started (pid $!)"
+  print_url
+}
+
+cmd_stop() {
+  if has_unit; then
+    systemctl --user stop bored-manager
+    echo "Stopped bored-manager.service"
+    return
+  fi
+  if [ ! -f "$PID_FILE" ]; then
+    echo "Not running (no pidfile)"
+    return 0
+  fi
+  local pid
+  pid="$(tr -d ' \n' < "$PID_FILE" || true)"
+  if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+    rm -f "$PID_FILE"
+    echo "Not running (stale pidfile)"
+    return 0
+  fi
+  kill "$pid" 2>/dev/null || true
+  local n=0
+  while kill -0 "$pid" 2>/dev/null; do
+    n=$((n + 1))
+    if [ "$n" -ge 20 ]; then
+      kill -9 "$pid" 2>/dev/null || true
+      break
+    fi
+    sleep 0.25
+  done
+  rm -f "$PID_FILE"
+  echo "Stopped (pid $pid)"
+}
+
+cmd_status() {
+  if has_unit; then
+    systemctl --user status bored-manager --no-pager || true
+    print_url
+    return
+  fi
+  if [ -f "$PID_FILE" ]; then
+    local pid
+    pid="$(tr -d ' \n' < "$PID_FILE" || true)"
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      echo "running  pid $pid"
+      print_url
+      return
+    fi
+  fi
+  echo "stopped"
+  print_url
+}
+
+cmd_unlock() {
+  node "$APP_DIR/out/server/index.mjs" unlock
+}
+
+case "${1:-}" in
+  start) cmd_start ;;
+  stop) cmd_stop ;;
+  status) cmd_status ;;
+  unlock) cmd_unlock ;;
+  *)
+    echo "Usage: $0 start|stop|status|unlock" >&2
+    exit 2
+    ;;
+esac

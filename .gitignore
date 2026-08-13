@@ -1,0 +1,15 @@
+node_modules/
+out/
+data/
+.cursor/
+start-app.cmd
+start-app.vbs
+*.log
+scripts/*.zip
+scripts/*.log
+# Modules quarantined by an app update, and the folders the installer keeps
+# while it rebuilds - both are runtime state, not source.
+modules-disabled/
+modules/*.backup-*
+modules/*/.dist/
+src/generated/

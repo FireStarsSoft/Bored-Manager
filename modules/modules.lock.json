@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "modules": {
+    "disk": {
+      "version": "2.0.0",
+      "hash": "e4295d8b3a87b8970b3b3946851145a7da77549c1d7d7c34cef82f58a80fd996"
+    },
+    "docker": {
+      "version": "2.0.0",
+      "hash": "cce7faa215b8e3cb64cfe44489ab8f461169d95de1757251dd5e3f52a2e04252"
+    },
+    "gpu": {
+      "version": "2.0.0",
+      "hash": "617ac00753526df1bf419cac9dfee0c69d3599cd1f9357db3132f4755a276e9b"
+    },
+    "network": {
+      "version": "2.0.0",
+      "hash": "d794493f7f8e816ba3231d1d6e880d0a2bf65147ec98481e732f7319c6e99d15"
+    },
+    "processes": {
+      "version": "2.0.0",
+      "hash": "3822dc8c716b43bf4e2c8f7edf9f9717ca2122f21f12e0797bf7550b24cb7bac"
+    },
+    "sensors": {
+      "version": "2.0.0",
+      "hash": "8038f3a541085a859b60571558b44436a21f2cb7d7cdbad50262b04515d73a9d"
+    }
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "blocks": [
+    {
+      "type": "conditional",
+      "when": { "source": { "kind": "core", "stream": "services" }, "op": "exists" },
+      "blocks": [
+        {
+          "type": "section",
+          "title": "Summary",
+          "blocks": [
+            {
+              "type": "keyValue",
+              "source": { "kind": "core", "stream": "services" },
+              "rows": [
+                { "key": "count", "label": "Services", "format": "number" },
+                { "key": "totalCpu", "label": "Total CPU", "format": "pct" },
+                { "key": "totalMemBytes", "label": "Total RAM", "format": "bytes" },
+                { "key": "selfCpu", "label": "App itself (CPU)", "format": "pct" },
+                { "key": "selfMemBytes", "label": "App itself (RAM)", "format": "bytes" }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "table",
+          "source": { "kind": "core", "stream": "services", "path": "entries" },
+          "rowKey": "id",
+          "columns": [
+            { "key": "kind", "label": "Kind" },
+            { "key": "owner", "label": "Owner" },
+            { "key": "label", "label": "Name" },
+            { "key": "command", "label": "Command" },
+            { "key": "pid", "label": "PID", "align": "right" },
+            { "key": "cpu", "label": "CPU%", "format": "pct", "align": "right" },
+            { "key": "memBytes", "label": "RAM", "format": "bytes", "align": "right" },
+            { "key": "intervalMs", "label": "Interval (ms)", "align": "right" },
+            { "key": "lastTickMs", "label": "Last tick (ms)", "align": "right" },
+            { "key": "estCostPct", "label": "Est. cost", "format": "pct", "align": "right" },
+            { "key": "startedAt", "label": "Uptime", "format": "duration", "align": "right" }
+          ],
+          "sortDefault": { "key": "cpu", "dir": "desc" },
+          "filterKeys": ["label", "command", "owner"],
+          "emptyText": "No services reported yet"
+        }
+      ],
+      "else": [
+        {
+          "type": "section",
+          "title": "Not connected to a target machine - connect first to see what Bored Manager itself is running there.",
+          "blocks": []
+        }
+      ]
+    }
+  ]
+}

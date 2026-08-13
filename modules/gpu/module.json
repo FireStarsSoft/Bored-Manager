@@ -1,0 +1,36 @@
+{
+  "apiVersion": 2,
+  "id": "gpu",
+  "name": "NVIDIA GPU",
+  "version": "2.0.0",
+  "description": "Utilisation, VRAM, temperature and power charts for every NVIDIA GPU, with power limit, persistence and clock controls plus an in-app auto power cap.",
+  "author": "Bored Manager",
+  "minAppVersion": "0.0.1",
+  "entries": {
+    "main": "main/index.ts"
+  },
+  "pages": [
+    { "id": "dashboard", "label": "Dashboard", "icon": "Cpu", "order": 50 },
+    { "id": "power", "label": "Auto power cap", "icon": "Zap", "order": 51 }
+  ],
+  "widgets": [
+    { "id": "summary", "label": "GPU", "defaultEnabled": true, "order": 3 },
+    { "id": "processes", "label": "GPU processes", "order": 60 }
+  ],
+  "streams": [
+    { "event": "snapshot", "kind": "latest" },
+    { "event": "series", "kind": "series" },
+    { "event": "autocap", "kind": "latest" }
+  ],
+  "methods": [
+    "setPowerLimit",
+    "setPersistence",
+    "lockClocks",
+    "resetClocks",
+    "autoCapStatus",
+    "autoCapStart",
+    "autoCapStop",
+    "killProcess"
+  ],
+  "fastInterval": "gpu"
+}

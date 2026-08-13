@@ -1,0 +1,24 @@
+{
+  "blocks": [
+    {
+      "type": "section",
+      "title": "Hello",
+      "blocks": [
+        {
+          "type": "stat",
+          "label": "Uptime",
+          "source": { "kind": "stream", "event": "snapshot", "path": "uptimeLabel" },
+          "format": "text",
+          "spark": { "source": { "kind": "stream", "event": "series" }, "key": "uptime" }
+        }
+      ]
+    },
+    {
+      "type": "chart",
+      "title": "Uptime (hours, last 5 minutes)",
+      "kind": "area",
+      "source": { "kind": "stream", "event": "series" },
+      "series": [{ "key": "uptime", "label": "Uptime", "unit": "h" }]
+    }
+  ]
+}

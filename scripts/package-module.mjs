@@ -1,0 +1,192 @@
+#!/usr/bin/env node
+// Zip one module folder into an archive the in-app installer accepts.
+//
+// Usage:
+//   node scripts/package-module.mjs <module-id> [output-dir]
+//   node scripts/package-module.mjs <path/to/module> [output-dir]
+//
+// The archive contains a single top-level folder named after the module id,
+// with module.json at its root - the shape findArchiveRoot() looks for. The
+// module is checked against the same rules the installer applies, so a zip
+// produced here cannot fail those checks for a reason this script could have
+// caught first.
+import { createWriteStream, existsSync, readFileSync, readdirSync, statSync } from 'fs'
+import { deflateRawSync } from 'zlib'
+import { basename, dirname, join, relative, resolve, sep } from 'path'
+import { fileURLToPath } from 'url'
+
+const scriptDir = dirname(fileURLToPath(import.meta.url))
+const repoRoot = resolve(scriptDir, '..')
+
+const [target, outArg] = process.argv.slice(2)
+if (!target) {
+  console.error('usage: node scripts/package-module.mjs <module-id|path> [output-dir]')
+  process.exit(1)
+}
+
+const dir = existsSync(target) ? resolve(target) : join(repoRoot, 'modules', target)
+if (!existsSync(dir) || !statSync(dir).isDirectory()) {
+  console.error(`ERROR: ${dir} is not a folder.`)
+  process.exit(1)
+}
+
+const manifestPath = join(dir, 'module.json')
+if (!existsSync(manifestPath)) {
+  console.error(`ERROR: ${manifestPath} does not exist - this is not a module folder.`)
+  process.exit(1)
+}
+
+let manifest
+try {
+  manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+} catch (err) {
+  console.error(`ERROR: module.json is not valid JSON: ${err.message}`)
+  process.exit(1)
+}
+
+// The rules that can be checked here are the ones about the folder itself; the
+// installer repeats all of them plus the ones that need the app's own version.
+const problems = []
+if (manifest.apiVersion !== 2) problems.push(`apiVersion must be 2 (found ${manifest.apiVersion})`)
+if (!/^[a-z][a-z0-9-]{1,31}$/.test(manifest.id ?? '')) {
+  problems.push(`"${manifest.id}" is not a valid module id`)
+}
+if (manifest.id !== basename(dir)) {
+  problems.push(`id "${manifest.id}" does not match the folder name "${basename(dir)}"`)
+}
+if (!/^\d+\.\d+\.\d+$/.test(manifest.version ?? '')) {
+  problems.push(`version "${manifest.version}" is not in x.y.z form`)
+}
+if (!manifest.entries?.main) {
+  problems.push('entries.main is required')
+} else if (!existsSync(join(dir, manifest.entries.main))) {
+  problems.push(`entries.main points at a missing file: ${manifest.entries.main}`)
+}
+if (manifest.entries?.renderer) {
+  problems.push(
+    'entries.renderer is no longer supported (API v2) - move the UI to ui/pages/*.json and ui/widgets/*.json'
+  )
+}
+for (const page of manifest.pages ?? []) {
+  const specPath = join(dir, 'ui', 'pages', `${page.id}.json`)
+  if (!existsSync(specPath)) problems.push(`missing ui/pages/${page.id}.json for page "${page.id}"`)
+}
+for (const widget of manifest.widgets ?? []) {
+  const specPath = join(dir, 'ui', 'widgets', `${widget.id}.json`)
+  if (!existsSync(specPath)) problems.push(`missing ui/widgets/${widget.id}.json for widget "${widget.id}"`)
+}
+if (problems.length) {
+  console.error('ERROR: this module would be rejected by the installer:')
+  for (const p of problems) console.error(`  - ${p}`)
+  process.exit(1)
+}
+for (const doc of ['README.md', 'CHANGELOG.md']) {
+  if (!existsSync(join(dir, doc))) {
+    console.warn(`    WARNING: no ${doc} - the installer will flag this as a warning.`)
+  }
+}
+
+function listFiles(root, base = root, out = []) {
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const path = join(root, entry.name)
+    if (entry.isDirectory()) listFiles(path, base, out)
+    else if (entry.isFile()) out.push(relative(base, path).split(sep).join('/'))
+  }
+  return out
+}
+
+// ---------- Minimal zip writer (deflate, no zip64) ----------
+// Writing the archive by hand keeps this script dependency-free and, more
+// importantly, guarantees forward slashes in entry names on every platform -
+// which is what the app's own extractor and every unzip tool expect.
+
+const CRC_TABLE = (() => {
+  const table = new Int32Array(256)
+  for (let i = 0; i < 256; i++) {
+    let c = i
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+    table[i] = c
+  }
+  return table
+})()
+
+function crc32(buf) {
+  let c = -1
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8)
+  return (c ^ -1) >>> 0
+}
+
+/** DOS date/time, as the zip format stores it. */
+function dosTime(date) {
+  const time = ((date.getHours() & 31) << 11) | ((date.getMinutes() & 63) << 5) | (date.getSeconds() >> 1)
+  const day = (((date.getFullYear() - 1980) & 127) << 9) | (((date.getMonth() + 1) & 15) << 5) | (date.getDate() & 31)
+  return { time, day }
+}
+
+const files = listFiles(dir).sort()
+const outputDir = resolve(outArg ?? scriptDir)
+const zipName = `${manifest.id}-${manifest.version}.zip`
+const zipPath = join(outputDir, zipName)
+
+const local = []
+const central = []
+let offset = 0
+const now = dosTime(new Date())
+
+for (const rel of files) {
+  const name = Buffer.from(`${manifest.id}/${rel}`, 'utf8')
+  const raw = readFileSync(join(dir, rel))
+  const deflated = deflateRawSync(raw, { level: 9 })
+  // A file that grows when compressed is stored as-is (method 0).
+  const stored = deflated.length >= raw.length
+  const body = stored ? raw : deflated
+  const crc = crc32(raw)
+
+  const header = Buffer.alloc(30)
+  header.writeUInt32LE(0x04034b50, 0)
+  header.writeUInt16LE(20, 4) // version needed
+  header.writeUInt16LE(0x0800, 6) // UTF-8 names
+  header.writeUInt16LE(stored ? 0 : 8, 8)
+  header.writeUInt16LE(now.time, 10)
+  header.writeUInt16LE(now.day, 12)
+  header.writeUInt32LE(crc, 14)
+  header.writeUInt32LE(body.length, 18)
+  header.writeUInt32LE(raw.length, 22)
+  header.writeUInt16LE(name.length, 26)
+  header.writeUInt16LE(0, 28)
+  local.push(header, name, body)
+
+  const entry = Buffer.alloc(46)
+  entry.writeUInt32LE(0x02014b50, 0)
+  entry.writeUInt16LE(20, 4) // version made by
+  entry.writeUInt16LE(20, 6) // version needed
+  entry.writeUInt16LE(0x0800, 8)
+  entry.writeUInt16LE(stored ? 0 : 8, 10)
+  entry.writeUInt16LE(now.time, 12)
+  entry.writeUInt16LE(now.day, 14)
+  entry.writeUInt32LE(crc, 16)
+  entry.writeUInt32LE(body.length, 20)
+  entry.writeUInt32LE(raw.length, 24)
+  entry.writeUInt16LE(name.length, 28)
+  entry.writeUInt32LE(offset, 42)
+  central.push(entry, name)
+
+  offset += header.length + name.length + body.length
+}
+
+const centralBuf = Buffer.concat(central)
+const end = Buffer.alloc(22)
+end.writeUInt32LE(0x06054b50, 0)
+end.writeUInt16LE(files.length, 8)
+end.writeUInt16LE(files.length, 10)
+end.writeUInt32LE(centralBuf.length, 12)
+end.writeUInt32LE(offset, 16)
+
+const out = createWriteStream(zipPath)
+out.write(Buffer.concat([...local, centralBuf, end]))
+out.end(() => {
+  const size = statSync(zipPath).size
+  console.log(`==> ${zipPath}`)
+  console.log(`    ${manifest.name} ${manifest.version} - ${files.length} files, ${(size / 1024).toFixed(1)} KB`)
+  console.log('    Install it with Settings -> Modules -> From file.')
+})

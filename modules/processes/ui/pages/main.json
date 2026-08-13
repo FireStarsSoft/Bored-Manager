@@ -1,0 +1,78 @@
+{
+  "blocks": [
+    {
+      "type": "section",
+      "title": "System",
+      "columns": 2,
+      "blocks": [
+        {
+          "type": "keyValue",
+          "source": { "kind": "core", "stream": "system" },
+          "rows": [
+            { "key": "cpu.total", "label": "CPU", "format": "pct" },
+            { "key": "mem.used", "label": "Memory used", "format": "bytes" },
+            { "key": "mem.total", "label": "Memory total", "format": "bytes" },
+            { "key": "load", "label": "Load average" }
+          ]
+        },
+        {
+          "type": "conditional",
+          "when": { "source": { "kind": "core", "stream": "system", "path": "mem.swapTotal" }, "op": "gt", "value": 0 },
+          "blocks": [
+            {
+              "type": "keyValue",
+              "source": { "kind": "core", "stream": "system" },
+              "rows": [
+                { "key": "mem.swapUsed", "label": "Swap used", "format": "bytes" },
+                { "key": "mem.swapTotal", "label": "Swap total", "format": "bytes" }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "source": { "kind": "invoke", "method": "list", "intervalKey": "processes" },
+      "columns": [
+        { "key": "pid", "label": "PID", "align": "right" },
+        { "key": "user", "label": "User" },
+        { "key": "cpu", "label": "CPU%", "format": "pct", "align": "right", "aggregate": true },
+        { "key": "mem", "label": "MEM%", "format": "pct", "align": "right", "aggregate": true },
+        { "key": "rssBytes", "label": "RSS", "format": "bytes", "align": "right", "aggregate": true },
+        { "key": "etime", "label": "Time" },
+        { "key": "args", "label": "Command" }
+      ],
+      "sortDefault": { "key": "cpu", "dir": "desc" },
+      "filterKeys": ["user", "args"],
+      "groupModes": [
+        { "id": "user", "label": "By user", "key": "user" },
+        { "id": "parent", "label": "By parent process", "key": "ppid", "parentIdKey": "pid" }
+      ],
+      "rowActions": [
+        {
+          "label": "Terminate",
+          "method": "kill",
+          "argsFromRow": ["pid"],
+          "args": ["TERM", false],
+          "confirm": "Send SIGTERM to this process?"
+        },
+        {
+          "label": "Kill",
+          "method": "kill",
+          "argsFromRow": ["pid"],
+          "args": ["KILL", false],
+          "confirm": "Force kill this process (SIGKILL)?",
+          "kind": "danger"
+        },
+        {
+          "label": "Renice",
+          "method": "renice",
+          "argsFromRow": ["pid"],
+          "prompt": { "label": "Nice value (-20 to 19)", "input": "number" }
+        }
+      ],
+      "emptyText": "No processes match the filter"
+    }
+  ]
+}

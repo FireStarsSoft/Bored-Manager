@@ -1,0 +1,93 @@
+{
+  "blocks": [
+    {
+      "type": "section",
+      "title": "Network",
+      "columns": 2,
+      "blocks": [
+        {
+          "type": "stat",
+          "label": "Download",
+          "source": { "kind": "stream", "event": "snapshot", "path": "totalRxRate" },
+          "format": "rate",
+          "spark": { "source": { "kind": "stream", "event": "series" }, "key": "rx" }
+        },
+        {
+          "type": "stat",
+          "label": "Upload",
+          "source": { "kind": "stream", "event": "snapshot", "path": "totalTxRate" },
+          "format": "rate",
+          "spark": { "source": { "kind": "stream", "event": "series" }, "key": "tx" }
+        }
+      ]
+    },
+    {
+      "type": "chart",
+      "title": "Traffic",
+      "kind": "area",
+      "source": { "kind": "stream", "event": "series" },
+      "format": "rate",
+      "series": [
+        { "key": "rx", "label": "Download" },
+        { "key": "tx", "label": "Upload" }
+      ]
+    },
+    {
+      "type": "section",
+      "title": "Interfaces",
+      "blocks": [
+        {
+          "type": "table",
+          "source": { "kind": "stream", "event": "snapshot", "path": "ifaces" },
+          "columns": [
+            { "key": "name", "label": "Interface" },
+            { "key": "state", "label": "State" },
+            { "key": "ipv4", "label": "IP addresses" },
+            { "key": "mac", "label": "MAC" },
+            { "key": "mtu", "label": "MTU", "align": "right" },
+            { "key": "speedMbps", "label": "Link (Mb/s)", "align": "right" },
+            { "key": "rxRate", "label": "Rx/s", "format": "rate", "align": "right" },
+            { "key": "txRate", "label": "Tx/s", "format": "rate", "align": "right" },
+            { "key": "rxTotal", "label": "RX total", "format": "bytes", "align": "right" },
+            { "key": "txTotal", "label": "TX total", "format": "bytes", "align": "right" }
+          ],
+          "sortDefault": { "key": "rxRate", "dir": "desc" },
+          "filterKeys": ["name"],
+          "emptyText": "No network interfaces reported"
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "title": "Bandwidth by process",
+      "blocks": [
+        {
+          "type": "table",
+          "source": { "kind": "stream", "event": "snapshot", "path": "processes" },
+          "rowKey": "pid",
+          "columns": [
+            { "key": "process", "label": "Process" },
+            { "key": "pid", "label": "PID", "align": "right" },
+            { "key": "connections", "label": "Conns", "align": "right" },
+            { "key": "rxRate", "label": "Rx/s", "format": "rate", "align": "right" },
+            { "key": "txRate", "label": "Tx/s", "format": "rate", "align": "right" },
+            { "key": "rxSession", "label": "Session RX", "format": "bytes", "align": "right" },
+            { "key": "txSession", "label": "Session TX", "format": "bytes", "align": "right" }
+          ],
+          "sortDefault": { "key": "rxRate", "dir": "desc" },
+          "filterKeys": ["process"],
+          "rowActions": [
+            {
+              "label": "Terminate",
+              "method": "killProcess",
+              "argsFromRow": ["pid"],
+              "confirm": "Send SIGTERM to this process? All of its network connections will be closed.",
+              "kind": "danger"
+            }
+          ],
+          "emptyText": "No per-process traffic measured yet"
+        }
+      ]
+    }
+  ]
+}

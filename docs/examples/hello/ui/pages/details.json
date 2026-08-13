@@ -1,0 +1,37 @@
+{
+  "blocks": [
+    {
+      "type": "section",
+      "title": "Target details",
+      "blocks": [
+        {
+          "type": "keyValue",
+          "source": { "kind": "stream", "event": "snapshot" },
+          "rows": [
+            { "key": "hostname", "label": "Hostname" },
+            { "key": "kernel", "label": "Kernel" },
+            { "key": "uptimeLabel", "label": "Uptime" },
+            { "key": "loggedIn", "label": "Logged in users", "format": "number" }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "title": "Danger zone",
+      "blocks": [
+        {
+          "type": "actions",
+          "actions": [
+            {
+              "label": "Reboot target machine",
+              "method": "reboot",
+              "confirm": "Reboot the target machine now? Every open session and unsaved work on it will be interrupted.",
+              "kind": "danger"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

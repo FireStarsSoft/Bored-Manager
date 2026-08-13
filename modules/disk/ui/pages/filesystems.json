@@ -1,0 +1,27 @@
+{
+  "blocks": [
+    {
+      "type": "section",
+      "title": "File systems",
+      "slowTarget": "storage",
+      "blocks": [
+        {
+          "type": "table",
+          "source": { "kind": "stream", "event": "storage", "path": "filesystems" },
+          "columns": [
+            { "key": "mount", "label": "Mount" },
+            { "key": "device", "label": "Device" },
+            { "key": "fstype", "label": "Type" },
+            { "key": "pct", "label": "Usage", "format": "pct", "align": "right" },
+            { "key": "usedBytes", "label": "Used", "format": "bytes", "align": "right" },
+            { "key": "sizeBytes", "label": "Size", "format": "bytes", "align": "right" },
+            { "key": "inodesPct", "label": "Inodes", "format": "pct", "align": "right" }
+          ],
+          "sortDefault": { "key": "mount", "dir": "asc" },
+          "filterKeys": ["mount", "device", "fstype"],
+          "emptyText": "No mounted file systems reported by df"
+        }
+      ]
+    }
+  ]
+}

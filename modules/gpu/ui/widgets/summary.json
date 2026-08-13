@@ -1,0 +1,31 @@
+{
+  "blocks": [
+    {
+      "type": "conditional",
+      "when": { "source": { "kind": "stream", "event": "snapshot", "path": "available" }, "op": "eq", "value": true },
+      "blocks": [
+        {
+          "type": "section",
+          "title": "GPU",
+          "blocks": [
+            {
+              "type": "stat",
+              "label": "Utilization",
+              "source": { "kind": "stream", "event": "snapshot", "path": "gpus.0.utilization" },
+              "format": "pct",
+              "spark": { "source": { "kind": "stream", "event": "series" }, "key": "util" }
+            },
+            {
+              "type": "list",
+              "source": { "kind": "stream", "event": "snapshot", "path": "processes" },
+              "columns": [{ "key": "name" }, { "key": "memMiB", "label": "MiB", "align": "right" }],
+              "limit": 3,
+              "emptyText": "No compute processes on the GPU"
+            }
+          ]
+        }
+      ],
+      "else": [{ "type": "section", "title": "No NVIDIA GPU detected", "blocks": [] }]
+    }
+  ]
+}

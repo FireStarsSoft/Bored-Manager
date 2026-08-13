@@ -1,0 +1,25 @@
+{
+  "blocks": [
+    {
+      "type": "section",
+      "title": "Hello",
+      "blocks": [
+        {
+          "type": "stat",
+          "label": "Uptime",
+          "source": { "kind": "stream", "event": "snapshot", "path": "uptimeLabel" },
+          "format": "text",
+          "spark": { "source": { "kind": "stream", "event": "series" }, "key": "uptime" }
+        },
+        {
+          "type": "keyValue",
+          "source": { "kind": "stream", "event": "snapshot" },
+          "rows": [
+            { "key": "kernel", "label": "Kernel" },
+            { "key": "loggedIn", "label": "Logged in", "format": "number" }
+          ]
+        }
+      ]
+    }
+  ]
+}

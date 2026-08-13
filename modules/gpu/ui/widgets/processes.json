@@ -1,0 +1,21 @@
+{
+  "blocks": [
+    {
+      "type": "section",
+      "title": "GPU processes",
+      "blocks": [
+        {
+          "type": "list",
+          "source": { "kind": "stream", "event": "snapshot", "path": "processes" },
+          "columns": [
+            { "key": "pid", "align": "right" },
+            { "key": "name" },
+            { "key": "memMiB", "label": "MiB", "align": "right" }
+          ],
+          "limit": 8,
+          "emptyText": "No compute processes on the GPU"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,95 @@
+{
+  "blocks": [
+    {
+      "type": "section",
+      "title": "Disk",
+      "columns": 3,
+      "blocks": [
+        {
+          "type": "stat",
+          "label": "Read",
+          "source": { "kind": "stream", "event": "snapshot", "path": "totalReadRate" },
+          "format": "rate",
+          "spark": { "source": { "kind": "stream", "event": "series" }, "key": "read" }
+        },
+        {
+          "type": "stat",
+          "label": "Write",
+          "source": { "kind": "stream", "event": "snapshot", "path": "totalWriteRate" },
+          "format": "rate",
+          "spark": { "source": { "kind": "stream", "event": "series" }, "key": "write" }
+        },
+        {
+          "type": "stat",
+          "label": "IOPS",
+          "source": { "kind": "stream", "event": "snapshot", "path": "totalIops" },
+          "format": "number",
+          "spark": { "source": { "kind": "stream", "event": "series" }, "key": "readIops" }
+        }
+      ]
+    },
+    {
+      "type": "chart",
+      "title": "Throughput",
+      "kind": "area",
+      "source": { "kind": "stream", "event": "series" },
+      "format": "rate",
+      "series": [
+        { "key": "read", "label": "Read" },
+        { "key": "write", "label": "Write" }
+      ]
+    },
+    {
+      "type": "section",
+      "title": "Storage devices",
+      "blocks": [
+        {
+          "type": "table",
+          "source": { "kind": "stream", "event": "snapshot", "path": "devices" },
+          "columns": [
+            { "key": "name", "label": "Device" },
+            { "key": "model", "label": "Model" },
+            { "key": "sizeBytes", "label": "Size", "format": "bytes", "align": "right" },
+            { "key": "readRate", "label": "Read/s", "format": "rate", "align": "right" },
+            { "key": "writeRate", "label": "Write/s", "format": "rate", "align": "right" },
+            { "key": "avgLatencyMs", "label": "Latency (ms)", "format": "number", "align": "right" },
+            { "key": "utilPct", "label": "Utilization", "format": "pct", "align": "right" }
+          ],
+          "sortDefault": { "key": "utilPct", "dir": "desc" },
+          "filterKeys": ["name", "model"],
+          "emptyText": "No block devices reported by /proc/diskstats"
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "title": "I/O by process",
+      "blocks": [
+        {
+          "type": "table",
+          "source": { "kind": "stream", "event": "snapshot", "path": "processes" },
+          "rowKey": "pid",
+          "columns": [
+            { "key": "process", "label": "Process" },
+            { "key": "pid", "label": "PID", "align": "right" },
+            { "key": "readRate", "label": "Read/s", "format": "rate", "align": "right" },
+            { "key": "writeRate", "label": "Write/s", "format": "rate", "align": "right" },
+            { "key": "readTotal", "label": "Read total", "format": "bytes", "align": "right" },
+            { "key": "writeTotal", "label": "Write total", "format": "bytes", "align": "right" }
+          ],
+          "sortDefault": { "key": "readRate", "dir": "desc" },
+          "filterKeys": ["process"],
+          "emptyText": "No process pushed bytes to the disk in this interval - reads served from the page cache and writes still in flight are not counted here. Without sudo, only your own processes are visible."
+        },
+        {
+          "type": "keyValue",
+          "source": { "kind": "stream", "event": "snapshot" },
+          "rows": [
+            { "key": "unattributedReadRate", "label": "Unattributed read", "format": "rate" },
+            { "key": "unattributedWriteRate", "label": "Unattributed write", "format": "rate" }
+          ]
+        }
+      ]
+    }
+  ]
+}

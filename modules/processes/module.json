@@ -1,0 +1,20 @@
+{
+  "apiVersion": 2,
+  "id": "processes",
+  "name": "Processes",
+  "version": "2.0.0",
+  "description": "A sortable, filterable process table with a glances-style system detail strip, plus kill (SIGTERM/SIGKILL) and renice.",
+  "author": "Bored Manager",
+  "minAppVersion": "0.0.1",
+  "entries": {
+    "main": "main/index.ts"
+  },
+  "pages": [
+    { "id": "main", "label": "Processes", "icon": "ListTree", "order": 10 },
+    { "id": "subservices", "label": "Sub services", "icon": "Activity", "order": 11 }
+  ],
+  "widgets": [],
+  "streams": [],
+  "methods": ["list", "kill", "renice"],
+  "fastInterval": "processes"
+}

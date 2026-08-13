@@ -1,0 +1,44 @@
+{
+  "apiVersion": 2,
+  "id": "docker",
+  "name": "Docker",
+  "version": "2.0.0",
+  "description": "Containers with CPU, memory, network and block I/O; docker inspect per container with logs and an exec shell; images, volumes, networks and what a prune would reclaim.",
+  "author": "Bored Manager",
+  "minAppVersion": "0.0.1",
+  "defaultEnabled": false,
+  "entries": {
+    "main": "main/index.ts"
+  },
+  "pages": [
+    { "id": "containers", "label": "Containers", "icon": "Container", "order": 60 },
+    { "id": "images", "label": "Images & storage", "icon": "Boxes", "order": 61 },
+    { "id": "logs", "label": "Logs", "icon": "FileText", "order": 62 }
+  ],
+  "widgets": [
+    { "id": "summary", "label": "Docker", "defaultEnabled": true, "order": 4 },
+    { "id": "resources", "label": "Docker resources", "order": 70 }
+  ],
+  "streams": [
+    { "event": "snapshot", "kind": "latest" },
+    { "event": "series", "kind": "series" },
+    { "event": "storage", "kind": "latest" }
+  ],
+  "methods": [
+    "images",
+    "volumes",
+    "networks",
+    "inspect",
+    "containerAction",
+    "removeImage",
+    "pruneImages",
+    "removeVolume",
+    "pruneVolumes",
+    "removeNetwork",
+    "pruneNetworks",
+    "logsStart",
+    "logsStop"
+  ],
+  "fastInterval": "docker",
+  "slowInterval": "docker"
+}

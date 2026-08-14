@@ -16,12 +16,28 @@ function expandHome(path: string): string {
   return path
 }
 
+/**
+ * Dispatch to every listener, isolating each one. These run inside a channel's
+ * 'data'/'close' event, where a throw is an uncaught exception that takes the
+ * whole server down - and the listeners belong to modules, which is exactly
+ * the code that should not be able to do that.
+ */
+function fanOut<T>(cbs: Array<(value: T) => void>, value: T): void {
+  for (const cb of cbs) {
+    try {
+      cb(value)
+    } catch (err) {
+      console.error('[ssh-executor] a stream listener threw:', err)
+    }
+  }
+}
+
 function wrapChannel(channel: ClientChannel): StreamHandle {
   const dataCbs: Array<(d: string) => void> = []
   const exitCbs: Array<(c: number | null) => void> = []
-  channel.on('data', (d: Buffer) => dataCbs.forEach((cb) => cb(d.toString('utf8'))))
-  channel.stderr.on('data', (d: Buffer) => dataCbs.forEach((cb) => cb(d.toString('utf8'))))
-  channel.on('close', () => exitCbs.forEach((cb) => cb(null)))
+  channel.on('data', (d: Buffer) => fanOut(dataCbs, d.toString('utf8')))
+  channel.stderr.on('data', (d: Buffer) => fanOut(dataCbs, d.toString('utf8')))
+  channel.on('close', () => fanOut(exitCbs, null))
   return {
     write: (data) => channel.write(data),
     kill: () => {

@@ -38,12 +38,28 @@ function loadNodePty(): any | null {
   return nodePty
 }
 
+/**
+ * Dispatch to every listener, isolating each one. These run inside a stream's
+ * 'data'/'exit' event, where a throw is an uncaught exception that takes the
+ * whole server down - and the listeners belong to modules, which is exactly
+ * the code that should not be able to do that.
+ */
+function fanOut<T>(cbs: Array<(value: T) => void>, value: T): void {
+  for (const cb of cbs) {
+    try {
+      cb(value)
+    } catch (err) {
+      console.error('[local-executor] a stream listener threw:', err)
+    }
+  }
+}
+
 function wrapChild(child: ChildProcess): StreamHandle {
   const dataCbs: Array<(d: string) => void> = []
   const exitCbs: Array<(c: number | null) => void> = []
-  child.stdout?.on('data', (d: Buffer) => dataCbs.forEach((cb) => cb(d.toString('utf8'))))
-  child.stderr?.on('data', (d: Buffer) => dataCbs.forEach((cb) => cb(d.toString('utf8'))))
-  child.on('exit', (code) => exitCbs.forEach((cb) => cb(code)))
+  child.stdout?.on('data', (d: Buffer) => fanOut(dataCbs, d.toString('utf8')))
+  child.stderr?.on('data', (d: Buffer) => fanOut(dataCbs, d.toString('utf8')))
+  child.on('exit', (code) => fanOut(exitCbs, code))
   return {
     write: (data) => child.stdin?.write(data),
     kill: () => {

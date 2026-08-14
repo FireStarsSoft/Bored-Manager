@@ -60,7 +60,7 @@ The conversion goes in `mergeSettings()` in `server/services/store.ts`:
 
 ### `MODULE_API_VERSION` (`shared/modules.ts`) — **2**
 
-Bump when the contract in `ModuleContext` or `ModuleMainInstance` changes in a way that breaks an existing module, **or** when the renderer half's shape changes (v2 replaced `entries.renderer` with `ui/*.json`). The app refuses any module whose `apiVersion` is not exactly this number, so a bump means **every module has to be updated and repackaged**, including the six default ones.
+Bump when the contract in `ModuleContext` or `ModuleMainInstance` changes in a way that breaks an existing module, **or** when the renderer half's shape changes (v2 replaced `entries.renderer` with `ui/*.json`). The app refuses any module whose `apiVersion` is not exactly this number, so a bump means **every module has to be updated and repackaged**, including the seven default ones.
 
 Adding an optional member to `ModuleContext` is not a breaking change and does not need a bump.
 

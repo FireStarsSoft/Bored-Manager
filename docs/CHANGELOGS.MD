@@ -2,6 +2,12 @@
 
 All notable changes to Bored Manager. Each module keeps its own changelog in `modules/<id>/CHANGELOG.md`, because module versions are independent of the app's.
 
+## 0.3.0
+
+- **New block type `statusCards`.** One tinted card per item in a resolved array, for a status wall whose card count comes from the data: a title row coloured by that item's health, a collapsible note, status chips clamped to a couple of rows with an expand control, and a column count the reader can change. `table` could not stand in for it — one row per item, no data-driven colour — and `section.columns` only grids blocks a spec listed by hand. A module using it needs `minAppVersion: "0.3.0"`.
+- **Services module.** A seventh default module (`service-fleet`), shipped **disabled**: watch and control systemd services across every machine in an IP range, from the machine you are connected to. Enable it in Settings → Modules.
+- **Update intervals → Services (fleet).** A fast key for how often the fleet pages re-read the last sweep, and a slow key for how often the machines are actually swept over SSH. Slow intervals gained a **2 minutes** option.
+
 ## 0.1.0
 
 Web UI on Linux. The desktop Electron app is gone.

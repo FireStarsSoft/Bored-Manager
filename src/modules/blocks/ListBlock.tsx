@@ -2,8 +2,8 @@ import * as React from 'react'
 import type { ListBlock } from '@shared/module-ui'
 import { cn } from '@/lib/utils'
 import { useBlockData } from '../binding'
-import { formatBlockValue } from '../format'
 import type { BlockCtx } from '../BlockRenderer'
+import { BlockValue } from './value-cell'
 
 export function ListBlockView({ block, ctx }: { block: ListBlock; ctx: BlockCtx }): React.JSX.Element {
   const raw = useBlockData(ctx.moduleId, block.source, ctx)
@@ -26,7 +26,7 @@ export function ListBlockView({ block, ctx }: { block: ListBlock; ctx: BlockCtx 
                 col.align === 'right' && 'text-right'
               )}
             >
-              {formatBlockValue(col.format, row[col.key])}
+              <BlockValue format={col.format} value={row[col.key]} />
             </span>
           ))}
         </div>

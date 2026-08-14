@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, copyFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync, copyFileSync } from 'fs'
 import { dirname, join, resolve } from 'path'
 import {
   DEFAULT_SETTINGS,
@@ -18,6 +18,8 @@ import { decryptString, encryptString, isEncrypted } from './secret'
  * Everything lives inside the app root folder (portable install):
  *   data/connections.json     - recent connections (passwords encrypted with data/secret.key)
  *   data/user-settings/settings.json - user customisations, easy to import/export
+ *   data/user-settings/module-config/<id>.json - a module's own settings
+ *   data/module-data/<id>/<hostKey>.json - what a module remembers per target
  */
 
 let rootCache: string | null = null
@@ -98,7 +100,7 @@ function readJson<T>(file: string, fallback: T): T {
 }
 
 function writeJson(file: string, value: unknown): void {
-  ensureDirs()
+  mkdirSync(dirname(file), { recursive: true })
   writeFileSync(file, JSON.stringify(value, null, 2), 'utf8')
 }
 
@@ -117,17 +119,25 @@ interface LegacySettings {
 }
 
 /**
- * v2 card names -> v3 widget ids. The cards that moved into a module carry its
- * id now, so both the enabled flags and the saved grid positions have to be
- * renamed; the cards the app kept keep their name.
+ * v2 card names -> current widget ids. The cards that moved into a module
+ * carry its id now, so both the enabled flags and the saved grid positions
+ * have to be renamed; the cards the app kept keep their name. The Docker
+ * entries point straight at the Container module rather than at a name that
+ * has since been renamed again - a v2 file is converted once, not twice.
  */
 const V2_CARD_IDS: Record<string, string> = {
   gpu: 'gpu.summary',
-  docker: 'docker.summary',
+  docker: 'container.summary',
   sensors: 'sensors.summary',
   filesystems: 'disk.filesystems',
   gpuProcesses: 'gpu.processes',
-  dockerCounts: 'docker.resources'
+  dockerCounts: 'container.resources'
+}
+
+/** v5 widget ids -> v6: the Docker module became Container when Incus joined it. */
+const V5_CARD_IDS: Record<string, string> = {
+  'docker.summary': 'container.summary',
+  'docker.resources': 'container.resources'
 }
 
 /**
@@ -137,7 +147,7 @@ const V2_CARD_IDS: Record<string, string> = {
 export const V2_COLLECTOR_MODULES: Record<string, string> = {
   sensors: 'sensors',
   gpu: 'gpu',
-  docker: 'docker',
+  docker: 'container',
   processes: 'processes'
 }
 
@@ -174,16 +184,41 @@ function migrateWidgets(legacy: LegacySettings): Record<string, boolean> {
   return out
 }
 
-function migrateLayout(layout: AppSettings['overviewLayout']): AppSettings['overviewLayout'] {
+function migrateLayout(
+  layout: AppSettings['overviewLayout'],
+  ids: Record<string, string>
+): AppSettings['overviewLayout'] {
   const out: AppSettings['overviewLayout'] = {}
   for (const [breakpoint, items] of Object.entries(layout)) {
     if (!Array.isArray(items)) continue
     out[breakpoint as 'lg' | 'md'] = items.map((item) => ({
       ...item,
-      i: V2_CARD_IDS[item.i] ?? item.i
+      i: ids[item.i] ?? item.i
     }))
   }
   return out
+}
+
+function renameKeys<T>(source: Record<string, T>, ids: Record<string, string>): Record<string, T> {
+  const out: Record<string, T> = {}
+  for (const [key, value] of Object.entries(source)) out[ids[key] ?? key] = value
+  return out
+}
+
+/**
+ * Carry an interval key over to its new name without losing the speed the user
+ * chose. Applied to what the FILE said, before the defaults are merged in -
+ * against the merged object the new key would always already be there, and the
+ * carried-over value would be silently dropped for the default.
+ *
+ * The old key goes: leaving it behind would show up in nothing and be written
+ * back to disk forever, since `refresh` is spread rather than filtered so a
+ * module-declared key survives.
+ */
+function renameIntervalKey<T>(fromFile: Record<string, T>, from: string, to: string): void {
+  if (!(from in fromFile)) return
+  if (!(to in fromFile)) fromFile[to] = fromFile[from]
+  delete fromFile[from]
 }
 
 /**
@@ -196,13 +231,28 @@ function mergeSettings(partial: Partial<AppSettings> | null | undefined): AppSet
   const p = partial ?? {}
   const legacy = p as LegacySettings
   const fromV2 = (p.settingsVersion ?? 0) < 3
-  const slowRefresh = { ...DEFAULT_SETTINGS.slowRefresh, ...(p.slowRefresh ?? {}) }
+  // v5 -> v6: the Docker module became Container, taking its interval keys and
+  // its two Overview widgets with it. The interval keys predate modules, so
+  // every older file has them; the widget ids only need the v5 map when the v2
+  // one did not already rewrite them straight to their current names.
+  const fromV5 = (p.settingsVersion ?? 0) < 6
+  const fileRefresh = { ...(p.refresh ?? {}) }
+  const fileSlowRefresh = { ...(p.slowRefresh ?? {}) }
+  if (fromV5) {
+    renameIntervalKey(fileRefresh, 'docker', 'container')
+    renameIntervalKey(fileSlowRefresh, 'docker', 'container')
+  }
+  const refresh = { ...DEFAULT_SETTINGS.refresh, ...fileRefresh }
+  const slowRefresh = { ...DEFAULT_SETTINGS.slowRefresh, ...fileSlowRefresh }
   if (!p.slowRefresh && typeof legacy.refreshSlow === 'number') {
     slowRefresh.storage = legacy.refreshSlow
   }
-  const widgets = { ...(p.overviewWidgets ?? {}) }
+  let widgets = { ...(p.overviewWidgets ?? {}) }
   if (fromV2) Object.assign(widgets, migrateWidgets(legacy))
-  const layout = p.overviewLayout ?? {}
+  else if (fromV5) widgets = renameKeys(widgets, V5_CARD_IDS)
+  let layout = p.overviewLayout ?? {}
+  if (fromV2) layout = migrateLayout(layout, V2_CARD_IDS)
+  else if (fromV5) layout = migrateLayout(layout, V5_CARD_IDS)
   // v3 kept the update link at the top level; v4 keeps it next to the repo it
   // is downloaded from, so the two live and travel together.
   const fromV3 = (p.settingsVersion ?? 0) < 4
@@ -219,10 +269,10 @@ function mergeSettings(partial: Partial<AppSettings> | null | undefined): AppSet
     density: p.density ?? DEFAULT_SETTINGS.density,
     densityAutoDetected: p.densityAutoDetected ?? DEFAULT_SETTINGS.densityAutoDetected,
     historyWindow: p.historyWindow ?? DEFAULT_SETTINGS.historyWindow,
-    refresh: { ...DEFAULT_SETTINGS.refresh, ...(p.refresh ?? {}) },
+    refresh,
     slowRefresh,
     overviewWidgets: widgets,
-    overviewLayout: fromV2 ? migrateLayout(layout) : layout,
+    overviewLayout: layout,
     collectors: pickKnown(DEFAULT_SETTINGS.collectors, p.collectors),
     detailPolling: pickKnown(DEFAULT_SETTINGS.detailPolling, p.detailPolling),
     history: pickKnown(DEFAULT_SETTINGS.history, p.history),
@@ -382,6 +432,99 @@ export function writeModuleRegistry(modules: Record<string, ModuleRuntimeState>)
   } catch {
     // A read-only app folder must not stop modules from running this session.
   }
+}
+
+// ---------- Module config and per-host module data ----------
+
+/**
+ * A module writes these through ctx, so the id and host key that end up in the
+ * path are not fully under the app's control. Anything that is not a plain
+ * name is refused rather than sanitised, so a bad key fails loudly at the one
+ * call site instead of quietly sharing a file with another module.
+ */
+function safeSegment(value: string): string | null {
+  if (value === '.' || value === '..') return null
+  return /^[A-Za-z0-9._@-]+$/.test(value) ? value : null
+}
+
+/** A module that goes wrong should not be able to fill the disk. */
+const MODULE_JSON_MAX_BYTES = 512 * 1024
+
+function writeCappedJson(file: string, value: unknown): void {
+  const text = JSON.stringify(value ?? null, null, 2)
+  if (Buffer.byteLength(text, 'utf8') > MODULE_JSON_MAX_BYTES) {
+    throw new Error(`payload is larger than ${MODULE_JSON_MAX_BYTES / 1024} KB`)
+  }
+  mkdirSync(dirname(file), { recursive: true })
+  writeFileSync(file, text, 'utf8')
+}
+
+/**
+ * A module's own settings, one file per module. They sit next to the app
+ * settings rather than in the module folder: `data/user-settings/` is what an
+ * update carries over, so a rule the user changed survives reinstalling the
+ * module, and a module cannot ship a new version of its own overrides.
+ */
+function moduleConfigFile(id: string): string {
+  return join(userSettingsDir(), 'module-config', `${id}.json`)
+}
+
+export function readModuleConfig(id: string): unknown {
+  const safe = safeSegment(id)
+  if (!safe) return null
+  return readJson<unknown>(moduleConfigFile(safe), null)
+}
+
+export function writeModuleConfig(id: string, value: unknown): void {
+  const safe = safeSegment(id)
+  if (!safe) throw new Error(`invalid module id "${id}"`)
+  writeCappedJson(moduleConfigFile(safe), value)
+}
+
+/**
+ * Both stores below are a module's private sandbox: nothing else reads them,
+ * and once its folder is gone nothing can. Uninstalling therefore takes them
+ * with it - unlike the `settings.json` keys, which belong to the app's own
+ * file and are deliberately kept so reinstalling puts the widgets back.
+ *
+ * An update never comes through here: the installer swaps the folder in place
+ * (see module-installer.ts install()), so upgrading a module keeps its tags.
+ */
+export function deleteModuleConfig(id: string): void {
+  const safe = safeSegment(id)
+  if (!safe) return
+  rmSync(moduleConfigFile(safe), { force: true })
+}
+
+/**
+ * What a module remembers about one target machine - tags it invented, job
+ * history, saved templates. Keyed by hostKeyFor() like the metrics history, so
+ * two machines never see each other's data, and nothing has to be written on
+ * the target itself (which would need sudo and a writable filesystem there).
+ */
+function moduleDataFile(moduleId: string, hostKey: string): string {
+  return join(dataDir(), 'module-data', moduleId, `${hostKey}.json`)
+}
+
+export function readModuleData(moduleId: string, hostKey: string): unknown {
+  const id = safeSegment(moduleId)
+  const key = safeSegment(hostKey)
+  if (!id || !key) return null
+  return readJson<unknown>(moduleDataFile(id, key), null)
+}
+
+export function writeModuleData(moduleId: string, hostKey: string, value: unknown): void {
+  const id = safeSegment(moduleId)
+  const key = safeSegment(hostKey)
+  if (!id || !key) throw new Error(`invalid module data key "${moduleId}/${hostKey}"`)
+  writeCappedJson(moduleDataFile(id, key), value)
+}
+
+/** Every machine's copy at once - see the note on deleteModuleConfig. */
+export function deleteModuleData(moduleId: string): void {
+  const id = safeSegment(moduleId)
+  if (!id) return
+  rmSync(join(dataDir(), 'module-data', id), { recursive: true, force: true })
 }
 
 // ---------- Saved connections ----------

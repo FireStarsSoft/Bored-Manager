@@ -1,0 +1,265 @@
+{
+  "blocks": [
+    {
+      "type": "conditional",
+      "when": {
+        "source": { "kind": "invoke", "method": "netTunables", "intervalKey": "network", "path": "sudo" },
+        "op": "eq",
+        "value": false
+      },
+      "blocks": [
+        {
+          "type": "section",
+          "title": "Read-only without sudo. Reconnect with a sudo password, or as root, to change any of these.",
+          "blocks": []
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "title": "Neighbour / ARP table",
+      "columns": 3,
+      "blocks": [
+        {
+          "type": "stat",
+          "label": "IPv4 entries",
+          "source": { "kind": "invoke", "method": "netTunables", "intervalKey": "network", "path": "usage.neighEntries4" },
+          "format": "number"
+        },
+        {
+          "type": "stat",
+          "label": "IPv6 entries",
+          "source": { "kind": "invoke", "method": "netTunables", "intervalKey": "network", "path": "usage.neighEntries6" },
+          "format": "number"
+        },
+        {
+          "type": "meter",
+          "label": "IPv4 table in use",
+          "source": { "kind": "invoke", "method": "netTunables", "intervalKey": "network", "path": "usage.neighUsagePct" },
+          "format": "pct",
+          "max": 100
+        },
+        {
+          "type": "keyValue",
+          "source": { "kind": "invoke", "method": "netTunables", "intervalKey": "network", "path": "current" },
+          "rows": [
+            { "key": "net.ipv4.neigh.default.gc_thresh1", "label": "IPv4 gc_thresh1 (never collect below)" },
+            { "key": "net.ipv4.neigh.default.gc_thresh2", "label": "IPv4 gc_thresh2 (collect after 5s)" },
+            { "key": "net.ipv4.neigh.default.gc_thresh3", "label": "IPv4 gc_thresh3 (hard cap)" },
+            { "key": "net.ipv6.neigh.default.gc_thresh1", "label": "IPv6 gc_thresh1" },
+            { "key": "net.ipv6.neigh.default.gc_thresh2", "label": "IPv6 gc_thresh2" },
+            { "key": "net.ipv6.neigh.default.gc_thresh3", "label": "IPv6 gc_thresh3" }
+          ]
+        },
+        {
+          "type": "keyValue",
+          "source": { "kind": "invoke", "method": "netTunables", "intervalKey": "network", "path": "persisted" },
+          "rows": [
+            { "key": "net.ipv4.neigh.default.gc_thresh1", "label": "Persisted gc_thresh1" },
+            { "key": "net.ipv4.neigh.default.gc_thresh2", "label": "Persisted gc_thresh2" },
+            { "key": "net.ipv4.neigh.default.gc_thresh3", "label": "Persisted gc_thresh3" }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "title": "File descriptors",
+      "columns": 3,
+      "blocks": [
+        {
+          "type": "stat",
+          "label": "Open now",
+          "source": { "kind": "invoke", "method": "netTunables", "intervalKey": "network", "path": "usage.filesOpen" },
+          "format": "number"
+        },
+        {
+          "type": "stat",
+          "label": "ulimit -n",
+          "source": { "kind": "invoke", "method": "netTunables", "intervalKey": "network", "path": "usage.fdSoftLimit" },
+          "format": "number"
+        },
+        {
+          "type": "meter",
+          "label": "Of fs.file-max",
+          "source": { "kind": "invoke", "method": "netTunables", "intervalKey": "network", "path": "usage.fdUsagePct" },
+          "format": "pct",
+          "max": 100
+        },
+        {
+          "type": "keyValue",
+          "source": { "kind": "invoke", "method": "netTunables", "intervalKey": "network", "path": "current" },
+          "rows": [
+            { "key": "fs.file-max", "label": "fs.file-max (system wide)" },
+            { "key": "fs.nr_open", "label": "fs.nr_open (per process ceiling)" }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "title": "Inotify",
+      "blocks": [
+        {
+          "type": "keyValue",
+          "source": { "kind": "invoke", "method": "netTunables", "intervalKey": "network", "path": "current" },
+          "rows": [
+            { "key": "fs.inotify.max_user_watches", "label": "max_user_watches" },
+            { "key": "fs.inotify.max_user_instances", "label": "max_user_instances" },
+            { "key": "fs.inotify.max_queued_events", "label": "max_queued_events" }
+          ]
+        },
+        {
+          "type": "section",
+          "title": "Each watch costs about 1 KB of kernel memory, and the limit is per user, not per process - one build tool watching a large tree can exhaust it for everything else that user runs.",
+          "blocks": []
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "title": "Conntrack and queues",
+      "columns": 2,
+      "blocks": [
+        {
+          "type": "stat",
+          "label": "Tracked connections",
+          "source": { "kind": "invoke", "method": "netTunables", "intervalKey": "network", "path": "usage.conntrackCount" },
+          "format": "number"
+        },
+        {
+          "type": "meter",
+          "label": "Of nf_conntrack_max",
+          "source": { "kind": "invoke", "method": "netTunables", "intervalKey": "network", "path": "usage.conntrackUsagePct" },
+          "format": "pct",
+          "max": 100
+        },
+        {
+          "type": "keyValue",
+          "source": { "kind": "invoke", "method": "netTunables", "intervalKey": "network", "path": "current" },
+          "rows": [
+            { "key": "net.netfilter.nf_conntrack_max", "label": "nf_conntrack_max" },
+            { "key": "net.core.somaxconn", "label": "somaxconn (accept queue)" },
+            { "key": "net.core.netdev_max_backlog", "label": "netdev_max_backlog" },
+            { "key": "net.ipv4.ip_local_port_range", "label": "ip_local_port_range" }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "title": "Scale for N container addresses",
+      "blocks": [
+        {
+          "type": "checkForm",
+          "checkMethod": "planCheck",
+          "applyMethod": "planApply",
+          "applyLabel": "Apply the plan",
+          "fields": [
+            {
+              "key": "targetIps",
+              "label": "How many container addresses",
+              "input": "number",
+              "initial": 1000,
+              "help": "Every proposal only ever raises a limit, so a machine already tuned higher keeps what it has."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "title": "Set one value at a time",
+      "blocks": [
+        {
+          "type": "checkForm",
+          "checkMethod": "tunablesCheck",
+          "applyMethod": "tunablesApply",
+          "applyLabel": "Apply these values",
+          "kind": "danger",
+          "fields": [
+            { "key": "net.ipv4.neigh.default.gc_thresh1", "label": "IPv4 gc_thresh1", "input": "number" },
+            { "key": "net.ipv4.neigh.default.gc_thresh2", "label": "IPv4 gc_thresh2", "input": "number" },
+            { "key": "net.ipv4.neigh.default.gc_thresh3", "label": "IPv4 gc_thresh3", "input": "number" },
+            { "key": "net.ipv6.neigh.default.gc_thresh1", "label": "IPv6 gc_thresh1", "input": "number" },
+            { "key": "net.ipv6.neigh.default.gc_thresh2", "label": "IPv6 gc_thresh2", "input": "number" },
+            { "key": "net.ipv6.neigh.default.gc_thresh3", "label": "IPv6 gc_thresh3", "input": "number" },
+            { "key": "fs.file-max", "label": "fs.file-max", "input": "number" },
+            { "key": "fs.nr_open", "label": "fs.nr_open", "input": "number" },
+            { "key": "fs.inotify.max_user_watches", "label": "inotify max_user_watches", "input": "number" },
+            { "key": "fs.inotify.max_user_instances", "label": "inotify max_user_instances", "input": "number" },
+            { "key": "fs.inotify.max_queued_events", "label": "inotify max_queued_events", "input": "number" },
+            { "key": "net.core.somaxconn", "label": "somaxconn", "input": "number" },
+            { "key": "net.core.netdev_max_backlog", "label": "netdev_max_backlog", "input": "number" },
+            {
+              "key": "net.ipv4.ip_local_port_range",
+              "label": "ip_local_port_range",
+              "input": "text",
+              "placeholder": "32768 60999",
+              "help": "Two numbers: low then high."
+            },
+            { "key": "net.netfilter.nf_conntrack_max", "label": "nf_conntrack_max", "input": "number" }
+          ]
+        },
+        {
+          "type": "section",
+          "title": "Leave a field empty to keep whatever the kernel has. Anything applied is written to the running kernel and to /etc/sysctl.d/99-bored-manager.conf, which this module owns.",
+          "blocks": []
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "title": "Validation bounds",
+      "blocks": [
+        {
+          "type": "keyValue",
+          "source": { "kind": "invoke", "method": "rulesEffective", "intervalKey": "network" },
+          "rows": [
+            { "key": "maxGcThresh3", "label": "Highest neighbour threshold" },
+            { "key": "maxFileMax", "label": "Highest fs.file-max / fs.nr_open" },
+            { "key": "maxInotifyWatches", "label": "Highest inotify watches" }
+          ]
+        },
+        {
+          "type": "checkForm",
+          "title": "Change the bounds",
+          "checkMethod": "rulesCheck",
+          "applyMethod": "rulesApply",
+          "applyLabel": "Save bounds",
+          "fields": [
+            {
+              "key": "maxGcThresh3",
+              "label": "Highest neighbour threshold",
+              "input": "number",
+              "help": "1024 to 16000000. Empty uses the default of 1000000."
+            },
+            {
+              "key": "maxFileMax",
+              "label": "Highest fs.file-max / fs.nr_open",
+              "input": "number",
+              "help": "65536 to 500000000. Empty uses the default of 50000000."
+            },
+            {
+              "key": "maxInotifyWatches",
+              "label": "Highest inotify watches",
+              "input": "number",
+              "help": "8192 to 100000000. Empty uses the default of 10000000."
+            }
+          ]
+        },
+        {
+          "type": "actions",
+          "actions": [
+            {
+              "label": "Reset bounds",
+              "method": "rulesReset",
+              "confirm": "Put every validation bound back to its default?",
+              "kind": "danger"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

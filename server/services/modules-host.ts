@@ -13,16 +13,25 @@ import type {
   ModuleMainInstance,
   ModuleManifest,
   ModuleRuntimeState,
-  ModuleSource
+  ModuleSource,
+  ModuleStreamHandle
 } from '@shared/modules'
-import { MODULE_MANIFEST_FILE, manifestProblems } from '@shared/modules'
+import { MODULE_MANIFEST_FILE, historyStreamProblem, manifestProblems } from '@shared/modules'
 import type { ModuleSpecsEntry, PageSpec, WidgetSpec } from '@shared/module-ui'
 import { specProblems } from '@shared/module-ui'
 import { connection } from '../connection'
 import { Poller } from './poller'
 import type { MetricsHistoryService } from './history'
 import { compileModule } from './module-compiler'
-import { appRoot, readModuleRegistry, writeModuleRegistry } from './store'
+import {
+  appRoot,
+  readModuleConfig,
+  readModuleData,
+  readModuleRegistry,
+  writeModuleConfig,
+  writeModuleData,
+  writeModuleRegistry
+} from './store'
 
 /**
  * Modules are folders read from disk at runtime, not code compiled into the
@@ -84,7 +93,16 @@ export function modulesDir(): string {
   return join(appRoot(), 'modules')
 }
 
+/**
+ * The folder a module lives in. The id reaches this from a manifest, from a
+ * directory listing and from an RPC call, so it is checked here rather than at
+ * each of those: one path separator or `..` and `join` would hand out a folder
+ * outside `modules/` - which callers go on to hash, compile into, or delete.
+ */
 export function moduleDir(id: string): string {
+  if (!id || id === '.' || id === '..' || /[\\/]/.test(id)) {
+    throw new Error(`"${id}" is not a module folder name`)
+  }
   return join(modulesDir(), id)
 }
 
@@ -161,11 +179,83 @@ function discoverModules(): Map<string, LoadedModule> {
   return out
 }
 
+/**
+ * Modules that changed folder name between app versions. The registry is keyed
+ * by folder, so without this the successor arrives as a brand new module at
+ * its own `defaultEnabled` - which for Container is off, silently taking away
+ * a page the user had been using.
+ */
+const RENAMED_MODULES: Record<string, string> = { docker: 'container' }
+
+/**
+ * Move the old id's registry entry onto the new one. Only the switch and the
+ * install date are worth keeping - the version, hash and source describe the
+ * folder that is actually on disk, and letting the old hash through would
+ * report the new module as modified. The old entry goes either way: if that
+ * folder is still there (an update unpacked over the previous install) it then
+ * comes back as a new, switched-off module rather than running alongside its
+ * own successor.
+ */
+function carryOverRenamed(
+  stored: Record<string, ModuleRuntimeState>,
+  onDisk: Map<string, LoadedModule>,
+  lock: ModulesLock['modules']
+): void {
+  for (const [from, to] of Object.entries(RENAMED_MODULES)) {
+    const previous = stored[from]
+    if (!previous || stored[to] || !onDisk.has(to)) continue
+    stored[to] = {
+      id: to,
+      enabled: previous.enabled,
+      version: '0.0.0',
+      hash: '',
+      source: lock[to] != null ? 'default' : previous.source,
+      installedAt: previous.installedAt,
+      updatedAt: Date.now()
+    }
+    delete stored[from]
+  }
+}
+
+/**
+ * The hash a module carries into this session. Normally the one recorded when
+ * it was installed - comparing against that is the whole point of the check.
+ *
+ * The exception is a module the app itself ships, at a version the registry
+ * has not seen: an app update replaces those folders wholesale without going
+ * through the installer, so the previous version's hash would not match and
+ * every updated module would be reported as tampered with. The lock file that
+ * arrived alongside those files says what they should hash to, and it only
+ * answers for the exact version on disk - a folder edited by hand still fails.
+ */
+function carriedHash(
+  prev: ModuleRuntimeState,
+  locked: ModulesLock['modules'][string] | undefined,
+  version: string
+): string {
+  if (prev.version === version) return prev.hash
+  return locked?.version === version ? locked.hash : prev.hash
+}
+
 // ---------- The host ----------
 
+/**
+ * One running module, and everything the app has to be able to take back off
+ * it. `instance` is what the module returned; the four collections are what
+ * the app handed out and therefore what it can revoke without the module's
+ * cooperation - which is the whole point, since a module that is being
+ * switched off is not necessarily one that behaves.
+ */
 interface Live {
   instance: ModuleMainInstance
+  /** RPC channels registered through `ctx.handle`. */
   handlers: Set<string>
+  /** Every poller `ctx.createPoller` handed out; the ones still ticking are stopped if `dispose()` did not. */
+  pollers: Set<Poller>
+  /** Commands started through `ctx.stream` that are still running - each drops out when it exits. */
+  streams: Set<ModuleStreamHandle>
+  /** Flipped before `dispose()`; every `ctx` member throws once it is set. */
+  revoked: boolean
 }
 
 /**
@@ -182,6 +272,8 @@ export class ModulesHost {
   private settings: AppSettings | null = null
   /** Tabs open in any connected browser; see RpcRouter.activeTabs(). */
   private activeTabs = new Set<string>()
+  /** Which machine ctx.hostDataGet/Set read and write; null while disconnected. */
+  private hostKey: string | null = null
 
   constructor(
     private readonly history: MetricsHistoryService,
@@ -199,12 +291,14 @@ export class ModulesHost {
   init(disabledByMigration: string[]): void {
     const stored = readModuleRegistry()
     const lock = readLock()
+    carryOverRenamed(stored, this.compiled, lock)
     const now = Date.now()
     for (const [id, loaded] of this.compiled) {
       const prev = stored[id]
       const isDefault = lock[id] != null
+      const version = loaded.manifest.version ?? prev?.version ?? '0.0.0'
       const state: ModuleRuntimeState = prev
-        ? { ...prev, version: loaded.manifest.version ?? prev.version }
+        ? { ...prev, version, hash: carriedHash(prev, lock[id], version) }
         : {
             id,
             enabled: loaded.manifest.defaultEnabled ?? true,
@@ -383,6 +477,15 @@ export class ModulesHost {
   }
 
   /**
+   * Point per-host module data at the machine that just connected, using the
+   * same key the metrics history files use. Set to null on disconnect so a
+   * module cannot keep writing to the host it is no longer talking to.
+   */
+  setHostKey(key: string | null): void {
+    this.hostKey = key
+  }
+
+  /**
    * Bring the running set in line with what is enabled, then let each running
    * module start or stop its own pollers. Called whenever anything that can
    * influence a poller changed.
@@ -419,6 +522,16 @@ export class ModulesHost {
     const loaded = readManifest(id)
     if (loaded) this.compiled.set(id, loaded)
     else this.compiled.delete(id)
+  }
+
+  /**
+   * Stop a module without forgetting it. The installer calls this before it
+   * deletes a folder: the module has to be off the target machine and out of
+   * the RPC table *before* the files go, or a poller tick lands halfway
+   * through the removal.
+   */
+  stop(id: string): void {
+    this.deactivate(id)
   }
 
   /** Forget a module after its folder was deleted; nothing on disk backs it any more. */
@@ -479,7 +592,16 @@ export class ModulesHost {
   private async activate(id: string): Promise<{ ok: true } | { ok: false; error: string }> {
     const loaded = this.compiled.get(id)
     if (!loaded) return { ok: false, error: `module "${id}" is not known` }
-    const handlers = new Set<string>()
+    // Built before the module runs, because `activate()` uses `ctx` while it
+    // is still being called - a poller it creates has to land in this record,
+    // not in one written afterwards.
+    const live: Live = {
+      instance: { dispose: () => {} },
+      handlers: new Set(),
+      pollers: new Set(),
+      streams: new Set(),
+      revoked: false
+    }
     try {
       if (this.needsCompile(id)) await compileModule(id)
       const dist = join(moduleDir(id), '.dist', 'main.mjs')
@@ -487,18 +609,21 @@ export class ModulesHost {
         default?: ModuleActivate
       }
       if (typeof mod.default !== 'function') throw new Error('main entry has no default export function')
-      const ctx = this.contextFor(id, handlers)
-      const instance = mod.default(ctx)
-      this.live.set(id, { instance, handlers })
+      live.instance = mod.default(this.contextFor(id, loaded.manifest, live))
+      this.live.set(id, live)
       loaded.problem = undefined
       try {
-        instance.applyPollers?.()
+        live.instance.applyPollers?.()
       } catch (err) {
         this.logger(`module ${id}: applyPollers failed: ${String(err)}`)
       }
       return { ok: true }
     } catch (err) {
-      for (const channel of handlers) this.unregisterHandler(channel)
+      // Half of a module is worse than none: take back whatever it managed to
+      // register before it threw, and revoke the context so anything it had
+      // already scheduled cannot carry on against a module that is not live.
+      live.revoked = true
+      this.releaseResources(id, live)
       const error = message(err)
       loaded.problem = `activate() failed: ${error}`
       this.logger(`module ${id}: ${loaded.problem}`)
@@ -538,15 +663,60 @@ export class ModulesHost {
     return newest
   }
 
+  /**
+   * Stop a module: its own `dispose()` first, then the app takes back
+   * everything it handed out. The order matters - `dispose()` is the module's
+   * chance to shut a stream down politely (send a quit, flush a buffer), and
+   * it still holds a working context while it does. Afterwards the context is
+   * dead and anything left over is cut off.
+   */
   private deactivate(id: string): void {
     const live = this.live.get(id)
     if (!live) return
     this.live.delete(id)
-    for (const channel of live.handlers) this.unregisterHandler(channel)
     try {
       live.instance.dispose()
     } catch (err) {
       this.logger(`module ${id}: dispose failed: ${String(err)}`)
+    }
+    live.revoked = true
+    this.releaseResources(id, live)
+  }
+
+  /**
+   * Unregister the module's RPC channels and cut off whatever it left
+   * running. A poller or stream reaching this point is a bug in the module -
+   * it is logged as one, since "disabling a module stops it touching the
+   * target machine" is otherwise only true of modules that remember to.
+   */
+  private releaseResources(id: string, live: Live): void {
+    for (const channel of live.handlers) this.unregisterHandler(channel)
+    live.handlers.clear()
+    // Only the ones still ticking are worth a line: the set holds every poller
+    // the module ever created, and a module that stopped its own has done
+    // exactly what it was asked to.
+    const leaked = [...live.pollers].filter((p) => p.active)
+    live.pollers.clear()
+    if (leaked.length > 0) {
+      this.logger(`module ${id}: ${leaked.length} poller(s) still running after dispose() - stopping them`)
+      for (const poller of leaked) {
+        try {
+          poller.stop()
+        } catch {
+          /* a poller that cannot be stopped is still worth trying the next one */
+        }
+      }
+    }
+    if (live.streams.size > 0) {
+      this.logger(`module ${id}: ${live.streams.size} command(s) still running after dispose() - killing them`)
+      for (const stream of live.streams) {
+        try {
+          stream.kill()
+        } catch {
+          /* the target may have ended it already */
+        }
+      }
+      live.streams.clear()
     }
   }
 
@@ -579,38 +749,83 @@ export class ModulesHost {
     return out
   }
 
-  /** Route a manual slow refresh to whichever running module owns the target. */
+  /**
+   * Route a manual slow refresh to whichever running module owns the target.
+   * Targets are a flat namespace shared with the app's own sections, so two
+   * modules can claim the same one; the first still wins, but the clash is
+   * logged rather than leaving the user with a refresh button that quietly
+   * belongs to somebody else.
+   */
   async refreshSlow(target: SlowRefreshTarget): Promise<void> {
+    const owners: string[] = []
     for (const [id, live] of this.live) {
-      const targets = live.instance.slowTargets?.() ?? []
-      if (!targets.includes(target)) continue
-      try {
-        await live.instance.refreshSlow?.(target)
-      } catch (err) {
-        this.logger(`module ${id}: refreshSlow(${target}) failed: ${String(err)}`)
-      }
-      return
+      if ((live.instance.slowTargets?.() ?? []).includes(target)) owners.push(id)
+    }
+    if (owners.length === 0) return
+    if (owners.length > 1) {
+      this.logger(
+        `slow refresh target "${target}" is claimed by ${owners.join(', ')} - only ${owners[0]} will answer it`
+      )
+    }
+    const live = this.live.get(owners[0])
+    try {
+      await live?.instance.refreshSlow?.(target)
+    } catch (err) {
+      this.logger(`module ${owners[0]}: refreshSlow(${target}) failed: ${String(err)}`)
     }
   }
 
   // ---------- Context ----------
 
-  private contextFor(id: string, handlers: Set<string>): ModuleContext {
+  /**
+   * The `ctx` one module sees. Everything it can reach is bound to `id` here -
+   * the RPC channels it registers, the event names it emits under, the two
+   * stores it reads and the history streams it writes - so a module cannot
+   * name another module's anything, whatever it passes in.
+   *
+   * `live.revoked` closes the whole surface at once when the module stops.
+   * Without it a module could keep a reference to `ctx` and go on running
+   * commands or rewriting the config file that uninstalling just deleted.
+   */
+  private contextFor(id: string, manifest: ModuleManifest, live: Live): ModuleContext {
     const host = this
+    const declaredMethods = new Set(manifest.methods ?? [])
+    /** Every entry point goes through this first; the message names the module. */
+    const active = (): void => {
+      if (live.revoked) throw new Error(`module "${id}" is no longer running`)
+    }
     return {
       id,
-      exec: (command, opts) => connection.exec(command, opts),
-      execSudo: (command, opts) => connection.execSudo(command, opts),
-      stream: (command) => connection.stream(command, id),
-      streamSudo: (command) => connection.streamSudo(command, id),
+      exec: (command, opts) => {
+        active()
+        return connection.exec(command, opts)
+      },
+      execSudo: (command, opts) => {
+        active()
+        return connection.execSudo(command, opts)
+      },
+      stream: (command) => {
+        active()
+        return host.trackStream(live, connection.stream(command, id))
+      },
+      streamSudo: (command) => {
+        active()
+        return host.trackStream(live, connection.streamSudo(command, id))
+      },
       get connected() {
-        return connection.connected
+        return !live.revoked && connection.connected
       },
       get hasSudo() {
+        if (live.revoked) return false
         const status = connection.status()
         return status.isRoot === true || status.hasSudo === true
       },
-      createPoller: (name, tick) => new Poller(`${id}:${name}`, tick),
+      createPoller: (name, tick) => {
+        active()
+        const poller = new Poller(`${id}:${name}`, tick)
+        live.pollers.add(poller)
+        return poller
+      },
       fastIntervalMs: (key) => {
         const speed = host.requireSettings().refresh[key] as RefreshSpeed | undefined
         return speed ? REFRESH_INTERVAL_MS[speed] : 0
@@ -626,18 +841,82 @@ export class ModulesHost {
         return mode ?? 'always'
       },
       get tabActive() {
-        return moduleTabActive(host.activeTabs, id)
+        return !live.revoked && moduleTabActive(host.activeTabs, id)
       },
-      emit: (event, payload) => host.send(`module:${id}:event:${event}`, payload),
+      // An event name is not checked against `manifest.streams`: a `log` block
+      // deliberately tails an event that is not a declared stream. The channel
+      // carries the module id either way, so an undeclared event can only
+      // reach this module's own blocks.
+      emit: (event, payload) => {
+        active()
+        host.send(`module:${id}:event:${event}`, payload)
+      },
       handle: (method, fn) => {
+        active()
+        if (!declaredMethods.has(method)) {
+          throw new Error(
+            `method "${method}" is not in the manifest's methods - a module may only answer calls it declares`
+          )
+        }
         const channel = `module:${id}:invoke:${method}`
-        handlers.add(channel)
+        live.handlers.add(channel)
         host.registerHandler(channel, fn as (...args: unknown[]) => unknown)
       },
-      addHistory: (point, stream) => host.history.add(stream ?? id, point),
-      isModuleEnabled: (other) => host.isEnabled(other),
-      log: (message) => host.logger(`module ${id}: ${message}`)
+      addHistory: (point, stream) => {
+        active()
+        const name = stream ?? id
+        const problem = historyStreamProblem(id, name)
+        if (problem) throw new Error(problem)
+        host.history.add(name, point)
+      },
+      configGet: () => {
+        active()
+        return readModuleConfig(id)
+      },
+      configSet: (value) => {
+        active()
+        writeModuleConfig(id, value)
+      },
+      get hostKey() {
+        return live.revoked ? null : host.hostKey
+      },
+      hostDataGet: () => {
+        active()
+        return host.hostKey ? readModuleData(id, host.hostKey) : null
+      },
+      hostDataSet: (value) => {
+        active()
+        // Silently doing nothing while disconnected beats throwing: a module
+        // that tags a container has no say in when the session drops.
+        if (host.hostKey) writeModuleData(id, host.hostKey, value)
+      },
+      isModuleEnabled: (other) => !live.revoked && host.isEnabled(other),
+      log: (message) => {
+        active()
+        host.logger(`module ${id}: ${message}`)
+      }
     }
+  }
+
+  /**
+   * Hold on to a module's long-running command for as long as it runs, so
+   * deactivating can kill one the module did not. Dropped again as soon as it
+   * exits on its own - the set is "still running", not "ever started".
+   */
+  private async trackStream(
+    live: Live,
+    pending: Promise<ModuleStreamHandle>
+  ): Promise<ModuleStreamHandle> {
+    const handle = await pending
+    // Deactivating between the call and the target answering: honour it here
+    // rather than leaving a command nothing is tracking.
+    if (live.revoked) {
+      handle.kill()
+      throw new Error('module was stopped before the command started')
+    }
+    live.streams.add(handle)
+    handle.onExit(() => live.streams.delete(handle))
+    return handle
   }
 
   private requireSettings(): AppSettings {

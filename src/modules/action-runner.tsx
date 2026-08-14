@@ -43,6 +43,7 @@ export function ActionButton({
   action,
   moduleId,
   scope,
+  leadingArgs,
   disabled,
   size = 'sm',
   onDone
@@ -51,6 +52,12 @@ export function ActionButton({
   moduleId: string
   /** The row this action acts on - resolves `argsFromRow` and a prompt's `initialKey`. */
   scope?: unknown
+  /**
+   * Args that go in front of everything the spec declares. A table's bulk
+   * actions pass the ticked row keys here: they are what the call is about,
+   * the way `argsFromRow` is for a single row.
+   */
+  leadingArgs?: unknown[]
   disabled?: boolean
   size?: 'default' | 'sm'
   onDone?: () => void
@@ -64,7 +71,10 @@ export function ActionButton({
     setBusy(true)
     try {
       const extra = promptValue !== undefined ? [promptValue] : []
-      await callAction(moduleId, action.method, resolveActionArgs(action, scope, extra))
+      await callAction(moduleId, action.method, [
+        ...(leadingArgs ?? []),
+        ...resolveActionArgs(action, scope, extra)
+      ])
       onDone?.()
     } catch (err) {
       showNotice('error', `${action.label} failed: ${message(err)}`)

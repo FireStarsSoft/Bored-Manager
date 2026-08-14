@@ -204,6 +204,10 @@ export interface DockerContainer {
   blockIO: string
   /** threads/processes inside the container */
   pids: number
+  /** Labels the user gave this container, from the module's own per-host store. */
+  tagBadges: ContainerTagBadge[]
+  /** The same tags as plain text, so the table's filter can search them. */
+  tagsText: string
 }
 
 export interface DockerImage {
@@ -294,6 +298,9 @@ export interface DockerInspect {
   /** docker compose labels, empty for containers started by hand */
   composeProject: string
   composeService: string
+  /** Labels the user gave this container, from the module's own per-host store. */
+  tagBadges: ContainerTagBadge[]
+  tagsText: string
 }
 
 export interface DockerSnapshot {
@@ -304,6 +311,47 @@ export interface DockerSnapshot {
   totalCpuPct: number
   totalMemPct: number
   containers: DockerContainer[]
+}
+
+// ---------- Incus ----------
+
+/** A label the user invented, as a `badges`-formatted cell renders it. */
+export interface ContainerTagBadge {
+  label: string
+  color?: string
+}
+
+/**
+ * One row of `incus list --format json`, reduced to what a table shows. Incus
+ * calls both system containers and virtual machines "instances" and manages
+ * them the same way, so they share one table with a `type` column.
+ */
+export interface IncusInstance {
+  name: string
+  type: 'container' | 'vm'
+  /** Incus's own word: Running, Stopped, Frozen, Error. */
+  status: string
+  running: boolean
+  ipv4: string[]
+  /** Comma-joined `ipv4`, because a table cell renders one value, not a list. */
+  ipv4Text: string
+  image: string
+  memUsageBytes: number
+  snapshots: number
+  profiles: string[]
+  profilesText: string
+  tagBadges: ContainerTagBadge[]
+  /** The same tags as plain text, so the table's filter can search them. */
+  tagsText: string
+}
+
+export interface IncusSnapshot {
+  t: number
+  /** False when the incus CLI is not installed or refuses to talk to the daemon. */
+  available: boolean
+  running: number
+  stopped: number
+  instances: IncusInstance[]
 }
 
 /** One row of `docker system df`. */
@@ -535,7 +583,7 @@ export interface FastRefreshSettings {
   system: RefreshSpeed
   sensors: RefreshSpeed
   gpu: RefreshSpeed
-  docker: RefreshSpeed
+  container: RefreshSpeed
   processes: RefreshSpeed
   network: RefreshSpeed
   disk: RefreshSpeed
@@ -551,7 +599,7 @@ export interface SlowRefreshSettings {
   /** mount usage, inodes, block device inventory */
   storage: number
   /** image/volume/build cache disk usage */
-  docker: number
+  container: number
   /** interface inventory, gateway, DNS */
   network: number
   [key: string]: number
@@ -575,8 +623,10 @@ export type SlowRefreshTarget = string
  *    required, and the update source moved into the file.
  * 5: the UI gained a light theme, so which one to use became a setting. A file
  *    written before this only ever ran dark, and is carried over as such.
+ * 6: the Docker module grew Incus alongside it and became the Container
+ *    module, so its interval keys and Overview widget ids changed name.
  */
-export const SETTINGS_VERSION = 5
+export const SETTINGS_VERSION = 6
 
 /** Where the WebUI listens. Changing either needs a restart. */
 export interface ServerSettings {
@@ -658,6 +708,7 @@ export interface AuthStatus {
 export const SLOW_REFRESH_OPTIONS: Array<{ value: number; label: string }> = [
   { value: 30, label: '30 seconds' },
   { value: 60, label: '1 minute' },
+  { value: 120, label: '2 minutes' },
   { value: 300, label: '5 minutes' },
   { value: 900, label: '15 minutes' },
   { value: 1800, label: '30 minutes' },
@@ -674,15 +725,21 @@ export const DEFAULT_SETTINGS: AppSettings = {
     system: 'normal',
     sensors: 'normal',
     gpu: 'normal',
-    docker: 'normal',
+    container: 'normal',
     processes: 'normal',
     network: 'normal',
-    disk: 'normal'
+    disk: 'normal',
+    // A module-declared key with no default reads back as `paused`
+    // (modules-host's fastIntervalMs), so a module that ships with the app has
+    // to have its key here or it never polls. This one only re-reads the last
+    // sweep from memory; the sweep itself is on slowRefresh below.
+    'service-fleet': 'low'
   },
   slowRefresh: {
     storage: 60,
-    docker: 300,
-    network: 60
+    container: 300,
+    network: 60,
+    'service-fleet': 120
   },
   overviewWidgets: {},
   overviewLayout: {},

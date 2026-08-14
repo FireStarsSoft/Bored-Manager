@@ -2,23 +2,35 @@
   "apiVersion": 2,
   "id": "network",
   "name": "Network",
-  "version": "2.0.0",
-  "description": "Per-interface traffic, every TCP/UDP connection with its owning process and rate, bandwidth per process, listening ports, TCP retransmits, gateway and DNS.",
+  "version": "3.0.0",
+  "description": "Per-interface traffic, every TCP/UDP connection with its owning process and rate, bandwidth per process, listening ports, TCP retransmits, gateway and DNS - plus the kernel limits (ARP table, file descriptors, inotify, conntrack) that decide how many containers a machine can hold.",
   "author": "Bored Manager",
-  "minAppVersion": "0.0.1",
+  "minAppVersion": "0.2.0",
   "entries": {
     "main": "main/index.ts"
   },
   "pages": [
     { "id": "traffic", "label": "Traffic", "icon": "Network", "order": 20 },
-    { "id": "connections", "label": "Connections", "icon": "Cable", "order": 21 }
+    { "id": "connections", "label": "Connections", "icon": "Cable", "order": 21 },
+    { "id": "settings", "label": "Host tuning", "icon": "Settings2", "order": 22 }
   ],
   "widgets": [],
   "streams": [
     { "event": "snapshot", "kind": "latest" },
     { "event": "series", "kind": "series" }
   ],
-  "methods": ["killProcess"],
+  "methods": [
+    "killProcess",
+    "netTunables",
+    "planCheck",
+    "planApply",
+    "tunablesCheck",
+    "tunablesApply",
+    "rulesEffective",
+    "rulesCheck",
+    "rulesApply",
+    "rulesReset"
+  ],
   "fastInterval": "network",
   "slowInterval": "network"
 }

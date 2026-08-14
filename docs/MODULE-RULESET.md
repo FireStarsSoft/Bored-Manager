@@ -40,7 +40,7 @@ Checked by `manifestProblems()` in `shared/modules.ts`. `apiVersion` must be **2
 | `pages[].id` | string | yes | `/^[a-z][a-z0-9-]{0,31}$/` (1–32). Unique within the module. Route is `<moduleId>/<id>`. File must exist at `ui/pages/<id>.json`. |
 | `pages[].label` | string | yes | Sidebar label. |
 | `pages[].icon` | string | no | A lucide-react name from the whitelist below. Unknown names render as `Puzzle`. |
-| `pages[].order` | number | no | Sort key among this module's pages, and among sidebar entries when there is only one page. The app's own pages sit at 0 (Overview), 70 (Packages), 80 (Terminals), 90 (Settings); the default modules use 10–66. |
+| `pages[].order` | number | no | Sort key among this module's pages, and among sidebar entries when there is only one page. The app's own pages sit at 0 (Overview), 70 (Packages), 80 (Terminals), 90 (Settings); the default modules use 10–66 (Services holds 33–38). |
 | `widgets` | array | no | Overview cards. |
 | `widgets[].id` | string | yes | Same id rules as a page. Settings/layout key is `<moduleId>.<id>`. File must exist at `ui/widgets/<id>.json`. |
 | `widgets[].label` | string | yes | Name in Settings → Overview cards. |
@@ -53,13 +53,13 @@ Checked by `manifestProblems()` in `shared/modules.ts`. `apiVersion` must be **2
 | `fastInterval` | string | no | Key in `settings.refresh` this module reads (`ctx.fastIntervalMs`). |
 | `slowInterval` | string | no | Key in `settings.slowRefresh` this module reads (`ctx.slowIntervalSec`). |
 
-Ids the app uses for itself and will not accept: `overview`, `packages`, `terminals`, `settings`, `core`, `app`, `module`, `modules`, `system`.
+Ids the app uses for itself and will not accept: `overview`, `packages`, `terminals`, `settings`, `core`, `app`, `module`, `modules`, `system`, `top`, `services`, `metrics`. The last three are there because the id is also a history stream name — a module called `top` would append to the Overview's own history just by doing what every module does.
 
 ### Icon whitelist
 
 `src/lib/module-registry.ts` maps these lucide-react names (anything else becomes `Puzzle`):
 
-`Activity`, `Boxes`, `Cable`, `Container`, `Cpu`, `FileText`, `FolderTree`, `HardDrive`, `Info`, `ListTree`, `Network`, `Sparkles`, `Thermometer`, `Zap`.
+`Activity`, `Boxes`, `Cable`, `Container`, `Cpu`, `FileText`, `FolderTree`, `Gauge`, `HardDrive`, `Info`, `Layers`, `ListTree`, `Network`, `Server`, `Settings2`, `Sparkles`, `Tag`, `Thermometer`, `Zap`.
 
 Adding a new name means adding it to that map in the **app**, then bumping `minAppVersion` if you rely on it.
 
@@ -125,11 +125,20 @@ The worked original of this is [examples/hello/main/index.ts](examples/hello/mai
 | `slowIntervalSec(key)` | Interval in seconds for a `settings.slowRefresh` key; `0` means manual only. |
 | `detailMode(key)` | `'tab' \| 'always' \| 'off'` for a `settings.detailPolling` key. |
 | `tabActive` | Whether **any client** is looking at one of this module's pages (`<id>` or `<id>/<page>`). |
-| `emit(event, payload)` | Push data to the renderer under this event name (must match a declared stream if a block will `kind: "stream"` it). |
-| `handle(method, fn)` | Answer a call from a block. `method` must be in `manifest.methods`. |
-| `addHistory(point, stream?)` | Append a reduced sample `{ t, ...numbers }` to this module's metrics stream on disk. Default stream name = the module id. |
+| `emit(event, payload)` | Push data to the renderer under this event name (must match a declared stream if a block will `kind: "stream"` it; a `log` block's event does not have to be declared). |
+| `handle(method, fn)` | Answer a call from a block. `method` **must** be in `manifest.methods` — registering anything else throws and the module fails to activate. |
+| `addHistory(point, stream?)` | Append a reduced sample `{ t, ...numbers }` to this module's metrics stream on disk. Default stream name = the module id; an explicit one must be `<id>` or `<id>-<name>`, and anything else throws. |
+| `configGet()` / `configSet(value)` | This module's own settings, one JSON document, shared by every target machine. `configGet()` is `null` until something is written. Stored in `data/user-settings/module-config/<id>.json`, which an app update carries over — so a rule the user changed survives reinstalling the module. Over 512 KB throws. |
+| `hostDataGet()` / `hostDataSet(value)` | What this module remembers about the machine **currently connected** — tags it invented, job history, saved forms. `hostDataGet()` is `null` while disconnected and `hostDataSet` does nothing then, so both callers have to cope with "no host". Stored in `data/module-data/<id>/<hostKey>.json`, keyed the same way the metrics history is. Same 512 KB cap. |
+| `hostKey` | Which machine those two are pointed at, or `null` while disconnected. |
 | `isModuleEnabled(id)` | Whether another module is running, for an optional probe. Do **not** import that module's files. |
 | `log(message)` | Write to the app log. |
+
+`ctx` is **revoked** when the module stops — switched off, reloaded, uninstalled, or on a clean close. From that moment every member above throws `module "<id>" is no longer running`. A stray `setTimeout` or an unresolved promise holding a reference to it therefore cannot keep running commands, and cannot write back the config file that uninstalling just deleted. `dispose()` runs *before* the revocation, so it is the one place you can still use `ctx` to shut something down politely.
+
+Neither store is a cache. Read them into memory once and write when something changes; a `hostDataSet` per poll tick will write a file per second.
+
+Anything a module remembers about a machine belongs in `hostData`, not on the machine. Writing on the target needs somewhere writable there plus, half the time, sudo — and the data is the app's bookkeeping, not the machine's.
 
 ### What the returned instance means
 
@@ -140,8 +149,10 @@ The worked original of this is [examples/hello/main/index.ts](examples/hello/mai
 | `applyPollers()` | On connect, on disconnect, on every settings change and when the visible tab changes. **Must be idempotent** — derive the intervals from `ctx` again and start/stop accordingly. |
 | `reset()` | On connect and disconnect. Drop rate baselines and session totals; a counter from another machine is worse than no counter. |
 | `snapshots()` | Right after a connection is established, to fill a freshly opened renderer. Keys must match the event names in `streams`. |
-| `slowTargets()` / `refreshSlow(target)` | When the user presses a refresh button on a slow section this module owns (`section.slowTarget`). |
+| `slowTargets()` / `refreshSlow(target)` | When the user presses a refresh button on a slow section this module owns (`section.slowTarget`). Targets are a flat namespace shared with the app's own sections: if two running modules claim the same one, the first still answers and the clash is logged. Name yours after the module unless you mean the app's. |
 | `dispose()` | When the module is switched off, reloaded, and on a clean close. Stop every poller, kill every stream. |
+
+Anything `dispose()` misses, the app takes back: it stops every poller `createPoller` handed out and kills every command `stream` started, and logs how many it had to. Write `dispose()` as if that backstop were not there — it exists so a module that throws on the way out cannot leave a timer polling a machine the user disconnected from, not to save you the line.
 
 ## What a module may import
 
@@ -153,7 +164,8 @@ The main half is bundled with a resolver that **denies** anything else. The inst
 | `@shared/types` | The app's data types (`SystemSnapshot`, `OkResult`, …). |
 | `@shared/shell` | `splitSections`, `shQuote`, `PHYSICAL_DISK`. |
 | `@shared/ss` | The `ss` command and its parser. |
-| `@shared/module-ui` | Only if you need the Block types in comments/types — the main half does not render. |
+| `@shared/check` | `ModuleCheckReport`, `ModuleCheckFinding` and `createCheckSession()` — what a `checkForm` block talks to. |
+| `@shared/module-ui` | The Block types, `FormFieldOption`, and `FORM_COLOR_SWATCHES` when a method picks a colour on the user's behalf. The main half does not render. |
 | Relative imports inside **this** module | Split `main/` into files. |
 | Relative imports inside `shared/` | Only from a file that already lives in `shared/` (you will not write those). |
 
@@ -167,6 +179,29 @@ The main half is bundled with a resolver that **denies** anything else. The inst
 | Another module's files | A module has to work when the other one is uninstalled. Read its data off the bus by stream name and use `ctx.isModuleEnabled(id)` for a soft dependency. |
 
 The renderer half **has no imports**. It is JSON.
+
+## The boundary around a module
+
+The import rules above are the compile-time half. This is the runtime half: what a module can reach while it is running, and what the app takes back when it stops. Everything in the first table is checked by the app, not left to the module — a module that crosses one of these lines gets an exception or fails to activate, rather than quietly affecting somebody else.
+
+| Boundary | How it is enforced |
+|---|---|
+| Its own RPC channels | `ctx.handle` can only register `module:<id>:invoke:<method>`, and only for a `method` the manifest declares. |
+| Its own events | `ctx.emit` can only push `module:<id>:event:<event>`. The renderer stores an event only if it is a declared stream. |
+| Its own history | `ctx.addHistory` accepts `<id>` and `<id>-<name>`; `system`, `top`, `services` and another module's id all throw. A `{ "kind": "history" }` source may read its own streams or the app's three, never a third module's. |
+| Its own config and per-host data | `configGet/Set` and `hostDataGet/Set` are bound to `<id>`; there is no call that names another module's file. Both are capped at 512 KB. |
+| Its own folder | The installer compiles with a resolver that refuses anything outside the module folder and `shared/`. Nothing writes outside `modules/<id>/`, and a path that tries to escape it is refused rather than normalised. |
+| Its pollers and streams | Handed out by `ctx`, tracked by the app, force-stopped when the module deactivates. |
+| Its lifetime | `ctx` is revoked on deactivate; every member throws afterwards. |
+| Its rendering | Every block, every page and every Overview card is wrapped in an error boundary, so a throw shows an inline message where that block was instead of blanking the app. |
+
+Three things are **shared on purpose**, and a module has to behave rather than be stopped:
+
+- **The connection.** `exec`, `execSudo` and the streams all run through the one session the user opened. A tight poller or a command with no `timeoutMs` costs everybody — including the app's own collectors. Check `ctx.connected` at the top of every tick and always pass a timeout.
+- **The interval keys.** `fastInterval` / `slowInterval` name keys in the app's `settings.refresh` and `settings.slowRefresh`, which is a flat namespace. Use your module's id as the key unless you deliberately mean to follow an existing one.
+- **The terminal pool.** A `terminal` block opens a PTY on the server, the same kind the Terminals page opens, and it **outlives the module**: disabling or uninstalling does not close a shell the user opened from your page. That is deliberate (nobody wants their session killed because a card was toggled), but it means a `commandTemplate` should be something a user would recognise on the Terminals page.
+
+What lives outside the module and survives uninstalling it: its keys in the app's `settings.json` (`refresh.<id>`, `overviewWidgets`, `overviewLayout`) and its metrics history under `data/metrics/`. That is so reinstalling puts the cards back where they were; see [MODULES.md](MODULES.md#what-uninstalling-removes) for the full list.
 
 ## UI specs
 
@@ -206,7 +241,7 @@ Every block that shows data has a `source`. Four kinds:
 |---|---|---|
 | `stream` | A declared `manifest.streams` event | `series` vs `latest` as declared. Unknown `event` → installer error. |
 | `invoke` | A declared `manifest.methods` name | Re-polls while visible if `intervalKey` is set. `args` may contain `$row.…`. |
-| `history` | Downsampled points from `data/metrics/` | `stream` is a history stream name (`system`, `services`, or a module id). `keys` names the numeric fields. For ranges longer than the live buffer. |
+| `history` | Downsampled points from `data/metrics/` | `stream` is one of **your own** (`<id>`, `<id>-<name>`) or one of the app's (`system`, `top`, `services`). Another module's is an installer error — it can be uninstalled, and a chart of something the user removed is not a dependency worth having. `keys` names the numeric fields. For ranges longer than the live buffer. |
 | `core` | The app's own snapshot | `stream` must be `"system"`, `"top"`, or `"services"`. |
 
 ### `ValueFormat`
@@ -222,6 +257,7 @@ How a raw value is printed. Maps 1–1 to the helpers in `src/lib/utils.ts`.
 | `number` | a count | grouped digits |
 | `text` | anything | `String(value)` |
 | `duration` | an absolute `startedAt`-style **ms timestamp** | elapsed `"3h 4m"` — the block cannot compute `Date.now() - value` itself |
+| `badges` | `Array<{ label: string, color?: string }>` | coloured chips. Only useful in `table`, `list` and `keyValue`, which render cells rather than one string. `color` is any CSS colour, and it is the one place literal hex belongs — a colour the user picked is data and has to survive a theme switch. Filtering and sorting use the labels joined. |
 | omit | — | `text` |
 
 If you need a duration from **elapsed seconds** (uptime), format it in `main/` and send a string with `"format": "text"`. That is what hello does (`uptimeLabel`).
@@ -474,8 +510,12 @@ Sort, filter, optional group/tree, row actions, a detail drawer.
 | `filterKeys` | string[] | no — defaults to every text column |
 | `groupModes` | `{ id, label, key, parentIdKey? }[]` | no. With `parentIdKey`, `key` is the parent id on the child (e.g. `ppid`) and `parentIdKey` is the row's own id (`pid`) — a tree. A parent id that is not in the current page of rows is treated as a root. |
 | `rowActions` | ActionSpec[] | no |
+| `selectable` | boolean | no — adds a tick column and a toolbar. **Requires an explicit `rowKey`**: a selection is a list of those values, and the default rowKey is whatever the first column happens to be. |
+| `bulkActions` | ActionSpec[] | no — buttons over the selection. Needs `selectable: true` or the installer errors, since nothing could reach them. |
 | `rowDetail` | Block[] | no — rendered in a drawer, **scoped to that row** (`$row.`). |
 | `emptyText` | string | no |
+
+A bulk action is called `method(selectedRowKeys[], ...args, promptValue?)` — **the array of keys comes first**, before the spec's own `args`. `argsFromRow` means nothing on a bulk action, because there is no single row. The header tick selects everything the current filter shows; a selection survives filtering and re-sorting but drops rows that have since gone away, so a bulk action can never name a container that no longer exists.
 
 Minimal:
 
@@ -537,6 +577,71 @@ Inside `rowDetail`, use `$row.` for invoke args and `argsFromRow` for actions. E
   "type": "keyValue",
   "source": { "kind": "invoke", "method": "inspect", "args": ["$row.id"] },
   "rows": [{ "key": "image", "label": "Image" }]
+}
+```
+
+### `statusCards`
+
+One card per item in the resolved array, tinted by that item's own status. For a status wall over many machines, disks or nodes, where the number of cards is data rather than spec — `table` gives one row per item and cannot colour it, and `section.columns` only grids blocks the spec listed by hand.
+
+| Prop | Type | Required |
+|---|---|---|
+| `source` | DataSource | yes — an array of item objects |
+| `rowKey` | string | yes — React key, and what the drawer follows across refreshes |
+| `titleKey` | string | yes — printed in the title row |
+| `statusKey` | string | yes — `"ok"` \| `"warn"` \| `"bad"`; anything else is `unknown` (grey) |
+| `subtitleKey` | string | no — a short right-aligned summary in the title row (`"5/6 running"`) |
+| `note` | `{ key, label?, startOpen? }` | no — a collapsible line under the title. No chevron is drawn when that item's note is empty. |
+| `items` | see below | yes — the chips inside the card |
+| `columns` | `{ default?, min?, max? }` | no — default 4, 1, 8. The reader picks a count in the toolbar; a widget is clamped to 2. |
+| `rowActions` | ActionSpec[] | no — buttons in the title row |
+| `rowDetail` | Block[] | no — a drawer when the card is clicked, **scoped to that item** (`$row.`) |
+| `emptyText` | string | no |
+
+`items` describes one array on each item: `key` names it, `labelKey` / `statusKey` / `pinnedKey` name the fields on each entry (default `label` / `status` / `pinned`), `visibleRows` is how many chip rows are shown before the expand control (default 2), `pinnedFilterLabel` adds a switch that hides everything not pinned, and `emptyText` is what a card with no entries says. A plain array of strings works too — every chip is then `unknown`.
+
+Cards sort worst-first (`bad`, `warn`, `unknown`, `ok`) and then by title, numerically when the title is an IPv4 address. Chips sort pinned-first, then by the same status order. Colours come from the theme tokens, so a `statusCards` block cannot pick its own — send a status, not a colour.
+
+Minimal:
+
+```json
+{
+  "type": "statusCards",
+  "source": { "kind": "stream", "event": "hosts", "path": "hosts" },
+  "rowKey": "id",
+  "titleKey": "ip",
+  "statusKey": "status",
+  "items": { "key": "services" }
+}
+```
+
+Full (the Services module's wall):
+
+```json
+{
+  "type": "statusCards",
+  "source": { "kind": "stream", "event": "hosts", "path": "hosts" },
+  "rowKey": "id",
+  "titleKey": "ip",
+  "statusKey": "status",
+  "subtitleKey": "summary",
+  "note": { "key": "note", "label": "Notes" },
+  "items": {
+    "key": "services",
+    "visibleRows": 2,
+    "pinnedFilterLabel": "Watched services only",
+    "emptyText": "No services reported"
+  },
+  "columns": { "default": 4, "min": 1, "max": 8 },
+  "rowActions": [{ "label": "Probe", "method": "hostProbe", "argsFromRow": ["ip"] }],
+  "rowDetail": [
+    {
+      "type": "keyValue",
+      "source": { "kind": "invoke", "method": "hostInspect", "args": ["$row.ip"] },
+      "rows": [{ "key": "hostname", "label": "Hostname" }]
+    }
+  ],
+  "emptyText": "No machines yet"
 }
 ```
 
@@ -633,8 +738,24 @@ Fields plus one submit action. Field values are appended after `argsFromRow` / `
 
 | Prop | Type | Required |
 |---|---|---|
-| `fields` | `{ key, label, input: "number" \| "text" \| "select", options? }[]` | yes. Each `key` is required. `options` is `{ value, label }[]` for `select`. |
+| `fields` | FormField[] | yes — see below |
 | `submit` | ActionSpec | yes |
+
+#### `FormField`
+
+Shared by `form` and `checkForm`. Every `key` is required and must be unique within the field list.
+
+| Prop | Meaning |
+|---|---|
+| `input` | `"number"` \| `"text"` \| `"select"` \| `"checkbox"` \| `"password"` \| `"textarea"` \| `"color"` |
+| `options` | `{ value, label }[]`, `select` only |
+| `optionsFrom` | A DataSource, `select` only — choices asked of the module instead of listed, so a form can offer what actually exists on the target. Must resolve to `{ value, label }[]`. Read **once**, when the block first becomes visible. |
+| `placeholder` | Placeholder text. |
+| `help` | One line under the field saying what it is for. |
+| `initial` | What the field starts as. |
+| `initialFromScope` | A scope key to start from (a table row's field), which wins over `initial`. |
+
+`number` is sent as a number, `checkbox` as a boolean, everything else as a string. `color` is a hex string with a swatch picker; **empty is meaningful** — a module is free to read it as "pick one for me", which is what the Container module's tags do. `password` only hides the typing; it travels on the same channel as everything else, so do not put one in something you then save to disk.
 
 Minimal:
 
@@ -662,6 +783,79 @@ Full (GPU auto cap):
     "method": "autoCapStart",
     "confirm": "Watch Docker and switch this GPU's power cap between the idle and running values automatically?"
   }
+}
+```
+
+### `checkForm`
+
+Fields the user cannot apply until the module has looked at them and said what would happen. Use it for anything that changes more than one thing, cannot be undone, or depends on the state of the machine — creating containers, bulk actions, writing kernel limits.
+
+| Prop | Type | Required |
+|---|---|---|
+| `fields` | FormField[] | yes — same shape as `form` |
+| `checkMethod` | string | yes, in `manifest.methods` |
+| `applyMethod` | string | yes, in `manifest.methods` |
+| `title` | string | no |
+| `argsFromScope` | string[] | no — scope keys passed to **both** methods, before the values |
+| `checkLabel` / `applyLabel` | string | no — default `"Check"` and `"Confirm and apply"` |
+| `kind` | `"default"` \| `"danger"` | no — `danger` makes apply destructive and puts a confirm dialog in front of it |
+
+Call convention:
+
+```
+check: method(...argsFromScope, values)                    -> ModuleCheckReport
+apply: method(...argsFromScope, { token, values })         -> { ok, error? }
+```
+
+`values` is **one object**, `Record<key, string | number | boolean>` — not positional args like `form`. A `ModuleCheckReport` (`@shared/check`) is `{ ok, token?, findings: { level, label, detail? }[] }`, where `level` is `pass` / `info` / `warning` / `error`.
+
+The app only offers apply when the report says `ok` **and** carries a `token`. Editing any field throws the report away, so what runs is always what the report was read for. On the module side, `createCheckSession()` hands out tokens that last ten minutes, are good for one use, and are bound to the exact values that were checked — `session.take(token, values)` returns `null` for a token that is unknown, expired, already spent, or whose values have changed since.
+
+Give the session a payload and the apply gets back whatever the check resolved:
+
+```ts
+// check
+return { ok: true, token: session.issue(values, { targets }), findings }
+
+// apply
+const taken = session.take(token, values)
+if (!taken) return { ok: false, error: 'that check has expired or the form changed - check again' }
+runOn(taken.payload.targets)
+```
+
+Freezing a resolved list into the payload is the point, not an optimisation: the user read a report naming twelve containers, and acting on a thirteenth that appeared in the meantime is not what they agreed to. Re-verify only what another process can take from under you between check and apply (a host port, a name), and fail with a message that says to check again.
+
+What the levels are for:
+
+| Level | Use it for |
+|---|---|
+| `pass` | the resolved plan — "will create 12 containers `web-001…012` on `lan0`, ports 8080-8091". This is the thing the user is confirming. |
+| `info` | something that will happen anyway: an image that has to be pulled, a colour chosen automatically. |
+| `warning` | worth reading twice, does not block: an irreversible action, a memory total near the limit, an L2 network the host cannot reach. |
+| `error` | blocks apply. |
+
+Minimal:
+
+```json
+{
+  "type": "checkForm",
+  "title": "Create tag",
+  "checkMethod": "tagCheck",
+  "applyMethod": "tagApply",
+  "fields": [{ "key": "name", "label": "Name", "input": "text" }]
+}
+```
+
+Inside a `rowDetail`, `argsFromScope` is how the same pair serves both create and edit — the drawer passes the row's id, and the module tells the two apart by whether it got a leading argument:
+
+```json
+{
+  "type": "checkForm",
+  "title": "Edit tag",
+  "checkMethod": "tagCheck",
+  "applyMethod": "tagApply",
+  "argsFromScope": ["id"],
+  "fields": [{ "key": "name", "label": "Name", "input": "text", "initialFromScope": "name" }]
 }
 ```
 
@@ -732,7 +926,7 @@ Each row is one line in the result panel. **Error** blocks the install; **warnin
 | `entries` | error | the file `entries.main` names exists |
 | `appVersion` | error | `minAppVersion` against the running app |
 | `ui-specs` | error | every declared page/widget has `ui/pages/<id>.json` / `ui/widgets/<id>.json` |
-| `ui-spec-schema` | error | those files parse and `specProblems()` is empty (including the no-URL rule) |
+| `ui-spec-schema` | error | those files parse and `specProblems()` is empty (including the no-URL rule and the history-stream namespace) |
 | `compile` | error | esbuild bundle of the main half; only own files + `@shared/*` |
 | `external-url-in-code` | warning | compiled `.dist/main.mjs` contains `http(s)://` |
 | `source` | warning | a URL that is not a GitHub host (a local file you picked is trusted) |
@@ -767,11 +961,17 @@ The script applies the rules it can check locally before writing the archive (in
 
 - [ ] `npm run typecheck` is clean (module `main/` is typechecked with the app).
 - [ ] `npm run modules:pack -- <id>` reports no warnings.
-- [ ] Every poller stops in `dispose()`; disabling the module leaves nothing running on the target.
+- [ ] Every poller stops and every stream is killed in `dispose()`; the log says nothing about pollers the app had to stop for you.
+- [ ] Nothing keeps using `ctx` after `dispose()` — no timer, no `.then()` on a command still in flight.
+- [ ] Every method the module registers is in `manifest.methods`, and every name in `methods` is actually registered.
 - [ ] `applyPollers()` can be called repeatedly with no side effects.
 - [ ] `reset()` clears every counter that came from the previous machine.
+- [ ] Disable it, then uninstall it, with the target connected: the app log shows the pollers stopping, the page and cards go, and nothing new is written under `data/`.
 - [ ] The page says something useful when the tool it needs is missing, instead of showing an empty table (`conditional`).
 - [ ] Destructive methods are behind `confirm` and/or `kind: "danger"`.
+- [ ] Every destructive `checkForm` sets `kind: "danger"`, and its check reports what would happen as a `pass` finding, not just an absence of errors.
+- [ ] An apply method refuses a token it cannot spend, and says to check again rather than doing something approximate.
+- [ ] Nothing is written on the target that belongs in `hostDataSet`, and neither store is written on a poller tick.
 - [ ] Specs contain no URLs.
 - [ ] `README.md` and `CHANGELOG.md` are current, and `version` was raised.
 

@@ -25,7 +25,7 @@ import { defaultBranchZipUrl, latestReleaseZip, looksLikeZipUrl, parseGithubRepo
 import type { ModulesHost } from './modules-host'
 import { moduleFolderHash, modulesDir, moduleDir } from './modules-host'
 import { getCatalog } from './registry'
-import { appVersion } from './store'
+import { appVersion, deleteModuleConfig, deleteModuleData } from './store'
 
 /**
  * Installing, updating and removing a module.
@@ -593,11 +593,19 @@ export class ModuleInstallerService {
     mkdirSync(modulesDir(), { recursive: true })
 
     // Moved aside before anything is written, so a failure here never
-    // touches the current install - there is nothing yet to roll back.
+    // touches the current install - there is nothing yet to roll back. The
+    // version being replaced is stopped first: it would otherwise go on
+    // polling the target machine out of a folder that is being renamed under
+    // it, and the rollback path re-activates it either way.
     if (hadPrevious) {
+      this.host.stop(id)
       try {
         renameSync(target, backup)
       } catch (err) {
+        // Its folder never moved, so the version that was running is intact -
+        // start it again rather than leaving the user with a module that is
+        // installed, enabled and silent until the next settings change.
+        await this.host.reload(id).catch(() => undefined)
         return this.setState({
           phase: 'error',
           error: `Could not write the module: the current install could not be moved aside (${message(err)})`
@@ -611,7 +619,10 @@ export class ModuleInstallerService {
       // The backup (if any) was already made; put it back exactly as it was.
       try {
         rmSync(target, { recursive: true, force: true })
-        if (hadPrevious) renameSync(backup, target)
+        if (hadPrevious) {
+          renameSync(backup, target)
+          await this.host.reload(id).catch(() => undefined)
+        }
       } catch {
         /* reported below */
       }
@@ -671,13 +682,34 @@ export class ModuleInstallerService {
   }
 
   /**
-   * Remove a module's folder. Its settings are left alone on purpose:
-   * reinstalling later brings the widgets back where they were, and a stale
-   * key costs nothing.
+   * Remove a module's folder, and with it the two stores only that module
+   * could read - its own settings and what it remembered about each machine.
+   * Leaving those behind would be unreachable bytes, since nothing else knows
+   * their shape.
+   *
+   * What is deliberately kept: the keys in the app's own `settings.json`
+   * (`refresh.<id>`, the `overviewWidgets` flags and their grid positions), so
+   * reinstalling later puts the widgets back where they were; and the metrics
+   * history, which is per machine and expires on its own retention.
+   *
+   * An update does not come through here - install() swaps the folder in
+   * place - so upgrading a module keeps everything it had.
    */
   async uninstall(id: string): Promise<ModuleInstallState> {
     if (this.busy()) return this.setState({ error: 'Another module operation is running' })
-    const target = moduleDir(id)
+    // The id arrives from a browser and ends up in a recursive delete, so it
+    // is not enough for the path to look right: it has to name a module the
+    // host actually has. `moduleDir` refuses a traversal in any case, but a
+    // folder under `modules/` that is not a module is not ours to remove.
+    if (!this.host.installed(id)) {
+      return this.setState({ phase: 'error', error: `Module "${id}" is not installed` })
+    }
+    let target: string
+    try {
+      target = moduleDir(id)
+    } catch (err) {
+      return this.setState({ phase: 'error', error: message(err) })
+    }
     if (!existsSync(target)) {
       return this.setState({ phase: 'error', error: `Module "${id}" is not installed` })
     }
@@ -689,10 +721,22 @@ export class ModuleInstallerService {
       validation: undefined,
       log: []
     })
+    // Stopped before a single file goes: deactivating unregisters its RPC
+    // channels, revokes its context and kills anything it left running, so
+    // there is no tick that can arrive halfway through the delete and no
+    // chance of it writing its config back after the next two lines.
+    this.host.stop(id)
     try {
       rmSync(target, { recursive: true, force: true })
     } catch (err) {
       return this.setState({ phase: 'error', error: `Could not remove the module: ${message(err)}` })
+    }
+    try {
+      deleteModuleConfig(id)
+      deleteModuleData(id)
+    } catch {
+      // The module is already gone; a leftover file it can no longer reach is
+      // not worth failing the uninstall over.
     }
     this.host.forget(id)
     this.onListChanged()

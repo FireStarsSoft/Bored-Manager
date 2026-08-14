@@ -11,10 +11,12 @@ import { KeyValueBlockView } from './blocks/KeyValueBlock'
 import { ListBlockView } from './blocks/ListBlock'
 import { ConditionalBlockView } from './blocks/ConditionalBlock'
 import { TableBlockView } from './blocks/TableBlock'
+import { StatusCardsBlockView } from './blocks/StatusCardsBlock'
 import { LogBlockView } from './blocks/LogBlock'
 import { TerminalBlockView } from './blocks/TerminalBlock'
 import { ActionsBlockView } from './blocks/ActionsBlock'
 import { FormBlockView } from './blocks/FormBlock'
+import { CheckFormBlockView } from './blocks/CheckFormBlock'
 
 /**
  * What every block needs to resolve its own data and render at the right
@@ -51,6 +53,8 @@ function BlockView({ block, ctx }: { block: Block; ctx: BlockCtx }): React.JSX.E
       return <ConditionalBlockView block={block} ctx={ctx} />
     case 'table':
       return <TableBlockView block={block} ctx={ctx} />
+    case 'statusCards':
+      return <StatusCardsBlockView block={block} ctx={ctx} />
     case 'log':
       return <LogBlockView block={block} ctx={ctx} />
     case 'terminal':
@@ -59,6 +63,8 @@ function BlockView({ block, ctx }: { block: Block; ctx: BlockCtx }): React.JSX.E
       return <ActionsBlockView block={block} ctx={ctx} />
     case 'form':
       return <FormBlockView block={block} ctx={ctx} />
+    case 'checkForm':
+      return <CheckFormBlockView block={block} ctx={ctx} />
     default:
       return null
   }
@@ -68,8 +74,20 @@ interface BoundaryState {
   error: Error | null
 }
 
-/** A block that throws shows an inline error instead of taking the whole page down with it. */
-class BlockErrorBoundary extends React.Component<{ children: React.ReactNode }, BoundaryState> {
+interface BoundaryProps {
+  children: React.ReactNode
+  /** Names what failed, so the message says which module the user should look at. */
+  what: string
+}
+
+/**
+ * Keeps a throw inside whatever it wraps. Used at two depths: around every
+ * block, so one broken card does not blank its page, and around a module's
+ * whole page and widget, so a spec the block switch cannot even get into
+ * (a bad `blocks` array, a throw while resolving the window) takes down that
+ * module's surface rather than the app around it.
+ */
+class ModuleErrorBoundary extends React.Component<BoundaryProps, BoundaryState> {
   state: BoundaryState = { error: null }
 
   static getDerivedStateFromError(error: Error): BoundaryState {
@@ -77,14 +95,14 @@ class BlockErrorBoundary extends React.Component<{ children: React.ReactNode }, 
   }
 
   componentDidCatch(error: Error): void {
-    console.error('[BlockRenderer] a block failed to render:', error)
+    console.error(`[BlockRenderer] ${this.props.what} failed to render:`, error)
   }
 
   render(): React.ReactNode {
     if (this.state.error) {
       return (
         <div className="rounded-md border border-destructive/30 bg-destructive/10 p-2.5 text-xs text-destructive">
-          This block failed to render: {this.state.error.message}
+          {this.props.what} failed to render: {this.state.error.message}
         </div>
       )
     }
@@ -97,9 +115,9 @@ export function BlockList({ blocks, ctx }: { blocks: Block[]; ctx: BlockCtx }): 
   return (
     <>
       {blocks.map((block, i) => (
-        <BlockErrorBoundary key={i}>
+        <ModuleErrorBoundary key={i} what="This block">
           <BlockView block={block} ctx={ctx} />
-        </BlockErrorBoundary>
+        </ModuleErrorBoundary>
       ))}
     </>
   )
@@ -108,6 +126,7 @@ export function BlockList({ blocks, ctx }: { blocks: Block[]; ctx: BlockCtx }): 
 /** A module's sidebar page, built entirely from its `ui/pages/<id>.json`. */
 export function ModulePage({
   moduleId,
+  pageId,
   spec,
   visible
 }: {
@@ -121,7 +140,9 @@ export function ModulePage({
   return (
     <div className="h-full overflow-y-auto p-3">
       <div className="grid grid-cols-1 gap-3">
-        <BlockList blocks={spec.blocks} ctx={ctx} />
+        <ModuleErrorBoundary what={`Page "${moduleId}/${pageId}"`}>
+          <BlockList blocks={spec.blocks} ctx={ctx} />
+        </ModuleErrorBoundary>
       </div>
     </div>
   )
@@ -130,6 +151,7 @@ export function ModulePage({
 /** A module's Overview card, built entirely from its `ui/widgets/<id>.json`. */
 export function ModuleWidget({
   moduleId,
+  widgetId,
   spec,
   visible = true
 }: {
@@ -152,11 +174,15 @@ export function ModuleWidget({
        * `.tm-drag-handle` (OverviewGrid's `dragConfig.handle`); no block knows
        * it might end up as a widget's root, so none of them render one. Added
        * once here instead, floated over whatever the spec's own blocks draw.
+       * It stays outside the boundary below so a card that failed can still be
+       * dragged out of the way.
        */}
       <div className="absolute left-2 top-2 z-10">
         <DragHandle />
       </div>
-      <BlockList blocks={spec.blocks} ctx={ctx} />
+      <ModuleErrorBoundary what={`Card "${moduleId}.${widgetId}"`}>
+        <BlockList blocks={spec.blocks} ctx={ctx} />
+      </ModuleErrorBoundary>
     </div>
   )
 }

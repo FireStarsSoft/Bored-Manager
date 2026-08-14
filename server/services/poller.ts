@@ -22,6 +22,11 @@ export class Poller {
     private tick: () => Promise<void>
   ) {}
 
+  /** Whether the timer is running, so a caller can tell a leak from a tidy shutdown. */
+  get active(): boolean {
+    return this.running
+  }
+
   start(intervalMs: number): void {
     const wasRunning = this.running
     const previous = this.intervalMs

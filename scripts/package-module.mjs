@@ -44,12 +44,30 @@ try {
   process.exit(1)
 }
 
+/** Mirrors RESERVED_MODULE_IDS in shared/modules.ts, which this script cannot import. */
+const RESERVED_IDS = [
+  'overview',
+  'packages',
+  'terminals',
+  'settings',
+  'core',
+  'app',
+  'module',
+  'modules',
+  'system',
+  'top',
+  'services',
+  'metrics'
+]
+
 // The rules that can be checked here are the ones about the folder itself; the
 // installer repeats all of them plus the ones that need the app's own version.
 const problems = []
 if (manifest.apiVersion !== 2) problems.push(`apiVersion must be 2 (found ${manifest.apiVersion})`)
 if (!/^[a-z][a-z0-9-]{1,31}$/.test(manifest.id ?? '')) {
   problems.push(`"${manifest.id}" is not a valid module id`)
+} else if (RESERVED_IDS.includes(manifest.id)) {
+  problems.push(`"${manifest.id}" is a name the app uses itself`)
 }
 if (manifest.id !== basename(dir)) {
   problems.push(`id "${manifest.id}" does not match the folder name "${basename(dir)}"`)
@@ -86,8 +104,14 @@ for (const doc of ['README.md', 'CHANGELOG.md']) {
   }
 }
 
+// `.dist/` is compiled at runtime and skipped by the integrity hash, so it does
+// not belong in the archive either. Shipping it is worse than pointless: the
+// host decides whether to recompile by comparing its mtime against `main/`, and
+// an unpacked archive can hand it one that looks newer than the source it came
+// from - leaving the module running code from whoever built the zip.
 function listFiles(root, base = root, out = []) {
   for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (entry.name === '.dist') continue
     const path = join(root, entry.name)
     if (entry.isDirectory()) listFiles(path, base, out)
     else if (entry.isFile()) out.push(relative(base, path).split(sep).join('/'))

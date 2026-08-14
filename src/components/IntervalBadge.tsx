@@ -14,7 +14,7 @@ const FAST_LABELS: Record<string, string> = {
   system: 'System metrics',
   sensors: 'Sensors',
   gpu: 'GPU',
-  docker: 'Docker containers',
+  container: 'Docker and Incus containers',
   processes: 'Processes',
   network: 'Network detail',
   disk: 'Disk activity'
@@ -22,7 +22,7 @@ const FAST_LABELS: Record<string, string> = {
 
 const SLOW_LABELS: Record<string, string> = {
   storage: 'File systems & devices',
-  docker: 'Docker disk usage',
+  container: 'Container disk usage',
   network: 'Interface inventory'
 }
 

@@ -25,19 +25,43 @@ export function toSortState(d: TableSortDefault | undefined): SortState {
   return d ? { key: d.key, dir: d.dir } : null
 }
 
+/** Formats whose values read as words rather than numbers - what a text filter is for. */
+function isTextual(format: TableColumn['format']): boolean {
+  return !format || format === 'text' || format === 'badges'
+}
+
 export function defaultTextColumns(columns: TableColumn[]): string[] {
-  return columns.filter((c) => !c.format || c.format === 'text').map((c) => c.key)
+  return columns.filter((c) => isTextual(c.format)).map((c) => c.key)
 }
 
 export function cellAlign(col: TableColumn): 'left' | 'right' {
   if (col.align) return col.align
-  return col.format && col.format !== 'text' ? 'right' : 'left'
+  return isTextual(col.format) ? 'left' : 'right'
+}
+
+/**
+ * The plain text behind a cell. A `badges` cell holds objects, so filtering
+ * and sorting it would otherwise compare "[object Object]" with itself - they
+ * work on the labels the user can actually see instead.
+ */
+export function cellText(value: unknown): string {
+  if (value == null) return ''
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) =>
+        entry != null && typeof entry === 'object' && 'label' in entry
+          ? String((entry as { label: unknown }).label)
+          : String(entry)
+      )
+      .join(' ')
+  }
+  return String(value)
 }
 
 export function filterRows(rows: Row[], filterText: string, filterKeys: string[]): Row[] {
   const q = filterText.trim().toLowerCase()
   if (!q) return rows
-  return rows.filter((r) => filterKeys.some((k) => String(r[k] ?? '').toLowerCase().includes(q)))
+  return rows.filter((r) => filterKeys.some((k) => cellText(r[k]).toLowerCase().includes(q)))
 }
 
 function compareRows(a: Row, b: Row, key: string, dir: 'asc' | 'desc'): number {
@@ -45,7 +69,7 @@ function compareRows(a: Row, b: Row, key: string, dir: 'asc' | 'desc'): number {
   const vb = b[key]
   const mul = dir === 'asc' ? 1 : -1
   if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * mul
-  return String(va ?? '').localeCompare(String(vb ?? '')) * mul
+  return cellText(va).localeCompare(cellText(vb)) * mul
 }
 
 export function sortRows(rows: Row[], sort: SortState): Row[] {

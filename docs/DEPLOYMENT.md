@@ -34,7 +34,7 @@ A zip created on Linux keeps the `+x` bit, so `./install.sh` runs straight away.
 | `assets/` | `icon.png` |
 | `docs/` | this documentation |
 | `server/` | Express + WebSocket RPC |
-| `modules/` | the six built-in modules and `modules.lock.json` |
+| `modules/` | the seven built-in modules and `modules.lock.json` |
 | `registry/` | `modules.json` (community catalog) |
 | `scripts/` | `package.sh`, `update.sh`, `bored-manager.service`, module tooling, `licenses.mjs` |
 | `shared/`, `src/` | shared code and the renderer |

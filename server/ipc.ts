@@ -203,6 +203,7 @@ function applyPollers(): void {
 
 async function teardownSession(): Promise<void> {
   metricsHistory.setHost(null) // writes out whatever is still buffered
+  modulesHost.setHostKey(null)
   terminalService.disposeAll()
   systemMetrics.reset()
   topService.reset()
@@ -270,7 +271,9 @@ export function registerRpc(rpc: RpcRouter, api: HttpApi): void {
       packagesService.reset()
       modulesHost.resetAll()
       metricsHistory.configure(appSettings.history)
-      metricsHistory.setHost(hostKeyFor(cfg.mode, cfg.host, cfg.username))
+      const hostKey = hostKeyFor(cfg.mode, cfg.host, cfg.username)
+      metricsHistory.setHost(hostKey)
+      modulesHost.setHostKey(hostKey)
       applyPollers()
       // The target machine is shared by every client, so a browser sitting on
       // the connect screen has to follow the one that connected (and the other

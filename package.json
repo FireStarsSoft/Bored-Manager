@@ -1,7 +1,7 @@
 {
   "name": "bored-manager",
-  "version": "0.1.0",
-  "description": "Bored Manager - web UI for Linux system processes, network, disk, packages, NVIDIA GPU and Docker - local or remote over SSH",
+  "version": "0.3.0",
+  "description": "Bored Manager - web UI for Linux system processes, network, disk, packages, NVIDIA GPU and containers (Docker/Incus) - local or remote over SSH",
   "type": "module",
   "private": true,
   "scripts": {

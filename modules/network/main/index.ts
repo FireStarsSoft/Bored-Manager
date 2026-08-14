@@ -1,5 +1,6 @@
 import type { ModuleActivate } from '@shared/modules'
 import { NetworkService } from './service'
+import { NetTunablesService } from './tunables'
 
 /**
  * Main-process half of the Network module. One poller, but two speeds inside
@@ -13,6 +14,7 @@ import { NetworkService } from './service'
  */
 const activate: ModuleActivate = (ctx) => {
   const service = new NetworkService(ctx)
+  const tunables = new NetTunablesService(ctx)
 
   // Killing the owner of a connection is done here rather than through the
   // Processes module, so this page works whether that one is installed.
@@ -24,6 +26,18 @@ const activate: ModuleActivate = (ctx) => {
       ? { ok: true }
       : { ok: false, error: (res.stderr || res.stdout).trim() || `exit code ${res.code}` }
   })
+
+  // The Host tuning page. Read on demand rather than polled: these values only
+  // move when something changes them, and reading them costs a shell round trip.
+  ctx.handle('netTunables', () => tunables.read())
+  ctx.handle('planCheck', (values: unknown) => tunables.planCheck(values))
+  ctx.handle('planApply', (payload: unknown) => tunables.planApply(payload))
+  ctx.handle('tunablesCheck', (values: unknown) => tunables.tunablesCheck(values))
+  ctx.handle('tunablesApply', (payload: unknown) => tunables.tunablesApply(payload))
+  ctx.handle('rulesEffective', () => tunables.rulesEffective())
+  ctx.handle('rulesCheck', (values: unknown) => tunables.rulesCheck(values))
+  ctx.handle('rulesApply', (payload: unknown) => tunables.rulesApply(payload))
+  ctx.handle('rulesReset', () => tunables.rulesReset())
 
   return {
     applyPollers() {

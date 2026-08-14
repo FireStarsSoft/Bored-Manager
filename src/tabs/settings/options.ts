@@ -42,9 +42,9 @@ export const INTERVAL_GROUPS: Array<{
   },
   { label: 'GPU', fast: { key: 'gpu', desc: 'nvidia-smi: utilisation, VRAM, temperature, power' } },
   {
-    label: 'Docker',
-    fast: { key: 'docker', desc: 'Containers and their CPU/memory stats' },
-    slow: { key: 'docker', desc: 'Image, volume and build cache disk usage (docker system df)' }
+    label: 'Container',
+    fast: { key: 'container', desc: 'Docker and Incus containers and their CPU/memory stats' },
+    slow: { key: 'container', desc: 'Image, volume and build cache disk usage (docker system df)' }
   },
   {
     label: 'Network',
@@ -55,6 +55,14 @@ export const INTERVAL_GROUPS: Array<{
     label: 'Disk & storage',
     fast: { key: 'disk', desc: 'Throughput, IOPS, utilisation, per-process I/O' },
     slow: { key: 'storage', desc: 'Mount usage and inodes (df), block device list (lsblk)' }
+  },
+  {
+    label: 'Services (fleet)',
+    fast: { key: 'service-fleet', desc: 'How often the fleet pages re-read the last sweep result' },
+    slow: {
+      key: 'service-fleet',
+      desc: 'How often every monitored machine is swept over SSH (Manual = only on request)'
+    }
   }
 ]
 

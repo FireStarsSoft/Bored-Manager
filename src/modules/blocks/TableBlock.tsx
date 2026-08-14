@@ -31,11 +31,13 @@ import {
   TableHeader,
   TableRow
 } from '@/components/ui/table'
+import { Checkbox } from '@/components/ui/checkbox'
 import { cn } from '@/lib/utils'
 import { useBlockDataWithRefetch } from '../binding'
 import { ActionButton } from '../action-runner'
 import { formatBlockValue } from '../format'
 import { BlockList, type BlockCtx } from '../BlockRenderer'
+import { BlockValue } from './value-cell'
 import {
   buildDisplayRows,
   cellAlign,
@@ -69,6 +71,7 @@ export function TableBlockView({ block, ctx }: { block: TableBlock; ctx: BlockCt
   const [groupModeId, setGroupModeId] = React.useState('')
   const [collapsed, setCollapsed] = React.useState<Set<string>>(new Set())
   const [columnVisibility, setColumnVisibility] = React.useState<ColumnVisibilityState>({})
+  const [selection, setSelection] = React.useState<Set<string>>(new Set())
   // Identifies the open drawer's row rather than pinning the row object itself, so the
   // drawer keeps tracking that row's own live updates instead of freezing on a click-time snapshot.
   const [detailKey, setDetailKey] = React.useState<string | null>(null)
@@ -91,6 +94,44 @@ export function TableBlockView({ block, ctx }: { block: TableBlock; ctx: BlockCt
     () => buildDisplayRows(filtered, idKey, sortState, groupMode, aggregateKeys, collapsed),
     [filtered, groupMode, idKey, sortState, aggregateKeys, collapsed]
   )
+
+  // A tick survives filtering and re-sorting but not the row going away, so the
+  // selection is intersected with what is on screen now rather than pruned in an
+  // effect - a bulk action can then never name a container that has since gone.
+  const liveKeys = React.useMemo(
+    () => (block.selectable ? new Set(rows.map((r) => String(r[idKey]))) : null),
+    [block.selectable, rows, idKey]
+  )
+  const selectedKeys = React.useMemo(
+    () => (liveKeys ? [...selection].filter((key) => liveKeys.has(key)) : []),
+    [liveKeys, selection]
+  )
+  const filteredKeys = React.useMemo(
+    () => (block.selectable ? filtered.map((r) => String(r[idKey])) : []),
+    [block.selectable, filtered, idKey]
+  )
+  const selectedSet = React.useMemo(() => new Set(selectedKeys), [selectedKeys])
+  const allFilteredSelected = filteredKeys.length > 0 && filteredKeys.every((k) => selectedSet.has(k))
+
+  const toggleRow = (key: string, on: boolean): void => {
+    setSelection((prev) => {
+      const next = new Set(prev)
+      if (on) next.add(key)
+      else next.delete(key)
+      return next
+    })
+  }
+
+  const toggleAllFiltered = (on: boolean): void => {
+    setSelection((prev) => {
+      const next = new Set(prev)
+      for (const key of filteredKeys) {
+        if (on) next.add(key)
+        else next.delete(key)
+      }
+      return next
+    })
+  }
 
   // Re-finds the open row in every fresh poll of `rows` by id, so the drawer's data
   // stays live; falls back to the last row seen for that id if it drops out (process
@@ -142,9 +183,11 @@ export function TableBlockView({ block, ctx }: { block: TableBlock; ctx: BlockCt
                 </Button>
               )}
               <span className="truncate">
-                {dr.isGroupHeader
-                  ? `${dr.groupLabel ?? '—'} (${dr.groupCount})`
-                  : formatBlockValue(col.format, dr.row[col.key])}
+                {dr.isGroupHeader ? (
+                  `${dr.groupLabel ?? '—'} (${dr.groupCount})`
+                ) : (
+                  <BlockValue format={col.format} value={dr.row[col.key]} />
+                )}
               </span>
             </span>
           )
@@ -155,7 +198,7 @@ export function TableBlockView({ block, ctx }: { block: TableBlock; ctx: BlockCt
         if (dr.collapsed && col.aggregate && dr.aggregates) {
           return formatBlockValue(col.format, dr.aggregates[col.key])
         }
-        return formatBlockValue(col.format, dr.row[col.key])
+        return <BlockValue format={col.format} value={dr.row[col.key]} />
       }
     }))
 
@@ -215,7 +258,10 @@ export function TableBlockView({ block, ctx }: { block: TableBlock; ctx: BlockCt
     ? virtualizer.getTotalSize() - virtualItems[virtualItems.length - 1].end
     : 0
   const shown = virtualItems ? virtualItems.map((v) => tableRows[v.index]) : tableRows
-  const colCount = table.getVisibleLeafColumns().length
+  // The tick column is rendered around TanStack rather than as a column def:
+  // its checked state changes on every click, and putting it in the memoised
+  // defs would rebuild all of them (or go stale) for each tick.
+  const colCount = table.getVisibleLeafColumns().length + (block.selectable ? 1 : 0)
 
   const groupOptions = [
     { value: '', label: 'No grouping' },
@@ -274,6 +320,27 @@ export function TableBlockView({ block, ctx }: { block: TableBlock; ctx: BlockCt
         <div className="text-xs text-muted-foreground">{filtered.length} rows</div>
       </div>
 
+      {block.selectable && selectedKeys.length > 0 && (
+        <div className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-border bg-accent/60 px-2 py-1.5">
+          <span className="text-xs font-medium">{selectedKeys.length} selected</span>
+          {block.bulkActions?.map((action, i) => (
+            <ActionButton
+              key={i}
+              action={action}
+              moduleId={ctx.moduleId}
+              leadingArgs={[selectedKeys]}
+              onDone={() => {
+                setSelection(new Set())
+                refetch()
+              }}
+            />
+          ))}
+          <Button variant="ghost" size="sm" className="ml-auto" onClick={() => setSelection(new Set())}>
+            Clear
+          </Button>
+        </div>
+      )}
+
       <Card className="overflow-hidden p-0">
         <div
           ref={scrollRef}
@@ -284,6 +351,22 @@ export function TableBlockView({ block, ctx }: { block: TableBlock; ctx: BlockCt
             <TableHeader className="sticky top-0 z-10 bg-accent">
               {table.getHeaderGroups().map((group) => (
                 <TableRow key={group.id} className="hover:bg-transparent">
+                  {block.selectable && (
+                    <TableHead className="h-7 w-8 px-2">
+                      <Checkbox
+                        checked={
+                          allFilteredSelected
+                            ? true
+                            : selectedKeys.length > 0
+                              ? 'indeterminate'
+                              : false
+                        }
+                        disabled={filteredKeys.length === 0}
+                        aria-label={allFilteredSelected ? 'Clear selection' : 'Select all rows'}
+                        onCheckedChange={(v) => toggleAllFiltered(v === true)}
+                      />
+                    </TableHead>
+                  )}
                   {group.headers.map((header) => {
                     const col = block.columns.find((c) => c.key === header.column.id)
                     const sortable = col != null && col.sortable !== false
@@ -353,6 +436,17 @@ export function TableBlockView({ block, ctx }: { block: TableBlock; ctx: BlockCt
                       !dr.isGroupHeader && block.rowDetail && 'cursor-pointer'
                     )}
                   >
+                    {block.selectable && (
+                      <TableCell className="w-8 px-2 py-1" onClick={(e) => e.stopPropagation()}>
+                        {!dr.isGroupHeader && (
+                          <Checkbox
+                            checked={selectedSet.has(dr.key)}
+                            aria-label={`Select ${dr.key}`}
+                            onCheckedChange={(v) => toggleRow(dr.key, v === true)}
+                          />
+                        )}
+                      </TableCell>
+                    )}
                     {row.getAllCells().map((cell) => (
                       <TableCell
                         key={cell.id}

@@ -15,7 +15,13 @@
  */
 export const MODULE_API_VERSION = 2
 
-/** Ids the app uses for its own pages - a module may not claim one of them. */
+/**
+ * Ids the app uses for itself - a module may not claim one of them. Beyond its
+ * own pages, the id doubles as a history stream name, so the three streams the
+ * app writes (`system`, `top`, `services`) are here too: a module called `top`
+ * would otherwise append to the Overview's own history by simply doing what
+ * every module does.
+ */
 export const RESERVED_MODULE_IDS = [
   'overview',
   'packages',
@@ -25,8 +31,47 @@ export const RESERVED_MODULE_IDS = [
   'app',
   'module',
   'modules',
-  'system'
+  'system',
+  'top',
+  'services',
+  'metrics'
 ] as const
+
+/**
+ * History streams the app fills itself. A module may read one (`{ kind:
+ * "history", stream: "system" }` behind a chart of its own), but never write
+ * one - see `ownsHistoryStream`.
+ */
+export const CORE_HISTORY_STREAMS = ['system', 'top', 'services'] as const
+
+/**
+ * The alphabet a history stream name has to keep to, because it becomes part
+ * of a file name (`<stream>-<YYYYMMDDHH>.jsonl`) that the retention sweep
+ * parses back out again.
+ */
+export const HISTORY_STREAM_PATTERN = /^[a-z][a-z0-9-]*$/
+
+/**
+ * Which history streams belong to a module: its own id, and anything under
+ * `<id>-` for a module that keeps more than one series (`network-tcp`). The
+ * prefix is what makes "this module's history" a decidable question - without
+ * it, uninstalling could not tell which files on disk were its, and one module
+ * could quietly append to another's chart.
+ */
+export function ownsHistoryStream(moduleId: string, stream: string): boolean {
+  return stream === moduleId || stream.startsWith(`${moduleId}-`)
+}
+
+/** Why this module may not write that history stream, or null when it may. */
+export function historyStreamProblem(moduleId: string, stream: string): string | null {
+  if (!HISTORY_STREAM_PATTERN.test(stream)) {
+    return `history stream "${stream}" is not a valid name (lowercase letters, digits and dashes)`
+  }
+  if (!ownsHistoryStream(moduleId, stream)) {
+    return `history stream "${stream}" belongs to another module (write to "${moduleId}" or "${moduleId}-<name>")`
+  }
+  return null
+}
 
 /**
  * Lowercase, starts with a letter, 2-32 characters. The id doubles as the
@@ -285,7 +330,11 @@ export interface ModuleStreamHandle {
 /**
  * A repeating job. Starting it runs the tick immediately and then on the
  * interval; a tick that is still running never overlaps with the next one.
- * The app stops it on a clean close even if the module forgets to.
+ *
+ * The app holds on to every poller it hands out and stops it when the module
+ * is deactivated, so forgetting one in `dispose()` cannot leave a timer
+ * hitting the target machine for a module the user has switched off. That is
+ * a backstop, not a licence: the leak is logged against the module.
  */
 export interface ModulePoller {
   start(intervalMs: number): void
@@ -301,7 +350,14 @@ export interface ModuleHistoryPoint {
 /**
  * Everything a module may do in the main process. Deliberately narrow: a
  * module talks to the target machine and to its own renderer half, and never
- * touches Electron, the app folder or another module's state.
+ * touches the app folder or another module's state.
+ *
+ * The context is **revoked** when the module is deactivated (switched off,
+ * reloaded, uninstalled, or on a clean close): every member below throws
+ * `module "<id>" is no longer running` from that moment on. A module that
+ * kept a reference to `ctx` in a stray timer or an unresolved promise
+ * therefore cannot go on running commands, emitting or writing files after
+ * the app has been told it is gone.
  */
 export interface ModuleContext {
   readonly id: string
@@ -328,10 +384,36 @@ export interface ModuleContext {
   readonly tabActive: boolean
   /** Push a payload to the module's renderer half under this event name. */
   emit(event: string, payload: unknown): void
-  /** Answer a call from the module's renderer half. */
+  /**
+   * Answer a call from the module's renderer half. `method` has to be one of
+   * the manifest's `methods` - registering anything else throws, so what a
+   * module exposes is exactly what its manifest says it does.
+   */
   handle(method: string, fn: (...args: never[]) => unknown): void
-  /** Append a reduced sample to this module's metrics stream on disk. */
+  /**
+   * Append a reduced sample to this module's metrics history on disk. The
+   * stream defaults to the module's id and may only be one this module owns
+   * (`<id>` or `<id>-<name>`); anything else throws.
+   */
   addHistory(point: ModuleHistoryPoint, stream?: string): void
+  /**
+   * This module's own settings, shared by every target machine. Returns null
+   * until something has been written. Meant for the handful of values a user
+   * tunes once - not for cached readings.
+   */
+  configGet(): unknown
+  /** Replace the settings above. Throws if the payload is over 512 KB. */
+  configSet(value: unknown): void
+  /**
+   * What this module remembers about the machine that is connected right now,
+   * kept on the app's disk and not on the target. Returns null when nothing is
+   * connected, so a caller has to cope with "no host" either way.
+   */
+  hostDataGet(): unknown
+  /** Replace the per-host data above. Does nothing while disconnected. */
+  hostDataSet(value: unknown): void
+  /** Which machine hostDataGet/Set are pointed at, or null when disconnected. */
+  readonly hostKey: string | null
   /** Whether another module is installed and enabled, for optional probes. */
   isModuleEnabled(id: string): boolean
   log(message: string): void
@@ -356,7 +438,12 @@ export interface ModuleMainInstance {
   refreshSlow?(target: string): Promise<void>
   /** Slow sections this module answers refreshSlow for. */
   slowTargets?(): string[]
-  /** Release everything: pollers, watchers, log streams. */
+  /**
+   * Release everything: pollers, watchers, log streams. Called before the
+   * context is revoked, so this is the last chance to use `ctx` - and the
+   * only place a module can shut down cleanly rather than having the app cut
+   * its pollers and streams off for it.
+   */
   dispose(): void
 }
 

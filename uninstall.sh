@@ -51,4 +51,4 @@ if [ "${1:-}" = "--purge" ]; then
   exit 0
 fi
 
-echo "Xóa thư mục $APP_DIR để gỡ hoàn toàn."
+echo "Delete $APP_DIR yourself to uninstall completely."

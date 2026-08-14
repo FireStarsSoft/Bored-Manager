@@ -58,13 +58,13 @@ The sections below are the user-facing overview. The detail lives in [`docs/`](d
 On a new Linux machine (Ubuntu / Kali / other Debian-family distros) one command is enough. Default install folder `~/bored-manager`, port **8686**:
 
 ```bash
-# Ubuntu / Kali / các distro họ Debian (mặc định: cài vào ~/bored-manager, port 8686)
+# Ubuntu / Kali / other Debian-family distros (default: install into ~/bored-manager, port 8686)
 curl -fsSL https://raw.githubusercontent.com/FireStarsSoft/Bored-Manager/main/install.sh | bash
 
-# wget, đổi port + không đăng ký service
+# wget, change port + do not register the service
 wget -qO- https://raw.githubusercontent.com/FireStarsSoft/Bored-Manager/main/install.sh | bash -s -- --port 9090 --no-service
 
-# cài từ file zip đã tải về
+# install from a zip already downloaded
 curl -fsSL https://raw.githubusercontent.com/FireStarsSoft/Bored-Manager/main/install.sh | bash -s -- --source ./bored-manager-0.3.0.zip
 ```
 

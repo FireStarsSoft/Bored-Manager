@@ -451,7 +451,7 @@ export class ModuleInstallerService {
         checks.push({
           id: 'external-url-in-code',
           level: 'warning',
-          label: 'Code module chứa URL http(s) — xem lại trước khi cài',
+          label: 'Module code contains http(s) URLs - review before installing',
           detail: found.length ? found.slice(0, 8).join(', ') : undefined
         })
       }

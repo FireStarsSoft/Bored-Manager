@@ -15,7 +15,7 @@ const outDir = join(repoRoot, 'src', 'generated')
 const outFile = join(outDir, 'licenses.json')
 
 if (!existsSync(nodeModules)) {
-  console.error('ERROR: node_modules is missing - chạy npm install trước')
+  console.error('ERROR: node_modules is missing - run npm install first')
   process.exit(1)
 }
 
@@ -40,7 +40,7 @@ const rows = []
 for (const name of names) {
   const metaPath = join(nodeModules, name, 'package.json')
   if (!existsSync(metaPath)) {
-    console.error(`ERROR: ${name} is not in node_modules - chạy npm install trước`)
+    console.error(`ERROR: ${name} is not in node_modules - run npm install first`)
     process.exit(1)
   }
   const meta = JSON.parse(readFileSync(metaPath, 'utf8'))

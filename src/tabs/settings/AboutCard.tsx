@@ -47,7 +47,7 @@ function AboutCard(): React.JSX.Element {
           </a>
         </div>
         <div className="text-xs text-muted-foreground">
-          Ứng dụng không tải tài nguyên từ CDN/bên thứ ba — toàn bộ thư viện được đóng gói kèm.
+          The app does not load assets from a CDN or any other third-party host — every library is packed with the app.
         </div>
         <div className="rounded-md border border-border">
           <DataTable

@@ -278,7 +278,7 @@ log "Bored Manager was updated to ${VERSION_LABEL:-the new version}."
 if systemctl --user start bored-manager 2>/dev/null; then
     log "bored-manager.service started."
 else
-    echo "Chạy $APP_DIR/bored-manager start để mở lại"
+    echo "Start the app with: $APP_DIR/bored-manager start"
 fi
 if [ -n "$QUARANTINED" ]; then
     notify "Update complete${NEW_VERSION:+ ($NEW_VERSION)}, but these modules were disabled:${QUARANTINED}"

@@ -38,7 +38,7 @@ A zip created on Linux keeps the `+x` bit, so `./install.sh` runs straight away.
 | `registry/` | `modules.json` (community catalog) |
 | `scripts/` | `package.sh`, `update.sh`, `bored-manager.service`, module tooling, `licenses.mjs` |
 | `shared/`, `src/` | shared code and the renderer |
-| root files | `package.json`, `package-lock.json`, the Vite configs, the tsconfigs, `install.sh`, `uninstall.sh`, `run.sh`, `bored-manager`, `README.MD`, `LICENSE`, `.gitignore` |
+| root files | `package.json`, `package-lock.json`, the Vite configs, the tsconfigs, `components.json`, `install.sh`, `uninstall.sh`, `run.sh`, `bored-manager`, `README.MD`, `LICENSE`, `.gitignore` |
 
 | Excluded | Why |
 |---|---|
@@ -47,7 +47,7 @@ A zip created on Linux keeps the `+x` bit, so `./install.sh` runs straight away.
 | `modules-disabled/` | modules quarantined by a previous update — runtime state |
 | `modules/*.backup-*` | left behind by an interrupted module install |
 | `scripts/*.zip`, `*.log` | earlier archives and logs |
-| `.git`, `.github`, `.cursor`, `Todos.MD` | development only |
+| `.git`, `.github`, `.cursor`, `.cursorignore`, `Todos.MD` | development only |
 
 ## GitHub Actions
 

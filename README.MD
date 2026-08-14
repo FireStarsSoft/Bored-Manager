@@ -34,9 +34,10 @@ The sections below are the user-facing overview. The detail lives in [`docs/`](d
 - **Packages**: installed/upgradable counts, when the package list was last updated, total size; an upgradable table (upgrade one package or all), search and install, remove/purge, autoremove, an action history; apt/dnf/pacman output streams live into a log panel. Full support for **apt/dpkg**, basic support for **dnf** and **pacman**.
 - **GPU** (Dashboard + Auto power cap): utilisation/VRAM/temperature/power charts; power limit, persistence mode and clock lock/reset controls; **Auto Power Cap**, an in-app watcher that adjusts the power cap to Docker container state. Full detail in [`modules/gpu/README.md`](modules/gpu/README.md).
 - **Container** (Dashboard, Docker, Images & storage, Logs, Incus, Fleet operations, Module settings): Docker and Incus side by side. A containers table (status, healthcheck, CPU/memory, network and block I/O, ports, tags) whose rows open a full `docker inspect` panel plus logs, exec shell and pause/unpause; Incus instances and VMs with the same table and their images, profiles, networks and storage pools; **tags** you invent and apply across a selection; and **Fleet operations** — bulk create for either engine, bulk actions by tag/state/name/image, and creating an ipvlan network. Everything that changes more than one thing goes through a **Check** step that reads the machine and reports what would happen before it will apply. Full detail in [`modules/container/README.md`](modules/container/README.md).
+- **Services** (Overview, Machines, Services, Bulk install, Jobs, Module settings): systemd across every machine in an IP range, driven from the one machine the app is connected to — it becomes a jump host and opens its own SSH sessions. A **status wall** with one card per machine coloured by whether the services you decided to watch are running, a table of every machine and unit, bulk start/stop/restart and bulk install of the units every machine must have, all behind the same **Check** step. Ships **disabled**. Full detail in [`modules/service-fleet/README.md`](modules/service-fleet/README.md).
 - **Terminals**: as many shells as you like on the connected machine, local or SSH, plus one-click presets (`watch nvidia-smi`, `glances`, `lazydocker`) or a custom command. Every terminal is a real PTY on the server, shared by every browser watching it, and is cleaned up automatically when the server stops.
 - **Two update speeds per category**: what changes every second (CPU, RAM, network, disk I/O, sensors, GPU, containers, per-process counters) runs on a **fast interval** of 1–5s; what changes on the scale of minutes (**mount usage and the block device list, Docker disk usage, interface addresses/MTU/gateway/DNS**) runs on a **separate slow interval** per category (30s → 30 min, or *Manual only*). Every slow section shows how long ago it was read plus a **refresh button** for an immediate reading. The result: each fast tick is a shorter command that costs the target machine less.
-- **Modules (v2)**: Processes, Network, Disk, Sensors, GPU and Container are modules — each with its own version, README and changelog. A module is **data + JSON UI specs**; the app renders the pages. Settings → Modules can switch them off, **reload**, remove or install from a `.zip` / GitHub repo / the reviewed catalog. Install, update, uninstall and reload take effect **immediately** — no app rebuild, no server restart. See *Modules* below and [`docs/MODULES.md`](docs/MODULES.md).
+- **Modules (v2)**: Processes, Network, Disk, Sensors, GPU, Container and Services are modules — each with its own version, README and changelog. A module is **data + JSON UI specs**; the app renders the pages. Settings → Modules can switch them off, **reload**, remove or install from a `.zip` / GitHub repo / the reviewed catalog. Install, update, uninstall and reload take effect **immediately** — no app rebuild, no server restart. See *Modules* below and [`docs/MODULES.md`](docs/MODULES.md).
 - **Reviewed catalog**: Settings → Modules lists community modules from `registry/modules.json` on the configured GitHub repo. Installing from the catalog is the same pipeline as a zip you picked yourself, with a verified-source check.
 - **Charts with labelled axes**: every chart, including the small ones on the Overview cards, labels its **time axis** (clock time, with seconds for ranges up to 10 minutes) and its **value axis** in the unit being measured (%, B/s, GiB, °C, W), so it is always clear what the height of a curve means. A **reference grid is drawn in both directions** — a line at every value label and at every time label — so a point on a curve can be read off against either axis, and the labels sit clear of the plot with the outer time labels never clipped at the edge of a card.
 - **Long-term history**: metrics are collected in RAM and **written to disk in one batch every 5 minutes** (see *History and data storage*), which makes 24-hour charts possible without wearing out the disk.
@@ -64,7 +65,7 @@ curl -fsSL https://raw.githubusercontent.com/FireStarsSoft/Bored-Manager/main/in
 wget -qO- https://raw.githubusercontent.com/FireStarsSoft/Bored-Manager/main/install.sh | bash -s -- --port 9090 --no-service
 
 # cài từ file zip đã tải về
-curl -fsSL https://raw.githubusercontent.com/FireStarsSoft/Bored-Manager/main/install.sh | bash -s -- --source ./bored-manager-0.1.0.zip
+curl -fsSL https://raw.githubusercontent.com/FireStarsSoft/Bored-Manager/main/install.sh | bash -s -- --source ./bored-manager-0.3.0.zip
 ```
 
 Needs Node.js 20+, `curl` or `wget`, and `unzip`. The installer registers a systemd user unit (`bored-manager.service`) unless you pass `--no-service`, then starts it. Open `http://<ip>:8686`.
@@ -167,7 +168,7 @@ The app serves **plain HTTP**. Use it on a trusted LAN, or put it behind a TLS r
 
 ## Modules
 
-Six modules ship with the app (Docker is **off by default** — enable it in Settings → Modules), each versioned independently and documented on its own:
+Seven modules ship with the app (Container and Services are **off by default** — enable them in Settings → Modules), each versioned independently and documented on its own:
 
 | Module | Pages | README |
 |---|---|---|
@@ -177,6 +178,7 @@ Six modules ship with the app (Docker is **off by default** — enable it in Set
 | `sensors` | Sensors | [modules/sensors/README.md](modules/sensors/README.md) |
 | `gpu` | Dashboard, Auto power cap | [modules/gpu/README.md](modules/gpu/README.md) |
 | `container` | Dashboard, Docker, Images & storage, Logs, Incus, Fleet operations, Module settings | [modules/container/README.md](modules/container/README.md) |
+| `service-fleet` | Overview, Machines, Services, Bulk install, Jobs, Module settings | [modules/service-fleet/README.md](modules/service-fleet/README.md) |
 
 The CPU, Memory, Network, Disk I/O, App services and Top processes cards on the Overview belong to the app, not to a module: they are fed by the machine-wide metrics (and the services tracker), so a summary of the machine does not depend on which detail pages are installed.
 

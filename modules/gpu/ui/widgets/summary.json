@@ -25,7 +25,20 @@
           ]
         }
       ],
-      "else": [{ "type": "section", "title": "No NVIDIA GPU detected", "blocks": [] }]
+      "else": [
+        {
+          "type": "section",
+          "title": "GPU",
+          "blocks": [
+            {
+              "type": "list",
+              "source": { "kind": "stream", "event": "snapshot", "path": "gpus" },
+              "columns": [{ "key": "name" }],
+              "emptyText": "No NVIDIA GPU detected on this machine."
+            }
+          ]
+        }
+      ]
     }
   ]
 }

@@ -2,6 +2,17 @@
 
 All notable changes to Bored Manager. Each module keeps its own changelog in `modules/<id>/CHANGELOG.md`, because module versions are independent of the app's.
 
+## 0.3.1
+
+- **Fixed: changing a password crashed the page.** The password dialog (and the one for setting `bored-admin`'s first password, which is what "Require login" opens) rendered nothing but a white screen. Radix refuses to slot a dialog onto a `<form>` when a close button sits next to it, and the crash took the whole app down; two other dialogs - the terminal's custom command and a module action's prompt - were broken the same way. A render error is now caught and shown with a Reload button instead of unmounting the app.
+- **Fixed: switches showed no state.** Every on/off switch in Settings was styled for `data-checked`, which the installed Radix does not emit - so the track had no colour in either state and the knob never moved. Off is now an outlined track with a grey knob, on a filled one with a white knob, legible in both themes. Ticked checkboxes were unfilled for the same reason.
+- **Require login behaves as designed.** Switching it on closes the sockets of clients that never logged in, instead of leaving them live until their next call; turning it on from Settings signs this browser in on the way (or shows the login form straight away) rather than dropping it with "your session expired". A settings write or an imported file can no longer switch it on while `bored-admin` has no password, which was a way to lock everyone out for good. Accounts without a password now say so at the top of the card, with a button to set one.
+- **Settings is one section at a time.** A list on the left - General, Overview cards, Modules, Data & storage, Server & users, Software update, About - instead of ten cards in a two-column grid that left holes wherever a tall card met a short one. Update intervals only lists categories whose module is switched on.
+- **Breadcrumb says something.** "Sensors › Sensors" and "Processes › Processes" are now just the page, the module crumb is a link to it, and the duplicate page headings under it are gone. The connection dot goes amber while the server is reconnecting, and the palette hint reads ⌘ K on a Mac.
+- Auto power cap and installing a container runtime: see the GPU and Container module changelogs.
+- `form` blocks accept a `title`, so a row drawer with several forms says what each one is for.
+- A `checkForm` apply that refuses (a spent token, something already running) now reports the refusal instead of "applied".
+
 ## 0.3.0
 
 - **New block type `statusCards`.** One tinted card per item in a resolved array, for a status wall whose card count comes from the data: a title row coloured by that item's health, a collapsible note, status chips clamped to a couple of rows with an expand control, and a column count the reader can change. `table` could not stand in for it — one row per item, no data-driven colour — and `section.columns` only grids blocks a spec listed by hand. A module using it needs `minAppVersion: "0.3.0"`.

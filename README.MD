@@ -32,8 +32,8 @@ The sections below are the user-facing overview. The detail lives in [`docs/`](d
 - **Disk** (Devices + File systems): Read/Write widgets, IOPS and a throughput chart; every block device on the machine whether mounted or not, file systems with inodes, and I/O per process down to an **Unattributed** row for the bytes no process can be charged for. Full detail in [`modules/disk/README.md`](modules/disk/README.md).
 - **Sensors**: every temperature, fan, voltage, power and current reading the machine exposes, grouped by chip, with a history chart. Full detail in [`modules/sensors/README.md`](modules/sensors/README.md).
 - **Packages**: installed/upgradable counts, when the package list was last updated, total size; an upgradable table (upgrade one package or all), search and install, remove/purge, autoremove, an action history; apt/dnf/pacman output streams live into a log panel. Full support for **apt/dpkg**, basic support for **dnf** and **pacman**.
-- **GPU** (Dashboard + Auto power cap): utilisation/VRAM/temperature/power charts; power limit, persistence mode and clock lock/reset controls; **Auto Power Cap**, an in-app watcher that adjusts the power cap to Docker container state. Full detail in [`modules/gpu/README.md`](modules/gpu/README.md).
-- **Container** (Dashboard, Docker, Images & storage, Logs, Incus, Fleet operations, Module settings): Docker and Incus side by side. A containers table (status, healthcheck, CPU/memory, network and block I/O, ports, tags) whose rows open a full `docker inspect` panel plus logs, exec shell and pause/unpause; Incus instances and VMs with the same table and their images, profiles, networks and storage pools; **tags** you invent and apply across a selection; and **Fleet operations** — bulk create for either engine, bulk actions by tag/state/name/image, and creating an ipvlan network. Everything that changes more than one thing goes through a **Check** step that reads the machine and reports what would happen before it will apply. Full detail in [`modules/container/README.md`](modules/container/README.md).
+- **GPU** (Dashboard + Auto power cap): utilisation/VRAM/temperature/power charts; power limit, persistence mode and clock lock/reset controls. **Auto power cap** lists every GPU the machine reports with the range its driver allows, and switches each one between an idle and a running cap — busy meaning either a running container or a compute process on that card. What to watch is saved per machine, so it survives a reconnect or a restart. Full detail in [`modules/gpu/README.md`](modules/gpu/README.md).
+- **Container** (Dashboard, Docker, Images & storage, Logs, Incus, Fleet operations, Module settings): Docker and Incus side by side. A containers table (status, healthcheck, CPU/memory, network and block I/O, ports, tags) whose rows open a full `docker inspect` panel plus logs, exec shell and pause/unpause; Incus instances and VMs with the same table and their images, profiles, networks and storage pools; **tags** you invent and apply across a selection; and **Fleet operations** — bulk create for either engine, bulk actions by tag/state/name/image, and creating an ipvlan network. Everything that changes more than one thing goes through a **Check** step that reads the machine and reports what would happen before it will apply — including **installing Docker or Incus** on a machine that has neither, from the module's own settings page. Full detail in [`modules/container/README.md`](modules/container/README.md).
 - **Services** (Overview, Machines, Services, Bulk install, Jobs, Module settings): systemd across every machine in an IP range, driven from the one machine the app is connected to — it becomes a jump host and opens its own SSH sessions. A **status wall** with one card per machine coloured by whether the services you decided to watch are running, a table of every machine and unit, bulk start/stop/restart and bulk install of the units every machine must have, all behind the same **Check** step. Ships **disabled**. Full detail in [`modules/service-fleet/README.md`](modules/service-fleet/README.md).
 - **Terminals**: as many shells as you like on the connected machine, local or SSH, plus one-click presets (`watch nvidia-smi`, `glances`, `lazydocker`) or a custom command. Every terminal is a real PTY on the server, shared by every browser watching it, and is cleaned up automatically when the server stops.
 - **Two update speeds per category**: what changes every second (CPU, RAM, network, disk I/O, sensors, GPU, containers, per-process counters) runs on a **fast interval** of 1–5s; what changes on the scale of minutes (**mount usage and the block device list, Docker disk usage, interface addresses/MTU/gateway/DNS**) runs on a **separate slow interval** per category (30s → 30 min, or *Manual only*). Every slow section shows how long ago it was read plus a **refresh button** for an immediate reading. The result: each fast tick is a shorter command that costs the target machine less.
@@ -65,7 +65,7 @@ curl -fsSL https://raw.githubusercontent.com/FireStarsSoft/Bored-Manager/main/in
 wget -qO- https://raw.githubusercontent.com/FireStarsSoft/Bored-Manager/main/install.sh | bash -s -- --port 9090 --no-service
 
 # install from a zip already downloaded
-curl -fsSL https://raw.githubusercontent.com/FireStarsSoft/Bored-Manager/main/install.sh | bash -s -- --source ./bored-manager-0.3.0.zip
+curl -fsSL https://raw.githubusercontent.com/FireStarsSoft/Bored-Manager/main/install.sh | bash -s -- --source ./bored-manager-0.3.1.zip
 ```
 
 Needs Node.js 20+, `curl` or `wget`, and `unzip`. The installer registers a systemd user unit (`bored-manager.service`) unless you pass `--no-service`, then starts it. Open `http://<ip>:8686`.
@@ -129,8 +129,9 @@ To run in the foreground instead of as a service: `./run.sh`.
 
 ## Security
 
-Login is **off by default**. Anyone who can reach `http://<ip>:8686` has full access. Turn it on in Settings → *Server & users* (*Require login*). The first time you enable it you must set a password for `bored-admin`.
+Login is **off by default**. Anyone who can reach `http://<ip>:8686` has full access. Turn it on in Settings → *Server & users* (*Require login*). The first time you enable it you must set a password for `bored-admin` — the switch asks for one, and signs this browser in with it. Any other browser that was connected while the login was off is signed out on the spot.
 
+- Passwords are changed from the account table in the same card (*Change password*). An account that has none says so, with a button to set one.
 - Username + password are required on **every** sign-in. The browser is never asked to store the password (only the last username is kept locally as a typing convenience).
 - Each account has its own data on the host under `data/users/<username>/` (saved SSH connections). Deleting an account deletes that folder with it; other accounts are untouched. `bored-admin` cannot be deleted.
 - Wrong passwords are counted **across every client**. After `auth.maxFailures` (default **5**) the WebUI locks (HTTP 423). A successful login resets the counter. Unlock **only** from a terminal on the host: `./bored-manager unlock`. That takes effect immediately; you do not need to restart.
@@ -140,7 +141,9 @@ The app serves **plain HTTP**. Use it on a trusted LAN, or put it behind a TLS r
 
 ## Settings
 
-- **Update intervals**, per category. Each category is split into what has to be sampled often and what does not:
+Sections are listed down the left and shown one at a time — *General*, *Overview cards*, *Modules*, *Data & storage*, *Server & users*, *Software update*, *About*.
+
+- **Update intervals**, per category, in *General*. A category whose module is switched off is not listed. Each one is split into what has to be sampled often and what does not:
 
   | Category | Fast interval (1s / 2s / 5s / paused) | Slow interval (30s → 30m / manual) |
   |---|---|---|
@@ -148,9 +151,10 @@ The app serves **plain HTTP**. Use it on a trusted LAN, or put it behind a TLS r
   | Sensors | temperatures, fans, voltages, power, current | — |
   | Processes | process table, Overview top consumers | — |
   | GPU | utilisation, VRAM, temperature, power | — |
-  | Docker | containers and their CPU/memory stats | image, volume and build cache disk usage (`docker system df`) |
+  | Container | containers and their CPU/memory stats | image, volume and build cache disk usage (`docker system df`) |
   | Network | interface rates, connections, per-process bandwidth | addresses, MTU, link speed, gateway, DNS |
   | Disk & storage | throughput, IOPS, utilisation, per-process I/O | mount usage and inodes (`df`), block device list (`lsblk`) |
+  | Services (fleet) | how often the fleet pages re-read the last sweep | how often every machine is swept over SSH |
 
   So disk read/write is measured every second while `df` is not — the detail page no longer inherits one single speed for everything on it.
 
@@ -162,7 +166,7 @@ The app serves **plain HTTP**. Use it on a trusted LAN, or put it behind a TLS r
 - **Modules**: a table of what is installed (version, built-in or installed, enabled, integrity) with enable/disable, Uninstall, Reload, Verify and Details (the module's own README and changelog). Below it: install or update from a GitHub `owner/repo`, a zip URL, a file, or the **reviewed catalog**. Details in [`docs/MODULES.md`](docs/MODULES.md).
 - **Data & storage**: manage the metrics history — the folder being written to, the current file, total size and file count, oldest/newest sample, last write and how many samples are still buffered in RAM; adjust **retention** (1–48 hours) and the **size limit** (MB); *Refresh*, *Write now*, *Copy path* and *Clear history*.
 - **Backup & portability**: settings live in `data/user-settings/settings.json`; export/import them from the Settings tab to move your setup to another machine (the Overview layout comes along). The file carries a `settingsVersion`: it is read by any newer version, unknown fields are dropped, missing ones come from the defaults, and it is rewritten in the current format.
-- **Server & users**: listen address (port / bind host), *Require login*, lockout threshold, session idle, and the account list (add, set password, delete — deleting an account wipes that user's saved connections).
+- **Server & users**: listen address (port / bind host), *Require login*, lockout threshold, session idle, and the account list (add, change password, delete — deleting an account wipes that user's saved connections).
 - **Software update**: the installed version, the GitHub repo (default `FireStarsSoft/Bored-Manager`) with *Check for updates*, a zip URL (pre-filled with the last one you used), and a zip file from this device. *Download & test* then *Confirm & install*. The server restarts itself. Details in *Updating the app* below.
 - **About**: app name, version, Apache-2.0, link to the GitHub repo, the bundled libraries (name / version / license), and a reminder that nothing is loaded from a CDN.
 

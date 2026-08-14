@@ -1,6 +1,6 @@
 {
   "name": "bored-manager",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Bored Manager - web UI for Linux system processes, network, disk, packages, NVIDIA GPU and containers (Docker/Incus) - local or remote over SSH",
   "type": "module",
   "private": true,
@@ -16,7 +16,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "modules:lock": "node scripts/modules-lock.mjs",
     "modules:verify": "node scripts/modules-lock.mjs --check",
-    "modules:pack": "node scripts/package-module.mjs"
+    "modules:pack": "node scripts/package-module.mjs",
+    "modules:specs": "tsx scripts/check-specs.mjs",
+    "modules:compile": "tsx scripts/compile-modules.mjs"
   },
   "author": "",
   "license": "Apache-2.0",

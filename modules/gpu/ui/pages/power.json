@@ -12,45 +12,85 @@
               "type": "keyValue",
               "source": { "kind": "stream", "event": "autocap" },
               "rows": [
-                { "key": "enabled", "label": "Enabled" },
-                { "key": "gpuIndex", "label": "GPU" },
-                { "key": "idleCap", "label": "Idle cap (W)", "format": "number" },
-                { "key": "runningCap", "label": "Running cap (W)", "format": "number" },
-                { "key": "intervalSec", "label": "Check interval (s)", "format": "number" },
-                { "key": "currentCap", "label": "Current cap (W)", "format": "number" }
+                { "key": "enabled", "label": "Watching" },
+                { "key": "trigger", "label": "Busy means" },
+                { "key": "intervalSec", "label": "Checked every (s)", "format": "number" }
               ]
+            },
+            {
+              "type": "table",
+              "source": { "kind": "stream", "event": "autocap", "path": "gpus" },
+              "rowKey": "index",
+              "columns": [
+                { "key": "index", "label": "#", "align": "right" },
+                { "key": "name", "label": "GPU" },
+                { "key": "idleCap", "label": "Idle cap (W)", "format": "number", "align": "right" },
+                { "key": "runningCap", "label": "Running cap (W)", "format": "number", "align": "right" },
+                { "key": "appliedCap", "label": "Applied (W)", "format": "number", "align": "right" },
+                { "key": "busy", "label": "Busy now" }
+              ],
+              "sortDefault": { "key": "index", "dir": "asc" },
+              "emptyText": "No GPU is being watched yet - open one in the table below and set its two caps."
             },
             {
               "type": "form",
               "fields": [
-                { "key": "gpuIndex", "label": "GPU index", "input": "number" },
-                { "key": "idleCap", "label": "Idle cap (W)", "input": "number" },
-                { "key": "runningCap", "label": "Running cap (W)", "input": "number" },
-                { "key": "intervalSec", "label": "Check interval (s)", "input": "number" }
+                {
+                  "key": "intervalSec",
+                  "label": "Check interval (s)",
+                  "input": "number",
+                  "initial": 10,
+                  "help": "2 to 3600. How often the machine is asked whether it is busy."
+                },
+                {
+                  "key": "trigger",
+                  "label": "Busy means",
+                  "input": "select",
+                  "initial": "docker",
+                  "options": [
+                    { "value": "docker", "label": "Any container is running (docker ps)" },
+                    { "value": "gpu", "label": "A compute process is on that GPU (nvidia-smi)" }
+                  ],
+                  "help": "Per GPU with the second choice, machine-wide with the first."
+                }
               ],
-              "submit": {
-                "label": "Start",
-                "method": "autoCapStart",
-                "confirm": "Watch Docker and switch this GPU's power cap between the idle and running values automatically?"
-              }
+              "submit": { "label": "Save schedule", "method": "autoCapConfigure" }
             },
             {
               "type": "actions",
-              "actions": [{ "label": "Stop", "method": "autoCapStop", "kind": "danger" }]
+              "actions": [
+                { "label": "Watch again", "method": "autoCapStart" },
+                {
+                  "label": "Stop watching",
+                  "method": "autoCapStop",
+                  "confirm": "Stop switching the caps automatically? Whatever cap each GPU has right now stays on it, and the values you set are kept for next time.",
+                  "kind": "danger"
+                }
+              ]
+            },
+            {
+              "type": "log",
+              "event": "autocaplog",
+              "startMethod": "autoCapLogTail"
             }
           ]
         },
         {
           "type": "section",
-          "title": "GPUs",
+          "title": "GPUs on this machine",
           "blocks": [
             {
               "type": "table",
               "source": { "kind": "stream", "event": "snapshot", "path": "gpus" },
+              "rowKey": "index",
               "columns": [
                 { "key": "index", "label": "#", "align": "right" },
                 { "key": "name", "label": "Name" },
-                { "key": "powerLimit", "label": "Power limit (W)", "format": "number", "align": "right" },
+                { "key": "powerLimit", "label": "Cap now (W)", "format": "number", "align": "right" },
+                { "key": "powerDraw", "label": "Draw (W)", "format": "number", "align": "right" },
+                { "key": "powerMin", "label": "Min (W)", "format": "number", "align": "right" },
+                { "key": "powerMax", "label": "Max (W)", "format": "number", "align": "right" },
+                { "key": "powerDefault", "label": "Default (W)", "format": "number", "align": "right" },
                 { "key": "persistence", "label": "Persistence" },
                 { "key": "clockSm", "label": "SM clock (MHz)", "format": "number", "align": "right" },
                 { "key": "clockMem", "label": "Mem clock (MHz)", "format": "number", "align": "right" }
@@ -60,7 +100,53 @@
               "rowDetail": [
                 {
                   "type": "form",
-                  "fields": [{ "key": "watts", "label": "Power limit (W)", "input": "number" }],
+                  "title": "Auto power cap for this GPU",
+                  "fields": [
+                    {
+                      "key": "idleCap",
+                      "label": "Idle cap (W)",
+                      "input": "number",
+                      "initialFromScope": "powerMin",
+                      "help": "Applied while the machine is not busy. Starts at this GPU's lowest allowed value."
+                    },
+                    {
+                      "key": "runningCap",
+                      "label": "Running cap (W)",
+                      "input": "number",
+                      "initialFromScope": "powerMax",
+                      "help": "Applied while it is busy. Starts at this GPU's highest allowed value."
+                    }
+                  ],
+                  "submit": {
+                    "label": "Watch this GPU",
+                    "method": "autoCapSet",
+                    "argsFromRow": ["index"],
+                    "confirm": "Switch this GPU's power cap between the two values automatically, and keep doing it after a reconnect or a restart?"
+                  }
+                },
+                {
+                  "type": "actions",
+                  "actions": [
+                    {
+                      "label": "Stop watching this GPU",
+                      "method": "autoCapClear",
+                      "argsFromRow": ["index"],
+                      "kind": "danger"
+                    }
+                  ]
+                },
+                {
+                  "type": "form",
+                  "title": "Set the cap once, by hand",
+                  "fields": [
+                    {
+                      "key": "watts",
+                      "label": "Power limit (W)",
+                      "input": "number",
+                      "initialFromScope": "powerLimit",
+                      "help": "Has to be within the Min and Max this GPU reports."
+                    }
+                  ],
                   "submit": { "label": "Set power limit", "method": "setPowerLimit", "argsFromRow": ["index"] }
                 },
                 {
@@ -72,6 +158,7 @@
                 },
                 {
                   "type": "form",
+                  "title": "Lock the clocks",
                   "fields": [
                     { "key": "min", "label": "Min clock (MHz)", "input": "number" },
                     { "key": "max", "label": "Max clock (MHz)", "input": "number" }
@@ -90,8 +177,15 @@
       "else": [
         {
           "type": "section",
-          "title": "No NVIDIA GPU detected on the target (nvidia-smi not available), or waiting for the first reading.",
-          "blocks": []
+          "title": "No GPU to cap",
+          "blocks": [
+            {
+              "type": "list",
+              "source": { "kind": "stream", "event": "snapshot", "path": "gpus" },
+              "columns": [{ "key": "name" }],
+              "emptyText": "nvidia-smi did not report a GPU on this machine - either there is no NVIDIA card, the driver is not installed, or the first reading has not arrived yet."
+            }
+          ]
         }
       ]
     }

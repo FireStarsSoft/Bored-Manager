@@ -34,16 +34,14 @@ export function SectionCard({
   icon: Icon,
   iconClass,
   fast,
-  action,
   onClick,
   children
 }: {
   title: string
   icon: React.ComponentType<{ className?: string }>
   iconClass: string
-  /** Which fast interval feeds this card; omitted when `action` says it. */
+  /** Which fast interval feeds this card. */
   fast?: string
-  action?: React.ReactNode
   onClick?: () => void
   children: React.ReactNode
 }): React.JSX.Element {
@@ -52,14 +50,11 @@ export function SectionCard({
       onClick={onClick}
       className={cn('p-3', onClick && 'cursor-pointer transition-colors hover:bg-accent')}
     >
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          <DragHandle />
-          <Icon className={`size-3.5 ${iconClass}`} />
-          <span className="truncate">{title}</span>
-          {fast && <IntervalBadge fast={fast} />}
-        </div>
-        {action}
+      <div className="mb-2 flex min-w-0 items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        <DragHandle />
+        <Icon className={`size-3.5 ${iconClass}`} />
+        <span className="truncate">{title}</span>
+        {fast && <IntervalBadge fast={fast} />}
       </div>
       {children}
     </Card>

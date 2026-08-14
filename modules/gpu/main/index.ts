@@ -21,13 +21,18 @@ const activate: ModuleActivate = (ctx) => {
   ctx.handle('resetClocks', (index: number) => service.resetClocks(index))
   ctx.handle('autoCapStatus', () => service.getAutoCapStatus())
   // Positional rather than a single config object - a declarative `form`
-  // block (T3.5) submits one value per field, not a pre-built object.
-  ctx.handle(
-    'autoCapStart',
-    (gpuIndex: number, idleCap: number, runningCap: number, intervalSec: number) =>
-      service.startAutoCap({ gpuIndex, idleCap, runningCap, intervalSec })
+  // block (T3.5) submits one value per field, not a pre-built object. The GPU
+  // is the row the form was opened on, so it is never typed.
+  ctx.handle('autoCapSet', (index: number, idleCap: number, runningCap: number) =>
+    service.autoCapSet(index, idleCap, runningCap)
   )
-  ctx.handle('autoCapStop', () => service.stopAutoCap())
+  ctx.handle('autoCapClear', (index: number) => service.autoCapClear(index))
+  ctx.handle('autoCapConfigure', (intervalSec: number, trigger: string) =>
+    service.autoCapConfigure(intervalSec, trigger)
+  )
+  ctx.handle('autoCapStart', () => service.autoCapStart())
+  ctx.handle('autoCapStop', () => service.autoCapStop())
+  ctx.handle('autoCapLogTail', () => service.autoCapLogTail())
   // Killing a compute process is done here rather than through the Processes
   // module, so this module works on its own whether that one is installed.
   ctx.handle('killProcess', (pid: number) => service.killProcess(pid))
@@ -37,6 +42,10 @@ const activate: ModuleActivate = (ctx) => {
       const interval = ctx.fastIntervalMs('gpu')
       if (ctx.connected && interval > 0) service.poller.start(interval)
       else service.poller.stop()
+      // Runs after ctx.hostKey was pointed at the machine that just connected
+      // (see teardownSession/conn:connect in server/ipc.ts), which is what lets
+      // the watcher pick its saved caps back up.
+      service.applyAutoCap()
     },
     reset() {
       service.reset()

@@ -17,6 +17,16 @@ export interface PaletteEntry {
   icon: React.ReactNode
 }
 
+/** What to print on the button that opens it, on this device. */
+export const PALETTE_SHORTCUT = /Mac|iPhone|iPad|iPod/.test(
+  navigator.platform || navigator.userAgent
+)
+  ? '⌘ K'
+  : 'Ctrl K'
+
+/** Set while the palette is mounted; see openCommandPalette below. */
+let openFromOutside: (() => void) | null = null
+
 /**
  * Ctrl/Cmd+K jump list over every page the sidebar can reach. With a dozen
  * module pages nested behind dropdowns, typing the name is faster than finding
@@ -40,7 +50,11 @@ export function CommandPalette({
       }
     }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    openFromOutside = () => setOpen(true)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      openFromOutside = null
+    }
   }, [])
 
   const groups = React.useMemo(() => {
@@ -84,7 +98,5 @@ export function CommandPalette({
 
 /** Opens the palette from a click, for people who do not know the shortcut. */
 export function openCommandPalette(): void {
-  window.dispatchEvent(
-    new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true })
-  )
+  openFromOutside?.()
 }

@@ -740,6 +740,7 @@ Fields plus one submit action. Field values are appended after `argsFromRow` / `
 |---|---|---|
 | `fields` | FormField[] | yes — see below |
 | `submit` | ActionSpec | yes |
+| `title` | string | no — a heading above the fields, worth having when a `rowDetail` stacks several forms |
 
 #### `FormField`
 
@@ -767,21 +768,33 @@ Minimal:
 }
 ```
 
-Full (GPU auto cap):
+Full (GPU auto cap, in the drawer of the GPU table — so the card is the row, not a number the user has to know, and the two caps start at the range that GPU reports):
 
 ```json
 {
   "type": "form",
+  "title": "Auto power cap for this GPU",
   "fields": [
-    { "key": "gpuIndex", "label": "GPU index", "input": "number" },
-    { "key": "idleCap", "label": "Idle cap (W)", "input": "number" },
-    { "key": "runningCap", "label": "Running cap (W)", "input": "number" },
-    { "key": "intervalSec", "label": "Check interval (s)", "input": "number" }
+    {
+      "key": "idleCap",
+      "label": "Idle cap (W)",
+      "input": "number",
+      "initialFromScope": "powerMin",
+      "help": "Applied while the machine is not busy."
+    },
+    {
+      "key": "runningCap",
+      "label": "Running cap (W)",
+      "input": "number",
+      "initialFromScope": "powerMax",
+      "help": "Applied while it is busy."
+    }
   ],
   "submit": {
-    "label": "Start",
-    "method": "autoCapStart",
-    "confirm": "Watch Docker and switch this GPU's power cap between the idle and running values automatically?"
+    "label": "Watch this GPU",
+    "method": "autoCapSet",
+    "argsFromRow": ["index"],
+    "confirm": "Switch this GPU's power cap between the two values automatically?"
   }
 }
 ```

@@ -45,8 +45,12 @@ export class WsClient {
 
   /** Called after a reconnect (not the first connect), to re-seed the UI. */
   onReconnected: (() => void) | null = null
-  /** Called when the server rejected the socket because the session expired. */
-  onUnauthorized: (() => void) | null = null
+  /**
+   * Called when the server closed the socket because it is not allowed to talk.
+   * The reason is the server's own wording, so the UI can say whether a session
+   * expired or a login was just switched on.
+   */
+  onUnauthorized: ((reason: string) => void) | null = null
   onStateChange: ((state: WsState) => void) | null = null
 
   /** Opens the socket and resolves the first time it is connected. */
@@ -138,7 +142,7 @@ export class WsClient {
       this.outbox = []
       if (event.code === WS_UNAUTHORIZED) {
         this.stopped = true
-        this.onUnauthorized?.()
+        this.onUnauthorized?.(event.reason)
         return
       }
       this.scheduleReconnect()

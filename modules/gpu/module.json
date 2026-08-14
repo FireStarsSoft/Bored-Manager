@@ -2,8 +2,8 @@
   "apiVersion": 2,
   "id": "gpu",
   "name": "NVIDIA GPU",
-  "version": "2.0.0",
-  "description": "Utilisation, VRAM, temperature and power charts for every NVIDIA GPU, with power limit, persistence and clock controls plus an in-app auto power cap.",
+  "version": "2.1.0",
+  "description": "Utilisation, VRAM, temperature and power charts for every NVIDIA GPU, with power limit, persistence and clock controls plus an auto power cap that follows the GPUs the machine actually has.",
   "author": "Bored Manager",
   "minAppVersion": "0.0.1",
   "entries": {
@@ -28,8 +28,12 @@
     "lockClocks",
     "resetClocks",
     "autoCapStatus",
+    "autoCapSet",
+    "autoCapClear",
+    "autoCapConfigure",
     "autoCapStart",
     "autoCapStop",
+    "autoCapLogTail",
     "killProcess"
   ],
   "fastInterval": "gpu"

@@ -41,6 +41,7 @@ export function FormBlockView({ block, ctx }: { block: FormBlock; ctx: BlockCtx 
 
   return (
     <div className="flex flex-col gap-2.5">
+      {block.title && <h4 className="text-sm font-medium">{block.title}</h4>}
       <FormFields
         fields={block.fields}
         values={values}

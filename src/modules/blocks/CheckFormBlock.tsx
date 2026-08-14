@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { CheckList, worstLevel } from '@/components/check-list'
 import { moduleCall } from '@/lib/modules'
+import { callAction } from '../action-runner'
 import { resolvePath } from '../binding'
 import type { BlockCtx } from '../BlockRenderer'
 import { FormFields, coerceFormValues, initialFieldState, type FieldState, type FormValues } from './form-fields'
@@ -96,10 +97,14 @@ export function CheckFormBlockView({
     setBusy('apply')
     setError(null)
     try {
-      await moduleCall<unknown>(ctx.moduleId, block.applyMethod, ...scopeArgs, {
-        token: checked.report.token,
-        values: checked.values
-      })
+      // callAction rather than moduleCall: an apply that refuses (a spent
+      // token, something already running) answers `{ ok: false, error }`
+      // instead of rejecting, and reporting that as "applied" is worse than
+      // saying nothing.
+      await callAction(ctx.moduleId, block.applyMethod, [
+        ...scopeArgs,
+        { token: checked.report.token, values: checked.values }
+      ])
       showNotice('info', `${block.title ?? block.applyMethod}: applied`)
     } catch (err) {
       setError(`${message(err)} - check again before retrying`)

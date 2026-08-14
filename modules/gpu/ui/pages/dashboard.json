@@ -114,8 +114,15 @@
       "else": [
         {
           "type": "section",
-          "title": "No NVIDIA GPU detected on the target (nvidia-smi not available), or waiting for the first reading.",
-          "blocks": []
+          "title": "No GPU readings",
+          "blocks": [
+            {
+              "type": "list",
+              "source": { "kind": "stream", "event": "snapshot", "path": "gpus" },
+              "columns": [{ "key": "name" }],
+              "emptyText": "nvidia-smi did not report a GPU on this machine - either there is no NVIDIA card, the driver is not installed, or the first reading has not arrived yet."
+            }
+          ]
         }
       ]
     }

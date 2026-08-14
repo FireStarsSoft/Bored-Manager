@@ -366,7 +366,6 @@ export function PackagesTab({ active }: { active: boolean }): React.JSX.Element 
   if (overview && manager === 'none') {
     return (
       <div className="h-full overflow-y-auto p-3">
-        <h2 className="mb-3 text-base font-semibold">Packages</h2>
         <Card className="p-4 text-sm text-muted-foreground">
           No supported package manager (apt, dnf or pacman) was found on the target machine.
         </Card>
@@ -376,13 +375,11 @@ export function PackagesTab({ active }: { active: boolean }): React.JSX.Element 
 
   return (
     <div className="h-full overflow-y-auto p-3">
-      {/* Header */}
-      <div className="mb-3 flex items-center justify-between">
-        <div>
-          <h2 className="text-base font-semibold leading-tight">Packages</h2>
-          <div className="text-xs text-muted-foreground">
-            {overview ? `manager: ${overview.manager}` : loading ? 'loading…' : 'not loaded yet'}
-          </div>
+      {/* Header. The page is named by the breadcrumb, so this only says which
+          package manager the machine turned out to have. */}
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="text-xs text-muted-foreground">
+          {overview ? `manager: ${overview.manager}` : loading ? 'loading…' : 'not loaded yet'}
         </div>
         <div className="flex items-center gap-2">
           {!status.hasSudo && (

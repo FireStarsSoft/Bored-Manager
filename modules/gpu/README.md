@@ -6,7 +6,8 @@ Everything `nvidia-smi` reports, as charts instead of a table, plus the controls
 
 | Where | What |
 |---|---|
-| Sidebar | **GPU** page — utilisation, VRAM, temperature and power charts; power limit slider, persistence switch, clock lock/reset; Auto power cap; compute process table with kill |
+| Sidebar | **Dashboard** — utilisation, VRAM, temperature and power charts, and the compute process table with kill |
+| Sidebar | **Auto power cap** — every GPU the machine reports, with its allowed range, plus the watcher below |
 | Overview | **GPU** widget (on by default) — utilisation with VRAM, temperature and power in the subtitle, and the processes holding VRAM |
 | Overview | **GPU processes** widget (off by default) — PID, name and VRAM per compute process |
 | History | writes the `gpu` metrics stream (utilisation, VRAM, temperature, draw, limit) so charts longer than 10 minutes work |
@@ -25,9 +26,18 @@ The controls each run one elevated command: `nvidia-smi -pl`, `-pm`, `-lgc`, `-r
 
 ## Auto power cap
 
-An in-app watcher: every *interval* seconds it asks `docker ps -q` whether anything is running and applies the *running* or *idle* cap accordingly. It runs inside the app and stops when the app closes or the module is disabled — nothing is installed or left behind on the target.
+The **Auto power cap** page lists the GPUs `nvidia-smi` reports on the connected machine, with the cap each one has now and the minimum, maximum and default the driver allows. Open a row and the two cap fields start at that GPU's own minimum and maximum, so the numbers are never guessed — a value outside the range is refused with the range in the message, rather than sent to `nvidia-smi` to fail.
 
-Note that it only needs the Docker *daemon* on the target, not the Docker module in this app.
+Every *interval* seconds the watcher asks whether the machine is busy and puts the *running* or the *idle* cap on each GPU it was given. Busy means one of two things, your choice:
+
+| Trigger | What it asks | Scope |
+|---|---|---|
+| `docker` | `docker ps -q` — is any container running | the whole machine |
+| `gpu` | `nvidia-smi --query-compute-apps` — is a compute process on **that** GPU | per GPU |
+
+The `docker` trigger only needs the Docker *daemon* on the target, not the Container module in this app.
+
+What to watch is saved per machine (`ctx.hostDataSet`, in `data/module-data/gpu/<host>.json`), so reconnecting, restarting the app or rebooting the server picks it back up. That is deliberate: the cap itself lives on the GPU, so a watcher that forgot its settings would leave whichever cap it happened to set last in place. Nothing is installed or left behind on the target — stop watching and the GPU simply keeps the cap it has.
 
 ## Settings it reads
 
@@ -44,10 +54,10 @@ Note that it only needs the Docker *daemon* on the target, not the Docker module
 ## Files
 
 ```
-main/index.ts     activate(): one fast poller + the nvidia-smi actions
-main/service.ts   polling, parsing, controls, the auto power cap watcher
-renderer/index.tsx     tab + widgets + stream declarations
-renderer/api.ts        typed wrappers over the module's own IPC methods
-renderer/GpuTab.tsx
-renderer/GpuCards.tsx
+main/index.ts          activate(): one fast poller + the nvidia-smi actions
+main/service.ts        polling, parsing, controls, the auto power cap watcher
+ui/pages/dashboard.json
+ui/pages/power.json    the GPU table and the watcher
+ui/widgets/summary.json
+ui/widgets/processes.json
 ```

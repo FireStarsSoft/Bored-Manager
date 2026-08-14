@@ -377,16 +377,18 @@ export function exportSettings(targetPath: string): void {
 }
 
 /**
- * Adopt a settings file the user picked. A file with settingsVersion below 3 is
- * converted like one found on disk - including its per-feature collector flags,
- * so takeLegacyDisabledModules() has something to report and importing "GPU was
+ * Read a settings file the user picked, without writing anything: the caller
+ * saves it, so an imported file goes through exactly the same checks as a
+ * settings write from the UI. A file with settingsVersion below 3 is converted
+ * like one found on disk - including its per-feature collector flags, so
+ * takeLegacyDisabledModules() has something to report and importing "GPU was
  * off on that machine" actually switches the GPU module off here.
  */
-export function importSettings(sourcePath: string): AppSettings {
+export function readSettingsFile(sourcePath: string): Partial<AppSettings> {
   const raw = JSON.parse(readFileSync(sourcePath, 'utf8'))
   if (typeof raw !== 'object' || raw == null) throw new Error('Invalid settings file')
   captureLegacyDisabled(raw as Partial<AppSettings> & LegacySettings)
-  return saveSettings(raw as Partial<AppSettings>)
+  return raw as Partial<AppSettings>
 }
 
 // ---------- Installed modules ----------

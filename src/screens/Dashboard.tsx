@@ -27,6 +27,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import {
   Breadcrumb,
   BreadcrumbItem,
+  BreadcrumbLink,
   BreadcrumbList,
   BreadcrumbPage,
   BreadcrumbSeparator
@@ -34,7 +35,12 @@ import {
 import { Separator } from '@/components/ui/separator'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { CommandPalette, openCommandPalette, type PaletteEntry } from '@/components/command-palette'
+import {
+  CommandPalette,
+  PALETTE_SHORTCUT,
+  openCommandPalette,
+  type PaletteEntry
+} from '@/components/command-palette'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { OverviewTab } from '@/tabs/OverviewTab'
 import { PackagesTab } from '@/tabs/PackagesTab'
@@ -181,6 +187,9 @@ function SidebarBody({
   const disconnect = useApp((s) => s.disconnect)
   const auth = useApp((s) => s.auth)
   const logout = useApp((s) => s.logout)
+  // The target machine is reached through the server, so a socket that is down
+  // means these readings are stale however connected the machine itself is.
+  const serverUp = useApp((s) => s.server === 'open')
 
   return (
     <>
@@ -221,7 +230,13 @@ function SidebarBody({
         {!collapsed && (
           <div className="mb-1.5 min-w-0 px-0.5">
             <div className="flex items-center gap-1.5 text-xs">
-              <span className="size-1.5 shrink-0 rounded-full bg-success" aria-hidden />
+              <span
+                className={cn(
+                  'size-1.5 shrink-0 rounded-full',
+                  serverUp ? 'bg-success' : 'bg-warning'
+                )}
+                aria-hidden
+              />
               <span className="truncate font-medium">
                 {status.username ? `${status.username}@` : ''}
                 {status.host}
@@ -230,6 +245,7 @@ function SidebarBody({
             <div className="mt-0.5 truncate pl-3 text-[0.7rem] text-muted-foreground">
               {status.mode === 'local' ? 'local machine' : 'ssh'}
               {status.isRoot ? ' · root' : status.hasSudo ? ' · sudo' : ' · no sudo'}
+              {!serverUp && ' · reconnecting'}
             </div>
           </div>
         )}
@@ -358,13 +374,22 @@ export function Dashboard(): React.JSX.Element {
     return out
   }, [coreTabs, moduleEntries])
 
-  /** Module name and page name of whatever is open, for the header. */
-  const crumbs = React.useMemo((): string[] => {
+  /**
+   * Where you are, for the header. A module contributes a second crumb only
+   * when the page is called something else: a one-page module usually names its
+   * page after itself, and "Sensors / Sensors" says nothing twice.
+   */
+  const crumbs = React.useMemo((): Array<{ label: string; route?: string }> => {
     const core = coreTabs.find((t) => t.id === activeTab)
-    if (core) return [core.label]
+    if (core) return [{ label: core.label }]
     for (const entry of moduleEntries) {
       for (const page of entry.pages) {
-        if (modulePageTab(entry.id, page.id) === activeTab) return [entry.label, page.label]
+        if (modulePageTab(entry.id, page.id) !== activeTab) continue
+        if (page.label === entry.label) return [{ label: entry.label }]
+        return [
+          { label: entry.label, route: modulePageTab(entry.id, entry.pages[0].id) },
+          { label: page.label }
+        ]
       }
     }
     return []
@@ -457,13 +482,19 @@ export function Dashboard(): React.JSX.Element {
           <Breadcrumb className="min-w-0">
             <BreadcrumbList className="text-xs">
               {crumbs.map((crumb, i) => (
-                <React.Fragment key={crumb}>
+                <React.Fragment key={`${i}-${crumb.label}`}>
                   {i > 0 && <BreadcrumbSeparator />}
                   <BreadcrumbItem className="min-w-0">
-                    {i === crumbs.length - 1 ? (
-                      <BreadcrumbPage className="truncate font-medium">{crumb}</BreadcrumbPage>
+                    {crumb.route ? (
+                      <BreadcrumbLink asChild>
+                        <button type="button" className="truncate" onClick={() => go(crumb.route!)}>
+                          {crumb.label}
+                        </button>
+                      </BreadcrumbLink>
                     ) : (
-                      <span className="truncate">{crumb}</span>
+                      <BreadcrumbPage className="truncate font-medium">
+                        {crumb.label}
+                      </BreadcrumbPage>
                     )}
                   </BreadcrumbItem>
                 </React.Fragment>
@@ -480,7 +511,7 @@ export function Dashboard(): React.JSX.Element {
               <Search aria-hidden />
               <span className="hidden sm:inline">Go to page</span>
               <kbd className="ml-1 hidden rounded border border-border px-1 font-sans text-[0.65rem] sm:inline">
-                Ctrl K
+                {PALETTE_SHORTCUT}
               </kbd>
             </Button>
             <ThemeToggle />

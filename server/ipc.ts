@@ -105,7 +105,43 @@ export const moduleInstaller = new ModuleInstallerService(
   () => appSettings.update.repo
 )
 
-let appSettings = store.loadSettings()
+/**
+ * A login can only be required while the default account has a password: there
+ * is no reset flow, on purpose, so "required" plus "no password anywhere" locks
+ * everyone out for good. `auth:setEnabled` refuses that outright; this is the
+ * net under the other ways the same flag can be written - a whole-settings
+ * write, an imported file, a hand-edited settings.json. Returns the settings
+ * unchanged when there is nothing to correct.
+ */
+function withUsableAuth<T extends { auth?: AppSettings['auth'] }>(settings: T): T {
+  if (settings.auth?.enabled !== true || users.hasPassword(DEFAULT_USERNAME)) return settings
+  log(`"require login" switched off: "${DEFAULT_USERNAME}" has no password, so nobody could sign in`)
+  return { ...settings, auth: { ...settings.auth, enabled: false } }
+}
+
+/**
+ * store.saveSettings, with the guard above applied to the payload rather than
+ * to the result - so an unusable "require login" never reaches the disk at all.
+ */
+function saveSettings(next: Partial<AppSettings>): AppSettings {
+  return store.saveSettings(withUsableAuth(next))
+}
+
+/**
+ * Close the sockets of clients that never logged in. They were opened while the
+ * login was off - the upgrade refuses one without a session otherwise - and the
+ * per-frame check only runs when a client sends something, so a browser that
+ * only listens would keep receiving pushes it is no longer entitled to. The
+ * socket that asked for the change is spared, so it can still read the answer.
+ */
+function evictUnauthenticated(except?: RpcClient): void {
+  if (!appSettings.auth.enabled || !router) return
+  for (const client of router.sockets()) {
+    if (client !== except && !client.username) client.close(4401, 'login required')
+  }
+}
+
+let appSettings = withUsableAuth(store.loadSettings())
 
 /** The settings the server is running on, for the parts outside this file. */
 export function currentSettings(): AppSettings {
@@ -384,12 +420,15 @@ export function registerRpc(rpc: RpcRouter, api: HttpApi): void {
   // ---------- Settings ----------
 
   rpc.registerHandler('settings:get', () => appSettings)
-  rpc.registerHandler('settings:set', (next: AppSettings) => {
+  rpc.registerClientHandler('settings:set', (client, next: AppSettings) => {
     const before = appSettings.server
     // saveSettings normalises, so the browser gets back what is on disk.
-    appSettings = store.saveSettings(next)
+    appSettings = saveSettings(next)
     metricsHistory.configure(appSettings.history)
     applyPollers()
+    // The UI switches the login through auth:setEnabled, but a whole-settings
+    // write can carry the flag too, and it has to have the same consequence.
+    evictUnauthenticated(client)
     // Where the server listens is decided once, when it binds the socket.
     const restartRequired =
       before.port !== appSettings.server.port || before.host !== appSettings.server.host
@@ -423,15 +462,16 @@ export function registerRpc(rpc: RpcRouter, api: HttpApi): void {
     users.setPassword(String(input?.username ?? ''), String(input?.password ?? ''))
     return users.listUsers()
   })
-  rpc.registerHandler('auth:setEnabled', (input: { enabled: boolean }) => {
+  rpc.registerClientHandler('auth:setEnabled', (client, input: { enabled: boolean }) => {
     const enabled = input?.enabled === true
     // Turning the login on without a password would lock everyone out, with
     // nothing to log in with and no reset flow.
     if (enabled && !users.hasPassword(DEFAULT_USERNAME)) {
       throw new Error('set-admin-password-first')
     }
-    appSettings = store.saveSettings({ ...appSettings, auth: { ...appSettings.auth, enabled } })
+    appSettings = saveSettings({ ...appSettings, auth: { ...appSettings.auth, enabled } })
     log(`login is now ${enabled ? 'required' : 'not required'}`)
+    evictUnauthenticated(client)
     return appSettings
   })
 
@@ -453,12 +493,18 @@ export function registerRpc(rpc: RpcRouter, api: HttpApi): void {
       return
     }
     try {
-      appSettings = store.importSettings(file.path)
+      // Read, then save through the same funnel as a settings write, so an
+      // imported file cannot set anything a settings write could not.
+      appSettings = saveSettings(store.readSettingsFile(file.path))
       // An imported file written before modules existed switches features off
       // with a collector flag; honour that here as a migration would.
       modulesHost.applyLegacyDisabled(store.takeLegacyDisabledModules())
       metricsHistory.configure(appSettings.history)
       applyPollers()
+      // An import that switched the login on has to close the sockets that
+      // predate it, the same as the toggle does. This one is an HTTP request,
+      // so there is no socket of its own to spare.
+      evictUnauthenticated()
       send('push:modules-list', modulesHost.list())
       res.json({ ok: true, settings: appSettings })
     } catch (err) {

@@ -2,16 +2,16 @@
   "version": 1,
   "modules": {
     "container": {
-      "version": "3.0.0",
-      "hash": "1942b96556415cee36b3d7113ef6e11f53c2d1c03a7b49a3d7636fe3d08eb92c"
+      "version": "3.1.0",
+      "hash": "3c9b2a10c3088a2764b54ea2c7000d151f00ede530f9978411598b72682ca948"
     },
     "disk": {
       "version": "2.0.0",
       "hash": "e4295d8b3a87b8970b3b3946851145a7da77549c1d7d7c34cef82f58a80fd996"
     },
     "gpu": {
-      "version": "2.0.0",
-      "hash": "617ac00753526df1bf419cac9dfee0c69d3599cd1f9357db3132f4755a276e9b"
+      "version": "2.1.0",
+      "hash": "d202bac13a3589cfa4c0f2599ab021591acf0b0b0b72341413e78d1b58b30437"
     },
     "network": {
       "version": "3.0.0",

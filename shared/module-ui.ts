@@ -308,6 +308,8 @@ export interface FormField {
 
 export interface FormBlock {
   type: 'form'
+  /** Heading above the fields; worth having when a drawer stacks several forms. */
+  title?: string
   fields: FormField[]
   submit: ActionSpec
 }

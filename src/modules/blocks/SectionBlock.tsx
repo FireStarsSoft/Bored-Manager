@@ -1,7 +1,7 @@
 import * as React from 'react'
 import type { SectionBlock } from '@shared/module-ui'
 import { Card } from '@/components/ui/card'
-import { SlowRefresh } from '@/components/SlowSection'
+import { SlowRefresh } from '@/components/slow-refresh'
 import { cn } from '@/lib/utils'
 import { BlockList, type BlockCtx } from '../BlockRenderer'
 

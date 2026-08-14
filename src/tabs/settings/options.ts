@@ -23,8 +23,15 @@ export const SPEED_OPTIONS: Array<{ value: RefreshSpeed; label: string }> = [
 
 export const SLOW_OPTIONS = SLOW_REFRESH_OPTIONS.map((o) => ({ value: String(o.value), label: o.label }))
 
+/**
+ * `moduleId` is the module that polls on that interval, so a group can be left
+ * out while its module is switched off - an interval for something that is not
+ * running is a setting with no effect. The System group has none: the app
+ * collects that one itself.
+ */
 export const INTERVAL_GROUPS: Array<{
   label: string
+  moduleId?: string
   fast?: { key: string; desc: string }
   slow?: { key: string; desc: string }
 }> = [
@@ -34,30 +41,40 @@ export const INTERVAL_GROUPS: Array<{
   },
   {
     label: 'Sensors',
+    moduleId: 'sensors',
     fast: { key: 'sensors', desc: 'Temperatures, fans, voltages, power and current' }
   },
   {
     label: 'Processes',
+    moduleId: 'processes',
     fast: { key: 'processes', desc: 'Process table and the top consumers on the Overview cards' }
   },
-  { label: 'GPU', fast: { key: 'gpu', desc: 'nvidia-smi: utilisation, VRAM, temperature, power' } },
+  {
+    label: 'GPU',
+    moduleId: 'gpu',
+    fast: { key: 'gpu', desc: 'nvidia-smi: utilisation, VRAM, temperature, power' }
+  },
   {
     label: 'Container',
+    moduleId: 'container',
     fast: { key: 'container', desc: 'Docker and Incus containers and their CPU/memory stats' },
     slow: { key: 'container', desc: 'Image, volume and build cache disk usage (docker system df)' }
   },
   {
     label: 'Network',
+    moduleId: 'network',
     fast: { key: 'network', desc: 'Interface rates, connections, per-process bandwidth' },
     slow: { key: 'network', desc: 'Addresses, MTU, link speed, gateway and DNS' }
   },
   {
     label: 'Disk & storage',
+    moduleId: 'disk',
     fast: { key: 'disk', desc: 'Throughput, IOPS, utilisation, per-process I/O' },
     slow: { key: 'storage', desc: 'Mount usage and inodes (df), block device list (lsblk)' }
   },
   {
     label: 'Services (fleet)',
+    moduleId: 'service-fleet',
     fast: { key: 'service-fleet', desc: 'How often the fleet pages re-read the last sweep result' },
     slow: {
       key: 'service-fleet',

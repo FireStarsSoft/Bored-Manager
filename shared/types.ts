@@ -157,6 +157,8 @@ export interface GpuInfo {
   powerLimit: number
   powerMin: number
   powerMax: number
+  /** What `nvidia-smi -pl` resets to. 0 when the driver does not report it. */
+  powerDefault: number
   fan: number
   clockSm: number
   clockMem: number
@@ -436,16 +438,43 @@ export interface TopConsumersSnapshot {
 
 // ---------- GPU auto power cap ----------
 
-export interface AutoCapConfig {
-  gpuIndex: number
+/** What counts as "busy" for the watcher. */
+export type AutoCapTrigger = 'docker' | 'gpu'
+
+/** The two caps of one GPU. */
+export interface AutoCapEntry {
   idleCap: number
   runningCap: number
-  intervalSec: number
 }
 
-export interface AutoCapStatus extends AutoCapConfig {
+/**
+ * The watcher as it is saved, per machine (ctx.hostDataSet). GPUs are keyed by
+ * index as a string, because that is what a JSON object can hold; a machine
+ * with no entry here has nothing watching it.
+ */
+export interface AutoCapConfig {
   enabled: boolean
-  currentCap: number | null
+  intervalSec: number
+  trigger: AutoCapTrigger
+  gpus: Record<string, AutoCapEntry>
+}
+
+/** One configured GPU, as the page shows it. */
+export interface AutoCapGpuStatus extends AutoCapEntry {
+  index: number
+  name: string
+  /** The cap this watcher last applied; null until it has acted. */
+  appliedCap: number | null
+  /** Whether the trigger reads as busy; null before the first check. */
+  busy: boolean | null
+}
+
+export interface AutoCapStatus {
+  enabled: boolean
+  intervalSec: number
+  trigger: AutoCapTrigger
+  /** An array rather than the saved map, so a table block can read it. */
+  gpus: AutoCapGpuStatus[]
   log: string[]
 }
 

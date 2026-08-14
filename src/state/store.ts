@@ -96,6 +96,12 @@ interface AppState {
   init(): Promise<void>
   /** Opens the socket and loads everything; also used right after a login. */
   boot(): Promise<void>
+  /**
+   * Pick up a session that was created while the app was already open, by
+   * switching the login on from Settings. The socket predates the session and
+   * the server only reads the cookie when a socket is opened, so it is replaced.
+   */
+  adoptSession(): Promise<void>
   /** Drop the session and show the login form again. */
   requireLogin(reason?: string): void
   logout(): Promise<void>
@@ -138,8 +144,12 @@ export const useApp = create<AppState>((set, get) => ({
     // the target machine may have been connected from another browser.
     wsClient.onStateChange = (server) => set({ server })
     wsClient.onReconnected = () => void get().reseed()
-    wsClient.onUnauthorized = () =>
-      get().requireLogin('Your session expired. Please log in again.')
+    wsClient.onUnauthorized = (reason) =>
+      get().requireLogin(
+        reason === 'login required'
+          ? 'This server now requires a login.'
+          : 'Your session expired. Please log in again.'
+      )
 
     // Subscriptions live on the client, not on the socket, so they are set up
     // once and survive both a reconnect and a new login.
@@ -205,6 +215,13 @@ export const useApp = create<AppState>((set, get) => ({
     } else if (result) {
       get().showNotice('error', `Update failed: ${result.error || 'see data/update.log'}`)
     }
+  },
+
+  async adoptSession() {
+    const auth = await api.auth.status()
+    set({ auth })
+    wsClient.disconnect()
+    await get().boot()
   },
 
   requireLogin(reason) {

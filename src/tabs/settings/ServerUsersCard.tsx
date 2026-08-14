@@ -45,6 +45,8 @@ function ServerUsersCard(): React.JSX.Element {
   const setSettingsFull = useApp((s) => s.setSettingsFull)
   const showNotice = useApp((s) => s.showNotice)
   const auth = useApp((s) => s.auth)
+  const adoptSession = useApp((s) => s.adoptSession)
+  const requireLogin = useApp((s) => s.requireLogin)
 
   const [portDraft, setPortDraft] = React.useState('')
   const [hostDraft, setHostDraft] = React.useState('')
@@ -155,6 +157,9 @@ function ServerUsersCard(): React.JSX.Element {
 
   const listening = settings.auth
   const idle = listening.sessionIdle
+  // The default account ships without one, so this is the normal first-run
+  // state - and the reason "Require login" cannot be switched on yet.
+  const passwordless = (users ?? []).filter((u) => !u.hasPassword).map((u) => u.username)
 
   const saveServer = async (): Promise<void> => {
     const port = parseInt(portDraft, 10)
@@ -174,11 +179,30 @@ function ServerUsersCard(): React.JSX.Element {
     }
   }
 
+  /**
+   * Switching the login on ends this browser's free ride too: the socket it is
+   * holding was opened without a session, so it is either replaced by one that
+   * has (see enableLoginWithPassword below) or the login form is shown straight
+   * away - rather than leaving the page up until the next call is refused and
+   * reporting that as an expired session.
+   */
   const setLoginRequired = async (enabled: boolean): Promise<void> => {
     try {
       const saved = await api.auth.setEnabled(enabled)
       setSettingsFull(saved)
-      if (enabled) showNotice('info', 'A login is now required')
+      if (!enabled) {
+        showNotice('info', 'A login is no longer required')
+        return
+      }
+      // An earlier session may still be valid, in which case nothing to do.
+      const status = await api.auth.status()
+      if (status.authenticated) {
+        await adoptSession()
+        showNotice('info', `A login is now required - you are signed in as ${status.username}`)
+        return
+      }
+      showNotice('info', 'A login is now required')
+      requireLogin()
     } catch (err) {
       // The server refuses to lock everyone out of an account with no password.
       if (message(err).includes('set-admin-password-first')) {
@@ -187,6 +211,21 @@ function ServerUsersCard(): React.JSX.Element {
       }
       showNotice('error', message(err))
     }
+  }
+
+  /** Set the default account's password, require a login, and use it here. */
+  const enableLoginWithPassword = async (password: string): Promise<void> => {
+    setUsers(await api.auth.setPassword(DEFAULT_USERNAME, password))
+    const saved = await api.auth.setEnabled(true)
+    setSettingsFull(saved)
+    const login = await api.auth.login(DEFAULT_USERNAME, password)
+    if (!login.ok) {
+      showNotice('info', 'A login is now required')
+      requireLogin()
+      return
+    }
+    await adoptSession()
+    showNotice('info', `A login is now required - you are signed in as ${DEFAULT_USERNAME}`)
   }
 
   return (
@@ -295,7 +334,9 @@ function ServerUsersCard(): React.JSX.Element {
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="text-sm">Sign out when idle</div>
-            <div className="text-xs text-muted-foreground">0 = the session never expires</div>
+            <div className="text-xs text-muted-foreground">
+              0 = the session never expires. Applies at the next sign-in.
+            </div>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             <Input
@@ -319,6 +360,29 @@ function ServerUsersCard(): React.JSX.Element {
         {/* Accounts */}
         <div className="border-t border-border pt-3">
           <div className="mb-1.5 text-sm font-medium">Accounts</div>
+          {passwordless.length > 0 && (
+            <Alert className="mb-2">
+              <AlertTriangle className="text-warning" aria-hidden />
+              <AlertTitle>
+                {passwordless.length === 1
+                  ? `${passwordless[0]} has no password yet`
+                  : `${passwordless.length} accounts have no password yet`}
+              </AlertTitle>
+              <AlertDescription>
+                An account without a password cannot sign in, and a login can only be required once{' '}
+                <span className="mono">{DEFAULT_USERNAME}</span> has one.
+              </AlertDescription>
+              <div className="mt-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setPasswordFor(passwordless[0])}
+                >
+                  Set a password for {passwordless[0]}
+                </Button>
+              </div>
+            </Alert>
+          )}
           <div className="mb-2 text-xs text-muted-foreground">
             Accounts of the WebUI, not of the host. Each one has its own saved connections;
             deleting an account deletes those with it. Everyone who can sign in can manage
@@ -372,10 +436,7 @@ function ServerUsersCard(): React.JSX.Element {
         title={`Set a password for ${DEFAULT_USERNAME}`}
         hint={`A login can only be required once ${DEFAULT_USERNAME} has a password - otherwise nobody could sign in.`}
         onOpenChange={setAdminPasswordPrompt}
-        onSubmit={async (password) => {
-          setUsers(await api.auth.setPassword(DEFAULT_USERNAME, password))
-          await setLoginRequired(true)
-        }}
+        onSubmit={enableLoginWithPassword}
       />
 
       <PasswordDialog

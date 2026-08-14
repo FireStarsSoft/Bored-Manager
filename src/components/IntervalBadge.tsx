@@ -17,13 +17,15 @@ const FAST_LABELS: Record<string, string> = {
   container: 'Docker and Incus containers',
   processes: 'Processes',
   network: 'Network detail',
-  disk: 'Disk activity'
+  disk: 'Disk activity',
+  'service-fleet': 'Fleet pages'
 }
 
 const SLOW_LABELS: Record<string, string> = {
   storage: 'File systems & devices',
   container: 'Container disk usage',
-  network: 'Interface inventory'
+  network: 'Interface inventory',
+  'service-fleet': 'Fleet sweep'
 }
 
 /** These two are only collected while their detail collector is enabled. */

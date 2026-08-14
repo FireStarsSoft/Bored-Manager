@@ -1,5 +1,5 @@
 import * as React from "react"
-import { Dialog as DialogPrimitive } from "radix-ui"
+import { Dialog as DialogPrimitive, Slot as SlotPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -66,7 +66,10 @@ function DialogContent({
         )}
         {...props}
       >
-        {children}
+        {/* Project override: Slottable, so `asChild` still works next to the
+            close button. Three dialogs here are a <form> themselves, and a Slot
+            handed two children throws instead of rendering. */}
+        <SlotPrimitive.Slottable>{children}</SlotPrimitive.Slottable>
         {showCloseButton && (
           <DialogPrimitive.Close data-slot="dialog-close" asChild>
             <Button

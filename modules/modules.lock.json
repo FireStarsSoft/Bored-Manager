@@ -3,27 +3,27 @@
   "modules": {
     "container": {
       "version": "3.1.1",
-      "hash": "c3f2f0db89bd31650c9239d9af748bf226e8a028ed36065a624c50f23bd90f68"
+      "hash": "e121f1ef16368e38fdeaace8876331bed6e34eb8bb7cf0d3853aee593fd99311"
     },
     "disk": {
       "version": "2.0.0",
-      "hash": "e4295d8b3a87b8970b3b3946851145a7da77549c1d7d7c34cef82f58a80fd996"
+      "hash": "b51e93a3ff77fc814593c239018bbe17f8b823a798167bc3aff81fa4fcb3c2d3"
     },
     "gpu": {
       "version": "2.1.1",
-      "hash": "d2df814b81fa234aeaecda341232b1d56ce761d3604b1004c8150c98e2086364"
+      "hash": "fd38992a154ae6f9948a54645b7d984eae27eeb4b3f769bdf273f52fafaa4142"
     },
     "network": {
       "version": "3.0.0",
-      "hash": "f276075f1decfb5156cba9bc171ef491d049701f8591a936a00b40007e389186"
+      "hash": "091265f60d8ffc04f0f8ed6a56b39992a1d58c2f04b8551d651876a15d75f3c8"
     },
     "processes": {
       "version": "2.0.1",
-      "hash": "1e23ff9f6ba5f6c6d0ca3c581969439a740296bd2b9b1b9b087e0ab61245e6cf"
+      "hash": "eb65c1f6c097196def9329d56279ef3e8137c4fc597ddf1e4dd76144e21ac918"
     },
     "sensors": {
       "version": "2.0.0",
-      "hash": "8038f3a541085a859b60571558b44436a21f2cb7d7cdbad50262b04515d73a9d"
+      "hash": "e7616f213d773cf6b733461698a7b598e468566dd413f171792edb642623a164"
     },
     "service-fleet": {
       "version": "1.0.0",

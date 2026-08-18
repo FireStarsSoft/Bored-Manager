@@ -82,7 +82,8 @@ export function moduleFolderHash(dir: string): string {
   for (const rel of listFiles(dir).sort()) {
     hash.update(rel)
     hash.update('\0')
-    hash.update(readFileSync(join(dir, rel)))
+    const buf = readFileSync(join(dir, rel))
+    hash.update(buf.includes(0x0d) ? Buffer.from(buf.filter((b) => b !== 0x0d)) : buf)
   }
   return hash.digest('hex')
 }

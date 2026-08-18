@@ -17,7 +17,8 @@
 // The hash has to match server/services/modules-host.ts exactly: SHA-256 over
 // every file in the module folder except `.dist/` (esbuild output, rebuilt on
 // demand - see module-compiler.ts), sorted by relative path, hashing the path
-// (NUL-terminated) before its bytes.
+// (NUL-terminated) before its bytes. CR bytes are dropped first so a Windows
+// checkout and a Linux release hash the same.
 import { createHash } from 'crypto'
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'fs'
 import { dirname, join, relative, resolve, sep } from 'path'
@@ -49,12 +50,18 @@ function listFiles(dir, base = dir, out = []) {
   return out
 }
 
+/** Drop CR so a Windows checkout hashes the same as Linux / a release zip. */
+function fileBytesForHash(path) {
+  const buf = readFileSync(path)
+  return buf.includes(0x0d) ? Buffer.from(buf.filter((b) => b !== 0x0d)) : buf
+}
+
 function folderHash(dir) {
   const hash = createHash('sha256')
   for (const rel of listFiles(dir).sort()) {
     hash.update(rel)
     hash.update('\0')
-    hash.update(readFileSync(join(dir, rel)))
+    hash.update(fileBytesForHash(join(dir, rel)))
   }
   return hash.digest('hex')
 }

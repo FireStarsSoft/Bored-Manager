@@ -13,6 +13,7 @@
     "build:renderer": "vite build",
     "build:server": "vite build --config vite.config.server.ts",
     "start": "node out/server/index.mjs",
+    "pretypecheck": "node scripts/licenses.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "modules:lock": "node scripts/modules-lock.mjs",
     "modules:verify": "node scripts/modules-lock.mjs --check",

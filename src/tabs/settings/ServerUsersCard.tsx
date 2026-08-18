@@ -1,36 +1,22 @@
 import * as React from 'react'
-import { AlertTriangle, RefreshCw, Save, Trash2, UserPlus } from 'lucide-react'
+import { AlertTriangle, RefreshCw, Save, UserPlus } from 'lucide-react'
 import type { SessionIdleUnit, UserAccount } from '@shared/types'
-import { DEFAULT_USERNAME } from '@shared/types'
+import { DEFAULT_USERNAME, isOpenBind } from '@shared/types'
 import { api } from '@/lib/api'
 import { useApp } from '@/state/store'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ConfirmDialog } from '@/components/confirm-dialog'
-import { DataTable, type DataTableColumns } from '@/components/data-table'
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle
-} from '@/components/ui/dialog'
+import { DataTable } from '@/components/data-table'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { SelectField } from '@/components/select-field'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { message } from './shared'
+import { errorMessage } from '@/lib/utils'
 import { IDLE_UNITS } from './options'
-
-function dateLabel(ms: number | null): string {
-  if (!ms) return 'never'
-  return new Date(ms).toLocaleString()
-}
+import { PasswordDialog, accountColumns } from './server-users-dialogs'
 
 /**
  * Where the WebUI listens, whether it asks for a login, and who may log in.
@@ -69,7 +55,7 @@ function ServerUsersCard(): React.JSX.Element {
     try {
       setUsers(await api.auth.users())
     } catch (err) {
-      showNotice('error', `Could not read the accounts: ${message(err)}`)
+      showNotice('error', `Could not read the accounts: ${errorMessage(err)}`)
     }
   }, [showNotice])
 
@@ -77,79 +63,8 @@ function ServerUsersCard(): React.JSX.Element {
     void loadUsers()
   }, [loadUsers])
 
-  const accountColumns = React.useMemo<DataTableColumns<UserAccount>>(
-    () => [
-      {
-        accessorKey: 'username',
-        header: 'User',
-        cell: (c) => {
-          const user = c.row.original
-          return (
-            <span>
-              <span className="mono">{user.username}</span>
-              {user.username === auth?.username && (
-                <span className="ml-1.5 text-muted-foreground">(you)</span>
-              )}
-              {!user.hasPassword && <span className="ml-1.5 text-warning">no password yet</span>}
-            </span>
-          )
-        }
-      },
-      {
-        accessorKey: 'createdAt',
-        header: 'Created',
-        cell: (c) => (
-          <span className="text-muted-foreground">{dateLabel(c.getValue<number>())}</span>
-        )
-      },
-      {
-        accessorKey: 'lastLoginAt',
-        header: 'Last sign-in',
-        cell: (c) => (
-          <span className="text-muted-foreground">{dateLabel(c.getValue<number | null>())}</span>
-        )
-      },
-      {
-        id: 'actions',
-        header: '',
-        enableSorting: false,
-        meta: { align: 'right' },
-        cell: (c) => {
-          const user = c.row.original
-          const isDefault = user.username === DEFAULT_USERNAME
-          return (
-            <div className="flex justify-end gap-1.5">
-              <Button variant="secondary" size="xs" onClick={() => setPasswordFor(user.username)}>
-                Change password
-              </Button>
-              <Tooltip>
-                {/* A disabled button emits no pointer events, so the trigger has
-                    to be the wrapper for the explanation of *why* it is
-                    disabled to be reachable at all. */}
-                <TooltipTrigger asChild>
-                  <span className="inline-flex">
-                    <Button
-                      variant="destructive"
-                      size="icon-xs"
-                      aria-label={`Delete ${user.username}`}
-                      disabled={isDefault}
-                      onClick={() => setDeleting(user.username)}
-                    >
-                      <Trash2 aria-hidden />
-                    </Button>
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent>
-                  {isDefault
-                    ? 'The default account cannot be deleted'
-                    : `Delete ${user.username}`}
-                </TooltipContent>
-              </Tooltip>
-            </div>
-          )
-        }
-      }
-    ],
+  const columns = React.useMemo(
+    () => accountColumns(auth?.username, setPasswordFor, setDeleting),
     [auth?.username]
   )
 
@@ -205,11 +120,11 @@ function ServerUsersCard(): React.JSX.Element {
       requireLogin()
     } catch (err) {
       // The server refuses to lock everyone out of an account with no password.
-      if (message(err).includes('set-admin-password-first')) {
+      if (errorMessage(err).includes('set-admin-password-first')) {
         setAdminPasswordPrompt(true)
         return
       }
-      showNotice('error', message(err))
+      showNotice('error', errorMessage(err))
     }
   }
 
@@ -273,6 +188,19 @@ function ServerUsersCard(): React.JSX.Element {
           <span className="mono">127.0.0.1</span> only on the machine itself.
         </div>
 
+        {!listening.enabled && isOpenBind(server.host) && (
+          <Alert variant="destructive">
+            <AlertTriangle className="text-destructive" aria-hidden />
+            <AlertTitle>Open to the network, no login</AlertTitle>
+            <AlertDescription>
+              The server answers on every interface and anyone who can reach{' '}
+              <span className="mono">http://&lt;ip&gt;:{server.port}</span> has full access.
+              Turn on Require login, or bind <span className="mono">127.0.0.1</span> if you only
+              need this machine.
+            </AlertDescription>
+          </Alert>
+        )}
+
         {restartNeeded && (
           <Alert>
             <AlertTriangle className="text-warning" aria-hidden />
@@ -316,7 +244,7 @@ function ServerUsersCard(): React.JSX.Element {
           <div className="min-w-0">
             <div className="text-sm">Wrong passwords before locking</div>
             <div className="text-xs text-muted-foreground">
-              Counted across all clients; unlock with{' '}
+              Counted per username and per client address; unlock with{' '}
               <span className="mono">./bored-manager unlock</span> on the host
             </div>
           </div>
@@ -391,7 +319,7 @@ function ServerUsersCard(): React.JSX.Element {
           <div className="rounded-md border border-border">
             <DataTable
               data={users ?? []}
-              columns={accountColumns}
+              columns={columns}
               getRowId={(u) => u.username}
               initialSorting={[{ id: 'username', desc: false }]}
               emptyText="No accounts yet."
@@ -422,7 +350,7 @@ function ServerUsersCard(): React.JSX.Element {
                     setNewUser({ username: '', password: '' })
                     showNotice('info', 'Account created')
                   })
-                  .catch((err: unknown) => showNotice('error', message(err)))
+                  .catch((err: unknown) => showNotice('error', errorMessage(err)))
               }}
             >
               <UserPlus className="size-3.5" /> Add
@@ -472,113 +400,11 @@ function ServerUsersCard(): React.JSX.Element {
               setUsers(list)
               showNotice('info', `${username} deleted`)
             })
-            .catch((err: unknown) => showNotice('error', message(err)))
+            .catch((err: unknown) => showNotice('error', errorMessage(err)))
         }}
       />
     </Card>
   )
 }
-
-/** Two fields, so a password cannot be set to something mistyped. */
-function PasswordDialog({
-  open,
-  title,
-  hint,
-  onOpenChange,
-  onSubmit
-}: {
-  open: boolean
-  title: string
-  hint?: string
-  onOpenChange: (open: boolean) => void
-  onSubmit: (password: string) => Promise<void>
-}): React.JSX.Element {
-  const showNotice = useApp((s) => s.showNotice)
-  const [first, setFirst] = React.useState('')
-  const [second, setSecond] = React.useState('')
-  const [busy, setBusy] = React.useState(false)
-
-  React.useEffect(() => {
-    if (open) {
-      setFirst('')
-      setSecond('')
-    }
-  }, [open])
-
-  const submit = async (): Promise<void> => {
-    if (first !== second) return
-    setBusy(true)
-    try {
-      await onSubmit(first)
-      onOpenChange(false)
-    } catch (err) {
-      showNotice('error', message(err))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const mismatch = Boolean(second) && first !== second
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        asChild
-        onSubmit={(e) => {
-          e.preventDefault()
-          void submit()
-        }}
-      >
-        <form>
-          <DialogHeader>
-            <DialogTitle>{title}</DialogTitle>
-            {hint && <DialogDescription>{hint}</DialogDescription>}
-          </DialogHeader>
-          <div className="flex flex-col gap-2">
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="password-new">New password</Label>
-              <Input
-                id="password-new"
-                type="password"
-                autoComplete="new-password"
-                autoFocus
-                value={first}
-                onChange={(e) => setFirst(e.target.value)}
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="password-repeat">Repeat the password</Label>
-              <Input
-                id="password-repeat"
-                type="password"
-                autoComplete="new-password"
-                aria-invalid={mismatch}
-                aria-describedby={mismatch ? 'password-mismatch' : undefined}
-                value={second}
-                onChange={(e) => setSecond(e.target.value)}
-              />
-            </div>
-            {mismatch && (
-              <div id="password-mismatch" role="alert" className="text-xs text-destructive">
-                The two passwords are not the same
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <DialogClose asChild>
-              <Button type="button" variant="outline">
-                Cancel
-              </Button>
-            </DialogClose>
-            <Button type="submit" disabled={busy || !first || first !== second}>
-              Save
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 
 export { ServerUsersCard }

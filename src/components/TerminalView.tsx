@@ -4,7 +4,7 @@ import type { ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { api } from '@/lib/api'
 import { useApp } from '@/state/store'
-import { cn } from '@/lib/utils'
+import { cn, errorMessage } from '@/lib/utils'
 
 /**
  * xterm paints on a canvas, so it cannot inherit any of the theme's CSS
@@ -53,6 +53,8 @@ export function TerminalView({ terminalId, visible }: { terminalId: string; visi
     // Replay anything printed before this view mounted.
     void api.terminals.buffer(terminalId).then((buf) => {
       if (buf) term.write(buf)
+    }).catch((err) => {
+      useApp.getState().showNotice('error', errorMessage(err))
     })
 
     term.onData((data) => api.terminals.write(terminalId, data))

@@ -524,6 +524,11 @@ export function manifestProblems(raw: unknown): string[] {
   if (idProblem) problems.push(idProblem)
 
   if (typeof m.name !== 'string' || !m.name.trim()) problems.push('name is missing')
+  if (typeof m.description !== 'string' || !m.description.trim()) problems.push('description is missing')
+  if (typeof m.author !== 'string' || !m.author.trim()) problems.push('author is missing')
+  if (m.defaultEnabled != null && typeof m.defaultEnabled !== 'boolean') {
+    problems.push('defaultEnabled is not a boolean')
+  }
   if (typeof m.version !== 'string' || !MODULE_VERSION_PATTERN.test(m.version)) {
     problems.push('version is not in x.y.z form')
   }

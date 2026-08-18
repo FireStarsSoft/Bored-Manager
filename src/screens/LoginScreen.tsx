@@ -75,11 +75,11 @@ export function LoginScreen(): React.JSX.Element {
           <Card className="p-4">
             <Alert variant="destructive">
               <ShieldAlert aria-hidden />
-              <AlertTitle>The WebUI is locked</AlertTitle>
+              <AlertTitle>Sign-in is locked</AlertTitle>
               <AlertDescription>
                 <p>
-                  Too many wrong passwords. Run this in a terminal on the machine that runs Bored
-                  Manager to unlock it:
+                  Too many wrong passwords for this account or from this address. Run this in a
+                  terminal on the machine that runs Bored Manager to unlock it:
                 </p>
                 <div className="mono mt-2 rounded-md border border-border bg-muted/50 px-2.5 py-1.5 text-xs">
                   ./bored-manager unlock

@@ -8,8 +8,9 @@
 #   1. wait for the app process to disappear
 #   2. rename the whole app folder to <name>.update-backup-<timestamp>
 #   3. copy the verified new version into the original path
-#   4. restore data/connections.json and data/user-settings/ from the backup
-#      (the app migrates a settings file written by an older version)
+#   4. restore data/connections.json, data/user-settings/, data/module-data/
+#      and data/known-hosts.json from the backup (the app migrates a settings
+#      file written by an older version)
 #   5. restore the modules the user installed themselves - the ones in the
 #      backup that the new version does not ship
 #   6. install.sh --repair  (npm install + build + chmod run.sh)
@@ -21,9 +22,11 @@
 # Nothing is deleted before the backup exists, so a failed update always ends
 # with the previous installation running again.
 #
-# Arguments mirror the Windows script:
+# Arguments:
 #   -AppDir <dir> -StagingDir <dir> -AppPid <pid> [-NewVersion <version>]
+#   -AppPid 0 means the caller already stopped the app; do not wait.
 
+set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOG_FILE="$SCRIPT_DIR/update.log"
 APP_DIR=""
@@ -31,6 +34,7 @@ STAGING_DIR=""
 APP_PID=""
 NEW_VERSION=""
 BACKUP_DIR=""
+QUARANTINED=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -41,8 +45,6 @@ while [ $# -gt 0 ]; do
         *) echo "Unknown argument: $1"; exit 2 ;;
     esac
 done
-
-systemctl --user stop bored-manager 2>/dev/null || true
 
 log() {
     local line
@@ -60,6 +62,17 @@ notify() {
     return 0
 }
 
+json_string_list() {
+    local first=1 name
+    printf '['
+    for name in "$@"; do
+        [ -n "$name" ] || continue
+        if [ "$first" -eq 1 ]; then first=0; else printf ','; fi
+        printf '"%s"' "$name"
+    done
+    printf ']'
+}
+
 # Handed to the app on its next start so it can show the outcome as a notice.
 write_result() {
     local ok="$1" error_message="$2" data_dir="$APP_DIR/data" copied_log="$APP_DIR/data/update.log"
@@ -69,15 +82,54 @@ write_result() {
     # Escape the few characters that would break the JSON string.
     local escaped
     escaped=$(printf '%s' "$error_message" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n\r\t' '   ')
+    local qjson
+    qjson="$(json_string_list $QUARANTINED)"
     cat > "$data_dir/update-result.json" <<EOF
 {
   "ok": $ok,
   "version": "$NEW_VERSION",
   "error": "$escaped",
   "finishedAt": $(( $(date +%s) * 1000 )),
-  "logPath": "$copied_log"
+  "logPath": "$copied_log",
+  "quarantined": $qjson
 }
 EOF
+}
+
+stop_running_app() {
+    systemctl --user stop bored-manager 2>/dev/null || true
+    local pidfile="$APP_DIR/data/server.pid"
+    [ -f "$pidfile" ] || return 0
+    local pid
+    pid="$(tr -d ' \n' < "$pidfile" || true)"
+    if [ -n "$pid" ] && [ "$pid" != "0" ] && kill -0 "$pid" 2>/dev/null; then
+        kill "$pid" 2>/dev/null || true
+        local n=0
+        while kill -0 "$pid" 2>/dev/null; do
+            n=$((n + 1))
+            if [ "$n" -ge 40 ]; then
+                kill -9 "$pid" 2>/dev/null || true
+                break
+            fi
+            sleep 0.25
+        done
+    fi
+    rm -f "$pidfile"
+}
+
+start_app() {
+    if systemctl --user start bored-manager 2>/dev/null; then
+        log "bored-manager.service started."
+        return 0
+    fi
+    if [ -x "$APP_DIR/bored-manager" ]; then
+        if "$APP_DIR/bored-manager" start; then
+            log "App started via bored-manager."
+            return 0
+        fi
+    fi
+    log "Start the app with: $APP_DIR/bored-manager start"
+    return 1
 }
 
 hold_window_open() {
@@ -106,7 +158,7 @@ fail() {
     write_result false "$message"
     log "Full log: $LOG_FILE"
     notify "Update failed - the previous version was restored. See $LOG_FILE"
-    systemctl --user start bored-manager 2>/dev/null || true
+    start_app || true
     hold_window_open
     exit 1
 }
@@ -133,18 +185,24 @@ for tool in node npm; do
         fail "$tool was not found on PATH. Install Node.js 20+ and run the update again."
 done
 
-# --- 2. Wait for the app to close ---------------------------------------------
-log "Waiting for Bored Manager (pid $APP_PID) to close..."
-WAITED=0
-while kill -0 "$APP_PID" 2>/dev/null; do
+# --- 2. Stop the running app, then wait for it to close -----------------------
+log "Stopping the running app..."
+stop_running_app
+if [ "$APP_PID" != "0" ]; then
+    log "Waiting for Bored Manager (pid $APP_PID) to close..."
+    WAITED=0
+    while kill -0 "$APP_PID" 2>/dev/null; do
+        sleep 1
+        WAITED=$((WAITED + 1))
+        if [ "$WAITED" -ge 120 ]; then
+            fail "Bored Manager (pid $APP_PID) is still running after 2 minutes. Nothing was changed."
+        fi
+    done
+    log "The app has closed."
     sleep 1
-    WAITED=$((WAITED + 1))
-    if [ "$WAITED" -ge 120 ]; then
-        fail "Bored Manager (pid $APP_PID) is still running after 2 minutes. Nothing was changed."
-    fi
-done
-log "The app has closed."
-sleep 1
+else
+    log "Caller already stopped the app (-AppPid 0)."
+fi
 
 # --- 3. Move the current installation aside -----------------------------------
 BACKUP_DIR="$PARENT_DIR/$LEAF_NAME.update-backup-$(date '+%Y%m%d-%H%M%S')"
@@ -194,6 +252,18 @@ if [ -f "$BACKUP_DIR/data/secret.key" ]; then
     cp -f "$BACKUP_DIR/data/secret.key" "$APP_DIR/data/secret.key" || \
         log "WARNING: could not carry the secret key over."
 fi
+if [ -d "$BACKUP_DIR/data/module-data" ]; then
+    if mkdir -p "$APP_DIR/data/module-data" && \
+       cp -a "$BACKUP_DIR/data/module-data/." "$APP_DIR/data/module-data/"; then
+        log "Module data carried over."
+    else
+        log "WARNING: could not carry module data over."
+    fi
+fi
+if [ -f "$BACKUP_DIR/data/known-hosts.json" ]; then
+    cp -f "$BACKUP_DIR/data/known-hosts.json" "$APP_DIR/data/known-hosts.json" || \
+        log "WARNING: could not carry the SSH known hosts over."
+fi
 log "The metrics history and the logs of the old version were not carried over."
 
 # --- 5b. Carry over the modules the user installed themselves -----------------
@@ -225,6 +295,7 @@ fi
 # --- 6. Dependencies, build and launcher --------------------------------------
 run_repair() {
     (
+        set +e
         cd "$APP_DIR" || exit 1
         bash ./install.sh --repair 2>&1 | tee -a "$LOG_FILE"
         exit "${PIPESTATUS[0]}"
@@ -234,8 +305,8 @@ run_repair() {
 log "Installing dependencies and building the new version (this takes a few minutes)..."
 echo ""
 chmod +x "$APP_DIR/install.sh" "$APP_DIR/run.sh" "$APP_DIR/bored-manager" 2>/dev/null || true
-run_repair
-INSTALL_EXIT=$?
+INSTALL_EXIT=0
+run_repair || INSTALL_EXIT=$?
 QUARANTINED=""
 if [ "$INSTALL_EXIT" -ne 0 ] && [ -n "$RESTORED_MODULES" ]; then
     # The only new code in this build is the modules that were just restored, so
@@ -249,8 +320,8 @@ if [ "$INSTALL_EXIT" -ne 0 ] && [ -n "$RESTORED_MODULES" ]; then
         fi
     done
     if [ -n "$QUARANTINED" ]; then
-        run_repair
-        INSTALL_EXIT=$?
+        INSTALL_EXIT=0
+        run_repair || INSTALL_EXIT=$?
     fi
 fi
 if [ "$INSTALL_EXIT" -ne 0 ]; then
@@ -275,11 +346,7 @@ rm -rf "$STAGING_DIR" 2>/dev/null || true
 VERSION_LABEL="${NEW_VERSION:+version $NEW_VERSION}"
 echo ""
 log "Bored Manager was updated to ${VERSION_LABEL:-the new version}."
-if systemctl --user start bored-manager 2>/dev/null; then
-    log "bored-manager.service started."
-else
-    echo "Start the app with: $APP_DIR/bored-manager start"
-fi
+start_app || true
 if [ -n "$QUARANTINED" ]; then
     notify "Update complete${NEW_VERSION:+ ($NEW_VERSION)}, but these modules were disabled:${QUARANTINED}"
 else

@@ -2,6 +2,10 @@
 
 All notable changes to the Processes module. Versions are independent of the app's.
 
+## 2.0.1
+
+- Kill only accepts `TERM` or `KILL`. Any other signal is refused before a command is built.
+
 ## 2.0.0
 
 - Moved to API v2: the UI is declared in `ui/pages/*.json` (Processes + Sub services). The app renders the pages; this module no longer ships React. Install, update and reload no longer rebuild or restart the app.

@@ -13,6 +13,6 @@ jobs:
         with:
           node-version: 20
       - run: bash scripts/package.sh dist
-      - run: gh release create "$GITHUB_REF_NAME" dist/*.zip --generate-notes
+      - run: gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.sha256 --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}

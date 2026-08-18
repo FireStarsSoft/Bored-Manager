@@ -1,9 +1,11 @@
 import * as React from 'react'
 import { Loader2, Monitor, Server, Trash2 } from 'lucide-react'
-import type { SavedConnection } from '@shared/types'
+import type { ConnectionConfig, HostKeyChallenge, SavedConnection } from '@shared/types'
 import { api } from '@/lib/api'
 import { useApp } from '@/state/store'
+import { errorMessage } from '@/lib/utils'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -15,6 +17,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 export function ConnectScreen(): React.JSX.Element {
   const connect = useApp((s) => s.connect)
   const connecting = useApp((s) => s.connecting)
+  const showNotice = useApp((s) => s.showNotice)
   // "Local" means the machine the server runs on, which the browser cannot
   // know by itself - and which is not a Linux box in a dev setup on Windows.
   const [platform, setPlatform] = React.useState<string | null>(null)
@@ -30,21 +33,28 @@ export function ConnectScreen(): React.JSX.Element {
   const [remember, setRemember] = React.useState(true)
   const [error, setError] = React.useState('')
   const [saved, setSaved] = React.useState<SavedConnection[]>([])
+  const [hostKey, setHostKey] = React.useState<HostKeyChallenge | null>(null)
 
   const loadSaved = React.useCallback(async () => {
-    setSaved(await api.connection.listSaved())
-  }, [])
+    try {
+      setSaved(await api.connection.listSaved())
+    } catch (err) {
+      showNotice('error', errorMessage(err))
+    }
+  }, [showNotice])
 
   React.useEffect(() => {
     void loadSaved()
   }, [loadSaved])
 
   React.useEffect(() => {
-    void api.app.info().then((info) => {
-      setPlatform(info.platform)
-      if (info.platform === 'win32') setMode('ssh')
-    })
-  }, [])
+    void api.app.info()
+      .then((info) => {
+        setPlatform(info.platform)
+        if (info.platform === 'win32') setMode('ssh')
+      })
+      .catch((err) => showNotice('error', errorMessage(err)))
+  }, [showNotice])
 
   const fillFromSaved = async (c: SavedConnection): Promise<void> => {
     setMode('ssh')
@@ -60,13 +70,13 @@ export function ConnectScreen(): React.JSX.Element {
     }
   }
 
-  const submit = async (): Promise<void> => {
+  const submit = async (acceptHostKey = false): Promise<void> => {
     setError('')
     if (mode === 'ssh' && (!host.trim() || !username.trim())) {
       setError('Host and username are required for SSH')
       return
     }
-    const ok = await connect({
+    const cfg: ConnectionConfig = {
       mode,
       host: host.trim(),
       port: parseInt(port, 10) || 22,
@@ -74,9 +84,15 @@ export function ConnectScreen(): React.JSX.Element {
       password: password || undefined,
       privateKeyPath: keyPath.trim() || undefined,
       sudoPassword: sudoPassword || undefined,
-      rememberPassword: remember
-    })
-    if (ok) void loadSaved()
+      rememberPassword: remember,
+      acceptHostKey: acceptHostKey || undefined
+    }
+    const res = await connect(cfg)
+    if (res.hostKey) {
+      setHostKey(res.hostKey)
+      return
+    }
+    if (res.ok) void loadSaved()
   }
 
   const localOption = (
@@ -93,7 +109,7 @@ export function ConnectScreen(): React.JSX.Element {
             Bored <span className="text-metric-gpu">Manager</span>
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Monitor Linux processes, network, disk, packages, NVIDIA GPU and Docker
+            Monitor Linux processes, network, disk, packages, NVIDIA GPU and containers
           </p>
         </div>
 
@@ -267,6 +283,31 @@ export function ConnectScreen(): React.JSX.Element {
             </div>
           </div>
         )}
+
+        <ConfirmDialog
+          open={hostKey != null}
+          onOpenChange={(open) => !open && setHostKey(null)}
+          title={hostKey?.kind === 'changed' ? 'SSH host key changed' : 'Unknown SSH host key'}
+          confirmLabel="Trust this host"
+          destructive={hostKey?.kind === 'changed'}
+          message={
+            hostKey && (
+              <>
+                {hostKey.kind === 'changed'
+                  ? 'The key this machine presented is not the one stored from last time. Someone may be intercepting the connection.'
+                  : 'This is the first time this app has seen this host. Compare the fingerprint with the machine before trusting it.'}
+                <div className="mt-2 font-medium">
+                  {hostKey.host}:{hostKey.port}
+                </div>
+                <div className="mt-1 break-all font-mono text-xs">SHA256:{hostKey.fingerprint}</div>
+              </>
+            )
+          }
+          onConfirm={() => {
+            setHostKey(null)
+            void submit(true)
+          }}
+        />
       </div>
     </div>
   )

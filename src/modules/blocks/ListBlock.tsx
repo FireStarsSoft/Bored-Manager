@@ -17,7 +17,7 @@ export function ListBlockView({ block, ctx }: { block: ListBlock; ctx: BlockCtx 
   return (
     <div className="divide-y divide-border/40 text-xs">
       {shown.map((row, i) => (
-        <div key={i} className="flex items-center gap-2 py-1">
+        <div key={String(row[block.columns[0]?.key] ?? i)} className="flex items-center gap-2 py-1">
           {block.columns.map((col, ci) => (
             <span
               key={col.key}

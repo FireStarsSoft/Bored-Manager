@@ -1,4 +1,13 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync, copyFileSync } from 'fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync
+} from 'fs'
 import { dirname, join, resolve } from 'path'
 import {
   DEFAULT_SETTINGS,
@@ -99,9 +108,70 @@ function readJson<T>(file: string, fallback: T): T {
   }
 }
 
-function writeJson(file: string, value: unknown): void {
+function chmodQuiet(file: string, mode: number): void {
+  try {
+    chmodSync(file, mode)
+  } catch {
+    // Windows and some mounts do not implement POSIX modes.
+  }
+}
+
+/** Create `dir` (and parents) and set it to `0700` so only this user can walk it. */
+export function ensurePrivateDir(dir: string): void {
+  mkdirSync(dir, { recursive: true })
+  chmodQuiet(dir, 0o700)
+}
+
+/** JSON on disk that only this user should read (accounts, settings, lockout). */
+export function writePrivateJson(file: string, value: unknown): void {
   mkdirSync(dirname(file), { recursive: true })
-  writeFileSync(file, JSON.stringify(value, null, 2), 'utf8')
+  writeFileSync(file, JSON.stringify(value, null, 2), { encoding: 'utf8', mode: 0o600 })
+  chmodQuiet(file, 0o600)
+}
+
+function writeJson(file: string, value: unknown): void {
+  writePrivateJson(file, value)
+}
+
+/**
+ * Lock down the data folder and the files that hold secrets or session state.
+ * Called on every boot so an older install, or a file rewritten without a
+ * mode, does not stay world-readable.
+ */
+export function hardenDataPermissions(): void {
+  const root = dataDir()
+  ensurePrivateDir(root)
+  const files = [
+    join(root, 'connections.json'),
+    join(root, 'auth-lock.json'),
+    join(root, 'known-hosts.json'),
+    join(root, 'users', 'users.json'),
+    settingsFile()
+  ]
+  for (const file of files) {
+    if (existsSync(file)) chmodQuiet(file, 0o600)
+  }
+  const sessions = join(root, 'sessions')
+  ensurePrivateDir(sessions)
+  try {
+    for (const name of readdirSync(sessions)) {
+      chmodQuiet(join(sessions, name), 0o600)
+    }
+  } catch {
+    /* listing is best-effort */
+  }
+  const usersRoot = join(root, 'users')
+  if (existsSync(usersRoot)) {
+    ensurePrivateDir(usersRoot)
+    try {
+      for (const name of readdirSync(usersRoot)) {
+        const conn = join(usersRoot, name, 'connections.json')
+        if (existsSync(conn)) chmodQuiet(conn, 0o600)
+      }
+    } catch {
+      /* same */
+    }
+  }
 }
 
 // ---------- Settings ----------
@@ -370,12 +440,6 @@ export function saveSettings(settings: Partial<AppSettings>): AppSettings {
   return merged
 }
 
-export function exportSettings(targetPath: string): void {
-  ensureDirs()
-  if (!existsSync(settingsFile())) saveSettings(loadSettings())
-  copyFileSync(settingsFile(), targetPath)
-}
-
 /**
  * Read a settings file the user picked, without writing anything: the caller
  * saves it, so an imported file goes through exactly the same checks as a
@@ -551,7 +615,7 @@ function readConnections(username: string): StoredConnection[] {
 
 function writeConnections(username: string, list: StoredConnection[]): void {
   mkdirSync(userDataDir(username), { recursive: true })
-  writeFileSync(userConnectionsFile(username), JSON.stringify(list, null, 2), 'utf8')
+  writeJson(userConnectionsFile(username), list)
 }
 
 function encrypt(plain: string): string | undefined {

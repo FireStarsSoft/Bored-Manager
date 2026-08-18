@@ -1,6 +1,6 @@
 # Bored Manager
 
-**Bored Manager** is a web UI for Linux — monitor and control **system processes**, **network**, **disk**, **sensors**, **packages**, **NVIDIA GPU** and **Docker** on the local machine or on a remote machine over SSH.
+**Bored Manager** is a web UI for Linux — monitor and control **system processes**, **network**, **disk**, **sensors**, **packages**, **NVIDIA GPU** and **containers** on the local machine or on a remote machine over SSH.
 
 The server runs on Linux. Open it from **any device with a browser** at `http://<ip>:8686`. The app does not reimplement any tool: it visualises data from what is already on the target machine (`/proc`, `ps`, `ss`, `ip`, `lsblk`, `df`, `dpkg/apt`, `nvidia-smi`, `docker`, `sensors`) through a single executor layer (local shell or SSH).
 
@@ -23,9 +23,9 @@ The sections below are the user-facing overview. The detail lives in [`docs/`](d
 ## Features
 
 - **Web UI, many clients**: one Linux host runs the server; phones, laptops and desktops on the network open the same address. Every browser shares **one** connected machine and the same terminals — connect or disconnect from any client affects the others.
-- **Optional login and a global lockout**: login is off by default. Turn it on in Settings → *Server & users*. Too many wrong passwords lock every client; unlock only from a terminal on the host (`./bored-manager unlock`). See *Security*.
-- **Sidebar groups**: a module with more than one page (Processes, Network, Disk, GPU, Docker) is a dropdown in the sidebar. Overview, Packages, Terminals and Settings stay where they are.
-- **Overview** (default page): a **drag-and-drop card grid** — grab the grip in the top-left corner of a card to move it; the other cards make room and every gap is filled from the top down. Card height **follows its content** (a Sensors card with 4 readings is short, a per-core CPU card with 32 cores is tall), width is adjustable by dragging the right edge. The layout is stored in settings (with a *Reset layout* button). Summary cards for CPU, Memory, GPU, Docker, Network and Disk I/O with history charts from **30s to 24h**. Every card shows **which processes are consuming that resource** and how much (memory in GB, CPU in %) — and for the two-way resources **per direction**: `↓ download · ↑ upload` for network, `R read · W write` for disk, in the same colours the detail pages use. Each card carries a small marker with **its own update interval**. When nothing could be measured the card says why instead of showing an empty space. Extra cards (per-core CPU, file systems, sensors, load & uptime, top processes, GPU processes, Docker resources, **App services**) are enabled in Settings. A card is only shown when its collector is running.
+- **Optional login and a lockout**: login is off by default. Turn it on in Settings → *Server & users*. Too many wrong passwords lock that username and that client address; unlock only from a terminal on the host (`./bored-manager unlock`). See *Security*.
+- **Sidebar groups**: a module with more than one page (Processes, Network, Disk, GPU, Container) is a dropdown in the sidebar. Overview, Packages, Terminals and Settings stay where they are.
+- **Overview** (default page): a **drag-and-drop card grid** — grab the grip in the top-left corner of a card to move it; the other cards make room and every gap is filled from the top down. Card height **follows its content** (a Sensors card with 4 readings is short, a per-core CPU card with 32 cores is tall), width is adjustable by dragging the right edge. The layout is stored in settings (with a *Reset layout* button). Summary cards for CPU, Memory, GPU, Container, Network and Disk I/O with history charts from **30s to 24h**. Every card shows **which processes are consuming that resource** and how much (memory in GB, CPU in %) — and for the two-way resources **per direction**: `↓ download · ↑ upload` for network, `R read · W write` for disk, in the same colours the detail pages use. Each card carries a small marker with **its own update interval**. When nothing could be measured the card says why instead of showing an empty space. Extra cards (per-core CPU, file systems, sensors, load & uptime, top processes, GPU processes, Container resources, **App services**) are enabled in Settings. A card is only shown when its collector is running.
 - **App services**: an Overview card for what Bored Manager itself is running (the server process, pollers, live streams and terminals) and what that costs in CPU and RAM. The Processes module’s **Sub services** page lists every entry, not just the busiest few.
 - **Processes**: a glances-style system detail strip plus a sortable/filterable process table, kill (SIGTERM/SIGKILL) and renice. Full detail in [`modules/processes/README.md`](modules/processes/README.md).
 - **Network** (Traffic, Connections, Host tuning): Download/Upload widgets, a per-interface traffic chart, and every socket down to its owning process, direction and rate — plus bandwidth per process, listening ports, TCP quality, gateway and DNS. **Host tuning** shows the kernel limits that decide how many containers a machine can hold (ARP table, file descriptors, inotify, conntrack), how close it is to each, and can raise them for a given number of container addresses — writing both the running kernel and `/etc/sysctl.d`. Full detail in [`modules/network/README.md`](modules/network/README.md).
@@ -65,23 +65,30 @@ curl -fsSL https://raw.githubusercontent.com/FireStarsSoft/Bored-Manager/main/in
 wget -qO- https://raw.githubusercontent.com/FireStarsSoft/Bored-Manager/main/install.sh | bash -s -- --port 9090 --no-service
 
 # install from a zip already downloaded
-curl -fsSL https://raw.githubusercontent.com/FireStarsSoft/Bored-Manager/main/install.sh | bash -s -- --source ./bored-manager-0.3.1.zip
+curl -fsSL https://raw.githubusercontent.com/FireStarsSoft/Bored-Manager/main/install.sh | bash -s -- --source ./bored-manager-0.3.2.zip
 ```
 
 Needs Node.js 20+, `curl` or `wget`, and `unzip`. The installer registers a systemd user unit (`bored-manager.service`) unless you pass `--no-service`, then starts it. Open `http://<ip>:8686`.
 
 `./install.sh --repair` reinstalls dependencies and rebuilds in the current app folder (what `run.sh` and the in-app updater call).
 
+Running the same one-liner (or `./install.sh`) against an existing install **updates** it: the running process is stopped first, `data/` is kept, `--port` / `--host` are only written when you pass those flags, and the service is restarted.
+
+`--refresh` reinstalls the app and every module but keeps accounts, settings and UI config. `--renew` deletes the folder (including all data) and installs from scratch — type `YES`, or pass `--yes` when piping through `curl | bash`.
+
 ### Installer flags
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--port` | `8686` | WebUI port |
-| `--host` | `0.0.0.0` | Bind address |
+| `--port` | `8686` | WebUI port (only written when passed, or on a new install) |
+| `--host` | `0.0.0.0` | Bind address (same rule as `--port`) |
 | `--dir` | `~/bored-manager` | Install folder |
 | `--source` | latest GitHub release | Local `.zip` or zip URL |
 | `--no-service` | off | Do not register the systemd user unit |
 | `--repair` | — | Reinstall dependencies and rebuild in the current app folder |
+| `--refresh` | — | Reinstall the app and every module; keep accounts, settings and UI config |
+| `--renew` | — | Delete the install folder (including all data) and install from scratch |
+| `--yes` | off | Skip the `--renew` confirmation |
 
 CLI flags (`--port`, `--host`) beat `data/user-settings/settings.json`, which beats the built-in defaults.
 
@@ -108,7 +115,9 @@ From the install folder:
 ./bored-manager start     # systemd user unit if registered, otherwise background
 ./bored-manager stop
 ./bored-manager status
+./bored-manager update    # latest GitHub release, or --source <zip|url>
 ./bored-manager unlock    # clear the login lockout
+./bored-manager uninstall [--purge] [--yes]
 ```
 
 With the systemd user unit:
@@ -129,12 +138,12 @@ To run in the foreground instead of as a service: `./run.sh`.
 
 ## Security
 
-Login is **off by default**. Anyone who can reach `http://<ip>:8686` has full access. Turn it on in Settings → *Server & users* (*Require login*). The first time you enable it you must set a password for `bored-admin` — the switch asks for one, and signs this browser in with it. Any other browser that was connected while the login was off is signed out on the spot.
+Login is **off by default**, and the server binds **`0.0.0.0`** — anyone who can reach `http://<ip>:8686` has full access. Settings → *Server & users* warns when both of those are true. Turn login on (*Require login*), or bind `127.0.0.1` if only this machine should open the UI. The first time you enable login you must set a password for `bored-admin` — the switch asks for one, and signs this browser in with it. Any other browser that was connected while the login was off is signed out on the spot.
 
 - Passwords are changed from the account table in the same card (*Change password*). An account that has none says so, with a button to set one.
 - Username + password are required on **every** sign-in. The browser is never asked to store the password (only the last username is kept locally as a typing convenience).
 - Each account has its own data on the host under `data/users/<username>/` (saved SSH connections). Deleting an account deletes that folder with it; other accounts are untouched. `bored-admin` cannot be deleted.
-- Wrong passwords are counted **across every client**. After `auth.maxFailures` (default **5**) the WebUI locks (HTTP 423). A successful login resets the counter. Unlock **only** from a terminal on the host: `./bored-manager unlock`. That takes effect immediately; you do not need to restart.
+- Wrong passwords are counted **per username and per client address**. After `auth.maxFailures` (default **5**) that account and that address lock (HTTP 423); other people on other addresses can still sign in. A successful login resets those two counters. Unlock **every** lockout from a terminal on the host: `./bored-manager unlock`. That takes effect immediately; you do not need to restart.
 - Session cookies are HttpOnly / SameSite=Lax, stored as files under `data/sessions/`. Idle timeout is rolling (`0` = no expiry). Idle only applies when login is on.
 
 The app serves **plain HTTP**. Use it on a trusted LAN, or put it behind a TLS reverse proxy if it must be reachable more widely.
@@ -212,7 +221,7 @@ data/auth-lock.json                # global wrong-password counter
 
 ## Updating the app
 
-Three sources, all in **Settings → Software update**, all through the same validate → backup → swap → rebuild → start pipeline:
+From the install folder, `./bored-manager update` (or `./bored-manager update --source <zip|url>`) uses the same pipeline as the WebUI. Three sources are also available in **Settings → Software update**, all through the same validate → backup → swap → rebuild → start pipeline:
 
 1. **GitHub repo** (default `FireStarsSoft/Bored-Manager`, editable on that card) → *Check for updates* → *Download & test* the release zip (or the `main` branch if that repo has no release yet).
 2. **Zip URL** — paste a GitHub release asset or source archive; the field is **remembered** for next time.
@@ -227,8 +236,10 @@ See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for the exact checks and transact
 ## Uninstalling
 
 ```bash
-./uninstall.sh            # stop and remove the user service; leftover desktop entries too
-./uninstall.sh --purge    # also delete the install folder (type YES to confirm)
+./uninstall.sh                 # stop the user service and any pidfile process
+./uninstall.sh --purge         # also delete the install folder (type YES to confirm)
+./uninstall.sh --purge --yes   # same, no prompt
+./bored-manager uninstall --purge --yes
 ```
 
 Without `--purge` the folder stays; delete it yourself to remove settings, accounts, logs and metrics history. Everything the app owns lives inside that folder.

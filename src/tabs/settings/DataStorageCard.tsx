@@ -10,7 +10,8 @@ import { Input } from '@/components/ui/input'
 import { SelectField } from '@/components/select-field'
 import { Switch } from '@/components/ui/switch'
 import { copyText, formatBytes } from '@/lib/utils'
-import { message, timeLabel } from './shared'
+import { timeLabel } from './shared'
+import { errorMessage } from '@/lib/utils'
 import { RETENTION_OPTIONS } from './options'
 
 /**
@@ -28,8 +29,12 @@ function DataStorageCard(): React.JSX.Element {
   const [capDraft, setCapDraft] = React.useState('')
 
   const load = React.useCallback(async () => {
-    setStats(await api.history.stats())
-  }, [])
+    try {
+      setStats(await api.history.stats())
+    } catch (err) {
+      showNotice('error', errorMessage(err))
+    }
+  }, [showNotice])
 
   React.useEffect(() => {
     void load()
@@ -171,10 +176,13 @@ function DataStorageCard(): React.JSX.Element {
           <Button
             variant="secondary"
             onClick={() => {
-              void api.history.flush().then((s) => {
-                setStats(s)
-                showNotice('info', 'Buffered samples written to disk')
-              })
+              void api.history
+                .flush()
+                .then((s) => {
+                  setStats(s)
+                  showNotice('info', 'Buffered samples written to disk')
+                })
+                .catch((err) => showNotice('error', errorMessage(err)))
             }}
           >
             <Save className="size-3.5" /> Write now
@@ -197,10 +205,13 @@ function DataStorageCard(): React.JSX.Element {
         message={`Delete every stored sample (${formatBytes(stats?.totalBytes ?? 0)}) for all machines? Charts longer than 10 minutes will be empty until new data has been collected again.`}
         confirmLabel="Delete"
         onConfirm={() => {
-          void api.history.purge().then((s) => {
-            setStats(s)
-            showNotice('info', 'Metrics history cleared')
-          })
+          void api.history
+            .purge()
+            .then((s) => {
+              setStats(s)
+              showNotice('info', 'Metrics history cleared')
+            })
+            .catch((err) => showNotice('error', errorMessage(err)))
         }}
       />
     </Card>

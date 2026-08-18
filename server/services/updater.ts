@@ -1,4 +1,5 @@
-import { spawn } from 'child_process'
+import { spawn, spawnSync } from 'child_process'
+import { createHash } from 'crypto'
 import {
   closeSync,
   copyFileSync,
@@ -13,7 +14,13 @@ import {
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { extractZip } from './zip'
-import { downloadFile, findArchiveRoot, type DownloadHandle } from './download'
+import {
+  assertSafeDownloadUrl,
+  downloadFile,
+  findArchiveRoot,
+  GITHUB_DOWNLOAD_HOSTS,
+  type DownloadHandle
+} from './download'
 import { defaultBranchZipUrl, isGithubRepoName, latestReleaseZip, looksLikeZipUrl } from './github'
 import type {
   OkResult,
@@ -41,13 +48,7 @@ import { appRoot, appVersion, dataDir } from './store'
  */
 
 /** Hosts a GitHub release/source zip is served from (incl. redirect targets). */
-const ALLOWED_HOSTS = [
-  'github.com',
-  'www.github.com',
-  'codeload.github.com',
-  'objects.githubusercontent.com',
-  'release-assets.githubusercontent.com'
-]
+const ALLOWED_HOSTS = GITHUB_DOWNLOAD_HOSTS
 
 const MAX_ARCHIVE_BYTES = 300 * 1024 * 1024
 const DOWNLOAD_TIMEOUT_MS = 15 * 60 * 1000
@@ -89,6 +90,8 @@ export class UpdaterService {
   private stagedRoot: string | null = null
   /** bumped by cancel(), so an aborted check stops reporting into the state */
   private runId = 0
+  /** Outcome of the optional sibling `.sha256` check for the last archive. */
+  private checksum: 'ok' | 'skipped' = 'skipped'
 
   constructor(private readonly onState: (s: UpdateState) => void) {}
 
@@ -120,6 +123,7 @@ export class UpdaterService {
 
     this.cleanWorkDir()
     this.stagedRoot = null
+    this.checksum = 'skipped'
     const runId = ++this.runId
     const work = this.workDir()
     const zipPath = join(work, 'update.zip')
@@ -134,6 +138,8 @@ export class UpdaterService {
     try {
       mkdirSync(work, { recursive: true })
       await this.download(url.value, zipPath)
+      if (runId !== this.runId) return this.state
+      await this.maybeVerifyChecksum(url.value, zipPath)
     } catch (err) {
       if (runId !== this.runId) return this.state // cancelled while downloading
       this.cleanWorkDir()
@@ -160,6 +166,7 @@ export class UpdaterService {
 
     this.cleanWorkDir()
     this.stagedRoot = null
+    this.checksum = 'skipped'
     const runId = ++this.runId
     const work = this.workDir()
     const copied = join(work, 'update.zip')
@@ -188,9 +195,12 @@ export class UpdaterService {
     const name = repo.trim() || DEFAULT_UPDATE_REPO
     if (!isGithubRepoName(name)) throw new Error(`"${name}" is not a GitHub owner/repo`)
     const fallbackUrl = await defaultBranchZipUrl(name)
-    const release = await latestReleaseZip(name, (assetName) => /^bored-manager-.*\.zip$/i.test(assetName))
-    if (!release) return { currentVersion: current, latestVersion: null, fallbackUrl }
-    if (release.version) compareVersions(release.version, current)
+    const release = await latestReleaseZip(name, (assetName) =>
+      /^bored-manager-.*\.zip$/i.test(assetName)
+    )
+    if (!release || !release.matched) {
+      return { currentVersion: current, latestVersion: null, fallbackUrl, notes: release?.notes }
+    }
     return {
       currentVersion: current,
       latestVersion: release.version || null,
@@ -283,33 +293,33 @@ export class UpdaterService {
     ]
 
     try {
-      const logFd = openSync(join(work, 'update.log'), 'a')
-      const child = spawn('bash', [script, ...args], {
-        cwd: work,
-        detached: true,
-        stdio: ['ignore', logFd, logFd]
-      })
-      child.unref()
-      closeSync(logFd)
+      launchUpdateScript(script, args, work)
     } catch (err) {
       return { ok: false, error: `Could not start the update script: ${message(err)}` }
     }
 
     this.setState({ phase: 'applying', error: undefined })
-    // Give the RPC reply time to reach the browser before the socket dies.
-    setTimeout(() => process.exit(0), 500)
+    // Give the RPC reply time to reach the browser, then go through the
+    // SIGTERM path so terminals, SSH and the metrics buffer are flushed.
+    // Exit 0: Restart=on-failure must not start the old tree mid-swap.
+    setTimeout(() => process.kill(process.pid, 'SIGTERM'), 500)
     return { ok: true }
   }
 
   /** Result the update script left behind, read (and cleared) once on start. */
   consumeResult(): UpdateResult | null {
     const file = join(dataDir(), 'update-result.json')
+    if (!existsSync(file)) return null
     try {
-      if (!existsSync(file)) return null
       const result = JSON.parse(readFileSync(file, 'utf8')) as UpdateResult
       unlinkSync(file)
       return typeof result?.ok === 'boolean' ? result : null
     } catch {
+      try {
+        unlinkSync(file)
+      } catch {
+        /* a leftover corrupt result would otherwise repeat on every boot */
+      }
       return null
     }
   }
@@ -318,6 +328,7 @@ export class UpdaterService {
     const transfer = downloadFile(url, dest, {
       maxBytes: MAX_ARCHIVE_BYTES,
       timeoutMs: DOWNLOAD_TIMEOUT_MS,
+      allowedHosts: ALLOWED_HOSTS,
       onProgress: (receivedBytes, totalBytes) =>
         this.setState({ progress: { receivedBytes, totalBytes } })
     })
@@ -330,7 +341,40 @@ export class UpdaterService {
   }
 
   /**
-   * Everything that can be verified without building: is this really a Task
+   * When a sibling `<url>.sha256` exists, require it to match. A missing
+   * sidecar is not an error — bootstrap `install.sh` does the same.
+   */
+  private async maybeVerifyChecksum(url: string, zipPath: string): Promise<void> {
+    this.checksum = 'skipped'
+    const dest = `${zipPath}.sha256`
+    try {
+      const transfer = downloadFile(`${url}.sha256`, dest, {
+        maxBytes: 8192,
+        timeoutMs: 30_000,
+        allowedHosts: ALLOWED_HOSTS
+      })
+      this.transfer = transfer
+      await transfer.done
+    } catch {
+      this.checksum = 'skipped'
+      return
+    } finally {
+      this.transfer = null
+    }
+    const expected = readFileSync(dest, 'utf8').trim().split(/\s+/)[0]?.toLowerCase()
+    if (!expected || !/^[0-9a-f]{64}$/.test(expected)) {
+      this.checksum = 'skipped'
+      return
+    }
+    const actual = createHash('sha256').update(readFileSync(zipPath)).digest('hex')
+    if (actual !== expected) {
+      throw new Error(`SHA-256 mismatch (expected ${expected}, got ${actual})`)
+    }
+    this.checksum = 'ok'
+  }
+
+  /**
+   * Everything that can be verified without building: is this really a Bored
    * Manager source tree, and is it complete enough to install?
    */
   private validate(root: string | null): UpdateValidation {
@@ -424,6 +468,16 @@ export class UpdaterService {
             .join('; ')
     })
 
+    if (this.checksum === 'ok') {
+      checks.push({
+        id: 'checksum',
+        label: 'SHA-256 matches the sidecar file',
+        ok: true
+      })
+    } else {
+      warnings.push('No SHA-256 sidecar was found next to the archive; checksum verification was skipped')
+    }
+
     if (!existsSync(join(root, 'scripts', 'update.sh'))) {
       warnings.push(
         'The new version has no scripts/update.sh, so it will not be able to update itself again'
@@ -448,6 +502,50 @@ export class UpdaterService {
   }
 }
 
+/**
+ * Under a systemd unit the detached child would share the service cgroup
+ * and die with `systemctl stop`. `systemd-run --user` puts it in its own
+ * transient scope. Anywhere else, a detached bash is enough.
+ */
+function launchUpdateScript(script: string, args: string[], work: string): void {
+  if (canSystemdRun()) {
+    const launched = spawnSync(
+      'systemd-run',
+      [
+        '--user',
+        '--collect',
+        `--setenv=PATH=${process.env['PATH'] ?? ''}`,
+        `--working-directory=${work}`,
+        'bash',
+        script,
+        ...args
+      ],
+      { cwd: work, encoding: 'utf8' }
+    )
+    if (launched.error) throw launched.error
+    if (launched.status === 0) return
+    // Fall through: some environments have the binary but reject --user.
+  }
+
+  const logFd = openSync(join(work, 'update.log'), 'a')
+  try {
+    const child = spawn('bash', [script, ...args], {
+      cwd: work,
+      detached: true,
+      stdio: ['ignore', logFd, logFd]
+    })
+    child.unref()
+  } finally {
+    closeSync(logFd)
+  }
+}
+
+function canSystemdRun(): boolean {
+  if (!process.env['INVOCATION_ID']) return false
+  const probe = spawnSync('systemd-run', ['--help'], { encoding: 'utf8' })
+  return !probe.error
+}
+
 function currentVersion(): string {
   return appVersion()
 }
@@ -461,15 +559,9 @@ function normalizeUrl(raw: string): { value: string } | { error: string } {
   if (!trimmed) return { error: 'Paste the URL of a release .zip first' }
   let url: URL
   try {
-    url = new URL(trimmed)
-  } catch {
-    return { error: `"${trimmed}" is not a valid URL` }
-  }
-  if (url.protocol !== 'https:') {
-    return { error: `Only https:// links are accepted (got ${url.protocol}//)` }
-  }
-  if (!ALLOWED_HOSTS.includes(url.hostname)) {
-    return { error: `Only GitHub downloads are accepted (got ${url.hostname})` }
+    url = assertSafeDownloadUrl(trimmed, ALLOWED_HOSTS)
+  } catch (err) {
+    return { error: message(err) }
   }
   if (!looksLikeZipUrl(url)) {
     return { error: 'The link must point directly at a .zip archive' }

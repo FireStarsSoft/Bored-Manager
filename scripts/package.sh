@@ -38,7 +38,7 @@ INCLUDE_FILES=(
 )
 # Development leftovers, deliberately left out (listed so the script can tell
 # "known to be excluded" apart from "new file nobody classified yet").
-KNOWN_EXCLUDED=(.git .cursor .cursorignore .github data modules-disabled node_modules out start-app.cmd start-app.vbs Todos.MD)
+KNOWN_EXCLUDED=(.git .gitattributes .cursor .cursorignore .github data modules-disabled node_modules out start-app.cmd start-app.vbs Todos.MD)
 
 # Same list the in-app updater validates a downloaded archive against, so a
 # package built here can never fail that check - plus the module folders, whose
@@ -193,14 +193,21 @@ fi
 rm -rf "$STAGING_ROOT"
 
 SIZE_MB=$(awk "BEGIN { printf \"%.2f\", $(wc -c < "$ZIP_PATH") / 1048576 }")
+SUM_PATH="$OUTPUT_DIR/$PACKAGE_NAME.zip.sha256"
+HASH=""
+if command -v sha256sum >/dev/null 2>&1; then
+    HASH=$(sha256sum "$ZIP_PATH" | awk '{print $1}')
+elif command -v shasum >/dev/null 2>&1; then
+    HASH=$(shasum -a 256 "$ZIP_PATH" | awk '{print $1}')
+fi
+if [ -n "$HASH" ]; then
+    printf '%s  %s\n' "$HASH" "$PACKAGE_NAME.zip" > "$SUM_PATH"
+fi
 echo ""
 echo "==> Release ready: $ZIP_PATH"
 echo "    $ENTRY_COUNT files, $SIZE_MB MB"
-if command -v sha256sum >/dev/null 2>&1; then
-    echo "    sha256: $(sha256sum "$ZIP_PATH" | cut -d' ' -f1)"
-elif command -v shasum >/dev/null 2>&1; then
-    echo "    sha256: $(shasum -a 256 "$ZIP_PATH" | cut -d' ' -f1)"
-fi
+[ -n "$HASH" ] && echo "    sha256: $HASH"
+[ -f "$SUM_PATH" ] && echo "    checksum: $SUM_PATH"
 echo ""
 echo "    On a fresh Linux machine:"
 echo "      curl -fsSL https://raw.githubusercontent.com/FireStarsSoft/Bored-Manager/main/install.sh | bash -s -- --source $ZIP_PATH"

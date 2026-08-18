@@ -13,6 +13,7 @@ import { useModuleLatest, useModuleSeries } from '@/lib/module-bus'
 import { useWindowedSeries } from '@/lib/history'
 import { moduleCall, useAppSettings } from '@/lib/modules'
 import { useModuleManifest } from '@/lib/module-registry'
+import { errorMessage } from '@/lib/utils'
 
 /** Default chart window when a block does not say otherwise (matches the live buffer). */
 export const DEFAULT_BLOCK_WINDOW_SEC = 60
@@ -113,8 +114,10 @@ function useInvokeValue(
         (v) => {
           if (!cancelled) setValue(v)
         },
-        () => {
-          /* left at the previous value - a block just keeps showing the last good read */
+        (err: unknown) => {
+          if (!cancelled) {
+            useApp.getState().showNotice('error', `${moduleId}.${method}: ${errorMessage(err)}`)
+          }
         }
       )
     }

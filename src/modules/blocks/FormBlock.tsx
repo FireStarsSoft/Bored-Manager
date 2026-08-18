@@ -7,11 +7,8 @@ import { ConfirmDialog } from '@/components/confirm-dialog'
 import { resolveActionArgs } from '../binding'
 import { callAction } from '../action-runner'
 import type { BlockCtx } from '../BlockRenderer'
+import { errorMessage } from '@/lib/utils'
 import { FormFields, initialFieldState, positionalFormValues, type FieldState } from './form-fields'
-
-function message(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
-}
 
 export function FormBlockView({ block, ctx }: { block: FormBlock; ctx: BlockCtx }): React.JSX.Element {
   const showNotice = useApp((s) => s.showNotice)
@@ -28,7 +25,7 @@ export function FormBlockView({ block, ctx }: { block: FormBlock; ctx: BlockCtx 
       await callAction(ctx.moduleId, block.submit.method, resolveActionArgs(block.submit, ctx.scope, fieldValues))
       showNotice('info', `${block.submit.label}: done`)
     } catch (err) {
-      setError(message(err))
+      setError(errorMessage(err))
     } finally {
       setBusy(false)
     }

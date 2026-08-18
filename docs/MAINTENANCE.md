@@ -26,7 +26,7 @@ Not exhaustive — the things that break quietly:
 
 | Area | Check |
 |---|---|
-| First run | Delete `data/`, start: density is auto-detected, five built-in modules appear enabled, Docker is disabled, no "files modified" badge |
+| First run | Delete `data/`, start: density is auto-detected, five built-in modules appear enabled, Container and Services are disabled, no "files modified" badge |
 | Auth off / on | With auth off, the UI is usable with no login. Enable it (after setting `bored-admin`'s password): `/api/*` is 401 until login; lockout after 5 failures; `./bored-manager unlock` clears it |
 | Enable / disable | Toggle each module: its page and cards appear and disappear at once, and `data/app.log` shows no poller left behind |
 | Reload | Edit a module file, press Reload: the new spec/main runs, no server restart |
@@ -39,14 +39,14 @@ Not exhaustive — the things that break quietly:
 | Charts | 30s and 24h, on an Overview card and a detail page: axis labels are clear of the plot, the grid is visible in both directions |
 | Sudo and no sudo | Connect without a sudo password: per-process network and disk figures degrade with a stated reason instead of showing nothing |
 | Missing tools | A target with no `nvidia-smi`, no `docker`, no `lm-sensors`: each page says what is missing |
-| Clean close | Stop the server while a Docker log stream and a terminal are open: nothing is left running on the target |
+| Clean close | Stop the server while a container log stream and a terminal are open: nothing is left running on the target |
 | Many clients | Two browsers: connect from A, B follows; a `tab` collector runs while either has the page open |
 
 ## Schema versions
 
 Four numbers version an interface, and each has its own rule.
 
-### `SETTINGS_VERSION` (`shared/types.ts`) — **4**
+### `SETTINGS_VERSION` (`shared/types.ts`) — **6**
 
 Bump when an existing field **changes shape**, not when one is added — a new field is filled from the defaults automatically.
 
@@ -56,7 +56,11 @@ The conversion goes in `mergeSettings()` in `server/services/store.ts`:
 - write the new shape;
 - keep the old branch guarded by the version, so a file two versions old still converts.
 
-`loadSettings()` rewrites the file immediately when the version on disk differs. v3 → v4 moved `lastUpdateUrl` to `update.lastUrl` and filled `server` / `auth` / `update`.
+`loadSettings()` rewrites the file immediately when the version on disk differs.
+
+- v3 → v4 moved `lastUpdateUrl` to `update.lastUrl` and filled `server` / `auth` / `update`.
+- v4 → v5 carried a pre-theme file over as dark (the only theme that build had).
+- v5 → v6 renamed the Docker module's interval keys and Overview widget ids to `container`.
 
 ### `MODULE_API_VERSION` (`shared/modules.ts`) — **2**
 
@@ -121,6 +125,8 @@ Startup diagnosis: the last line of `app.log` tells you how far it got. `listeni
 | `data/secret.key` | yes |
 | `data/user-settings/settings.json` | yes, migrated |
 | `data/user-settings/modules.json` | yes |
+| `data/module-data/` | yes |
+| `data/known-hosts.json` | yes |
 | `data/sessions/` | no (new sessions after restart) |
 | `data/metrics/` | no |
 | `data/*.log` | no |
@@ -159,6 +165,6 @@ Installing by hand is always a way out: unpack the new zip over the app folder (
 node out/server/index.mjs unlock
 ```
 
-That rewrites `data/auth-lock.json` to `{ "failures": 0, "lockedAt": null }`. The server reads the file on every login attempt, so this takes effect immediately.
+That clears `data/auth-lock.json`. Failures are counted per username and per client address; unlock wipes every counter. The server reads the file on every login attempt, so this takes effect immediately.
 
 **Forgotten `bored-admin` password:** there is no reset in the UI on purpose. On the host, set `auth.enabled` to `false` in `data/user-settings/settings.json`, restart, open Settings → Server & users, set a new password, then turn auth back on. (With auth off you are `bored-admin` without logging in.)

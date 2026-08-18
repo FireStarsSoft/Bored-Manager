@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Operate the Bored Manager web UI from the install folder.
 #
-#   ./bored-manager start | stop | status | unlock
+#   ./bored-manager start | stop | status | unlock | update | uninstall
 set -euo pipefail
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 PID_FILE="$APP_DIR/data/server.pid"
+DEFAULT_REPO='FireStarsSoft/Bored-Manager'
 
 has_unit() {
   systemctl --user cat bored-manager.service >/dev/null 2>&1
@@ -22,6 +23,20 @@ read_port() {
     " "$file" 2>/dev/null && return 0
   fi
   printf '%s' '8686'
+}
+
+read_repo() {
+  local file="$APP_DIR/data/user-settings/settings.json"
+  if command -v node >/dev/null 2>&1 && [ -f "$file" ]; then
+    node -e "
+      try {
+        const s = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
+        const r = s && s.update && typeof s.update.repo === 'string' ? s.update.repo.trim() : '';
+        process.stdout.write(r || process.argv[2]);
+      } catch { process.stdout.write(process.argv[2]); }
+    " "$file" "$DEFAULT_REPO" 2>/dev/null && return 0
+  fi
+  printf '%s' "$DEFAULT_REPO"
 }
 
 print_url() {
@@ -113,13 +128,176 @@ cmd_unlock() {
   node "$APP_DIR/out/server/index.mjs" unlock
 }
 
+download() {
+  local url="$1" dest="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fL --retry 3 -o "$dest" "$url"
+  else
+    wget -qO "$dest" "$url"
+  fi
+}
+
+verify_sha256() {
+  local zip="$1" sumfile="$2"
+  [ -f "$sumfile" ] || return 1
+  local expected actual
+  expected=$(awk 'NF{print $1; exit}' "$sumfile")
+  [ -n "$expected" ] || return 1
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual=$(sha256sum "$zip" | awk '{print $1}')
+  elif command -v shasum >/dev/null 2>&1; then
+    actual=$(shasum -a 256 "$zip" | awk '{print $1}')
+  else
+    echo "WARNING: no sha256sum/shasum; skipping checksum"
+    return 0
+  fi
+  if [ "$expected" != "$actual" ]; then
+    echo "ERROR: SHA-256 mismatch (expected $expected, got $actual)" >&2
+    return 1
+  fi
+  echo "==> SHA-256 verified"
+}
+
+cmd_update() {
+  local SOURCE=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --source)
+        [ $# -ge 2 ] || { echo "ERROR: --source needs a value" >&2; exit 2; }
+        SOURCE="$2"
+        shift 2
+        ;;
+      --help|-h)
+        echo "Usage: $0 update [--source <zip|url>]"
+        exit 0
+        ;;
+      *)
+        echo "ERROR: unknown argument: $1" >&2
+        echo "Usage: $0 update [--source <zip|url>]" >&2
+        exit 2
+        ;;
+    esac
+  done
+
+  [ -f "$APP_DIR/scripts/update.sh" ] || {
+    echo "ERROR: $APP_DIR/scripts/update.sh is missing" >&2
+    exit 1
+  }
+  command -v unzip >/dev/null 2>&1 || {
+    echo "ERROR: need unzip (sudo apt install -y unzip)" >&2
+    exit 1
+  }
+  if [ -z "$SOURCE" ]; then
+    if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+      echo "ERROR: need curl or wget to download the latest release" >&2
+      exit 1
+    fi
+  fi
+
+  local TMP
+  TMP="$(mktemp -d "${TMPDIR:-/tmp}/bm-cli-update.XXXXXX")"
+  cleanup() { rm -rf "$TMP"; }
+  trap cleanup EXIT
+
+  local ZIP=""
+  if [ -n "$SOURCE" ] && [ -f "$SOURCE" ]; then
+    case "$SOURCE" in
+      *.zip|*.ZIP) ZIP="$(cd "$(dirname "$SOURCE")" && pwd)/$(basename "$SOURCE")" ;;
+      *) echo "ERROR: --source file must be a .zip" >&2; exit 1 ;;
+    esac
+    echo "==> Using local zip $ZIP"
+    verify_sha256 "$ZIP" "${ZIP}.sha256" || true
+  elif [ -n "$SOURCE" ]; then
+    case "$SOURCE" in
+      http://*|https://*)
+        ZIP="$TMP/source.zip"
+        echo "==> Downloading $SOURCE"
+        download "$SOURCE" "$ZIP"
+        if download "${SOURCE}.sha256" "$ZIP.sha256" 2>/dev/null; then
+          verify_sha256 "$ZIP" "$ZIP.sha256"
+        fi
+        ;;
+      *) echo "ERROR: --source is neither an existing .zip nor a URL" >&2; exit 1 ;;
+    esac
+  else
+    local repo
+    repo="$(read_repo)"
+    echo "==> Resolving the latest release of $repo..."
+    local JSON=""
+    if command -v curl >/dev/null 2>&1; then
+      JSON="$(curl -fsSL -H 'User-Agent: bored-manager' \
+        "https://api.github.com/repos/${repo}/releases/latest" || true)"
+    else
+      JSON="$(wget -qO- --header='User-Agent: bored-manager' \
+        "https://api.github.com/repos/${repo}/releases/latest" || true)"
+    fi
+    local ASSET SUM_ASSET
+    ASSET="$(printf '%s' "$JSON" | grep -oE 'https://[^"]+/bored-manager-[^"/]+\.zip' | grep -v '\.sha256$' | head -n 1 || true)"
+    SUM_ASSET="$(printf '%s' "$JSON" | grep -oE 'https://[^"]+/bored-manager-[^"/]+\.zip\.sha256' | head -n 1 || true)"
+    ZIP="$TMP/source.zip"
+    if [ -n "$ASSET" ]; then
+      echo "==> Downloading $ASSET"
+      download "$ASSET" "$ZIP"
+      if [ -n "$SUM_ASSET" ]; then
+        download "$SUM_ASSET" "$ZIP.sha256"
+        verify_sha256 "$ZIP" "$ZIP.sha256"
+      fi
+    else
+      local FALLBACK="https://codeload.github.com/${repo}/zip/refs/heads/main"
+      echo "==> No release asset found - downloading $FALLBACK"
+      download "$FALLBACK" "$ZIP"
+    fi
+  fi
+
+  local EXTRACT="$TMP/extract"
+  mkdir -p "$EXTRACT"
+  echo "==> Unpacking..."
+  unzip -q "$ZIP" -d "$EXTRACT"
+  local SRC=""
+  if [ -f "$EXTRACT/package.json" ]; then
+    SRC="$EXTRACT"
+  else
+    local FOUND="" COUNT=0 d
+    for d in "$EXTRACT"/*; do
+      [ -f "$d/package.json" ] || continue
+      FOUND="$d"
+      COUNT=$((COUNT + 1))
+    done
+    [ "$COUNT" -eq 1 ] || { echo "ERROR: could not find a unique app folder in the archive" >&2; exit 1; }
+    SRC="$FOUND"
+  fi
+  local NAME=""
+  if command -v node >/dev/null 2>&1; then
+    NAME="$(node --input-type=commonjs -e "try{process.stdout.write(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).name||'')}catch(e){}" "$SRC/package.json" 2>/dev/null || true)"
+  fi
+  [ "$NAME" = 'bored-manager' ] || { echo "ERROR: the archive is not a Bored Manager source tree" >&2; exit 1; }
+
+  local VERSION=""
+  if command -v node >/dev/null 2>&1; then
+    VERSION="$(node --input-type=commonjs -e "try{process.stdout.write(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).version||'')}catch(e){}" "$SRC/package.json" 2>/dev/null || true)"
+  fi
+
+  local SCRIPT="$TMP/update.sh"
+  cp -a "$APP_DIR/scripts/update.sh" "$SCRIPT"
+  chmod +x "$SCRIPT"
+  echo "==> Handing over to the update script..."
+  # -AppPid 0: this CLI has not spawned the app; update.sh stops it itself.
+  bash "$SCRIPT" -AppDir "$APP_DIR" -StagingDir "$SRC" -AppPid 0 -NewVersion "${VERSION:-}"
+}
+
+cmd_uninstall() {
+  exec "$APP_DIR/uninstall.sh" "$@"
+}
+
 case "${1:-}" in
   start) cmd_start ;;
   stop) cmd_stop ;;
   status) cmd_status ;;
   unlock) cmd_unlock ;;
+  update) shift; cmd_update "$@" ;;
+  uninstall) shift; cmd_uninstall "$@" ;;
   *)
-    echo "Usage: $0 start|stop|status|unlock" >&2
+    echo "Usage: $0 start|stop|status|unlock|update|uninstall" >&2
     exit 2
     ;;
 esac

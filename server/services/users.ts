@@ -1,12 +1,15 @@
-import { randomBytes, scryptSync, timingSafeEqual } from 'crypto'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { promisify } from 'util'
+import { randomBytes, scrypt, timingSafeEqual } from 'crypto'
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'fs'
 import { join } from 'path'
 import {
   DEFAULT_USERNAME,
   USERNAME_PATTERN,
   type UserAccount
 } from '@shared/types'
-import { dataDir, userDataDir } from './store'
+import { dataDir, userDataDir, writePrivateJson } from './store'
+
+const scryptAsync = promisify(scrypt)
 
 /**
  * The accounts that may open the WebUI, in data/users/users.json.
@@ -56,15 +59,12 @@ function read(): StoredUser[] {
 
 function write(users: StoredUser[]): void {
   mkdirSync(join(dataDir(), 'users'), { recursive: true })
-  writeFileSync(
-    usersFile(),
-    JSON.stringify({ version: 1, users } satisfies UsersFile, null, 2),
-    'utf8'
-  )
+  writePrivateJson(usersFile(), { version: 1, users } satisfies UsersFile)
 }
 
-function hash(password: string, salt: string): string {
-  return scryptSync(password, salt, SCRYPT_KEYLEN).toString('hex')
+async function hash(password: string, salt: string): Promise<string> {
+  const derived = (await scryptAsync(password, salt, SCRYPT_KEYLEN)) as Buffer
+  return derived.toString('hex')
 }
 
 function toAccount(user: StoredUser): UserAccount {
@@ -116,7 +116,7 @@ function nameProblem(username: string, users: StoredUser[]): string | null {
   return null
 }
 
-export function createUser(username: string, password: string): UserAccount {
+export async function createUser(username: string, password: string): Promise<UserAccount> {
   const users = read()
   const problem = nameProblem(username, users)
   if (problem) throw new Error(problem)
@@ -124,7 +124,7 @@ export function createUser(username: string, password: string): UserAccount {
   const salt = randomBytes(SALT_BYTES).toString('hex')
   const user: StoredUser = {
     username,
-    passwordHash: hash(password, salt),
+    passwordHash: await hash(password, salt),
     salt,
     createdAt: Date.now(),
     lastLoginAt: null
@@ -146,13 +146,13 @@ export function deleteUser(username: string): void {
   rmSync(userDataDir(username), { recursive: true, force: true })
 }
 
-export function setPassword(username: string, password: string): void {
+export async function setPassword(username: string, password: string): Promise<void> {
   if (!password) throw new Error('the password cannot be empty')
   const users = read()
   const user = users.find((u) => u.username === username)
   if (!user) throw new Error(`"${username}" does not exist`)
   user.salt = randomBytes(SALT_BYTES).toString('hex')
-  user.passwordHash = hash(password, user.salt)
+  user.passwordHash = await hash(password, user.salt)
   write(users)
 }
 
@@ -161,11 +161,11 @@ export function setPassword(username: string, password: string): void {
  * account without a password cannot be logged into at all, which is what makes
  * "turn auth on" require setting one first.
  */
-export function verify(username: string, password: string): boolean {
+export async function verify(username: string, password: string): Promise<boolean> {
   const user = read().find((u) => u.username === username)
   if (!user || !user.passwordHash) return false
   const expected = Buffer.from(user.passwordHash, 'hex')
-  const actual = Buffer.from(hash(password, user.salt), 'hex')
+  const actual = Buffer.from(await hash(password, user.salt), 'hex')
   return expected.length === actual.length && timingSafeEqual(expected, actual)
 }
 

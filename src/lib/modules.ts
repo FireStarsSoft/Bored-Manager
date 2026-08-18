@@ -7,6 +7,7 @@
 import * as React from 'react'
 import type { AppSettings, RefreshSpeed, SystemSnapshot, TopConsumersSnapshot } from '@shared/types'
 import { api } from '@/lib/api'
+import { createTargetTerminal } from '@/lib/terminals'
 import { useApp } from '@/state/store'
 
 export { useModuleLatest, useModuleSeries } from '@/lib/module-bus'
@@ -95,8 +96,8 @@ export function useOpenTerminal(): (title: string, command: string) => Promise<s
   const setActiveTab = useApp((s) => s.setActiveTab)
   return React.useCallback(
     async (_title: string, command: string) => {
-      const res = await api.terminals.create('custom', 120, 30, command)
-      if ('ok' in res && !res.ok) return res.error || 'Failed to open the terminal'
+      const res = await createTargetTerminal('custom', 120, 30, command)
+      if (!res.ok) return res.error
       await refreshTerminals()
       setActiveTab('terminals')
       return null

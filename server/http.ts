@@ -5,7 +5,7 @@ import { join } from 'path'
 import type { AppSettings } from '@shared/types'
 import { idleMs, requireSession } from './auth'
 import { ensureSecretKey } from './services/secret'
-import { dataDir } from './services/store'
+import { dataDir, ensurePrivateDir } from './services/store'
 
 /**
  * The HTTP half of the server: the built renderer as static files, an SPA
@@ -28,7 +28,7 @@ const FOREVER_MS = 10 * 365 * 24 * 60 * 60 * 1000
  */
 const CSP =
   "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
-  "img-src 'self' data:; connect-src 'self' ws: wss:"
+  "img-src 'self' data:; connect-src 'self' ws: wss:; frame-ancestors 'none'"
 
 /**
  * The session middleware, also used by the WebSocket upgrade so both halves
@@ -41,8 +41,10 @@ export function createSessionMiddleware(settings: AppSettings): {
 } {
   const FileStore = FileStoreFactory(session)
   const ms = idleMs(settings.auth.sessionIdle)
+  const sessionsDir = join(dataDir(), 'sessions')
+  ensurePrivateDir(sessionsDir)
   const store = new FileStore({
-    path: join(dataDir(), 'sessions'),
+    path: sessionsDir,
     ttl: Math.round((ms || FOREVER_MS) / 1000),
     retries: 1,
     // The store prints a stack trace for every session file it cannot find,
@@ -82,6 +84,7 @@ export function createHttpApp(
   app.use((_req, res, next) => {
     res.setHeader('Content-Security-Policy', CSP)
     res.setHeader('X-Content-Type-Options', 'nosniff')
+    res.setHeader('X-Frame-Options', 'DENY')
     next()
   })
   app.use(express.json({ limit: '2mb' }))

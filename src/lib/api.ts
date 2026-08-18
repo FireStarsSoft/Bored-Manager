@@ -132,7 +132,6 @@ export interface Api {
   }
   modules: {
     list(): Promise<ModuleDescriptor[]>
-    enabledIds(): Promise<string[]>
     /** What every enabled module's pages and widgets render from. */
     specs(): Promise<ModuleSpecsEntry[]>
     setEnabled(id: string, enabled: boolean): Promise<ModuleDescriptor[]>

@@ -21,8 +21,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
-import { formatBytes } from '@/lib/utils'
-import { FilePickerButton, message } from './shared'
+import { errorMessage, formatBytes } from '@/lib/utils'
+import { FilePickerButton } from './shared'
 
 function progressLabel(state: UpdateState): string {
   if (state.phase === 'extracting') return 'Unpacking the archive...'
@@ -67,9 +67,12 @@ function SoftwareUpdateCard(): React.JSX.Element {
 
   React.useEffect(() => {
     const off = api.update.onState(setState)
-    void api.update.state().then((s) => setState((cur) => cur ?? s))
+    void api.update
+      .state()
+      .then((s) => setState((cur) => cur ?? s))
+      .catch((err) => showNotice('error', errorMessage(err)))
     return off
-  }, [])
+  }, [showNotice])
 
   React.useEffect(() => {
     setUrl((cur) => cur || savedUrl)
@@ -108,7 +111,7 @@ function SoftwareUpdateCard(): React.JSX.Element {
       setRepoInfo(info)
     } catch (err) {
       setRepoInfo(null)
-      showNotice('error', err instanceof Error ? err.message : String(err))
+      showNotice('error', errorMessage(err))
     } finally {
       setCheckingRepo(false)
     }
@@ -120,10 +123,14 @@ function SoftwareUpdateCard(): React.JSX.Element {
     if (trimmed && trimmed !== savedUrl && trimmed !== 'upload') {
       void updateSettings({ update: { lastUrl: trimmed } })
     }
-    const next = await api.update.check(trimmed)
-    setState(next)
-    if (next.phase === 'ready') showNotice('info', 'The archive passed every check')
-    else if (next.error) showNotice('error', next.error)
+    try {
+      const next = await api.update.check(trimmed)
+      setState(next)
+      if (next.phase === 'ready') showNotice('info', 'The archive passed every check')
+      else if (next.error) showNotice('error', next.error)
+    } catch (err) {
+      showNotice('error', errorMessage(err))
+    }
   }
 
   const doCheckFile = async (file: File): Promise<void> => {
@@ -133,7 +140,7 @@ function SoftwareUpdateCard(): React.JSX.Element {
       if (next.phase === 'ready') showNotice('info', 'The archive passed every check')
       else if (next.error) showNotice('error', next.error)
     } catch (err) {
-      showNotice('error', err instanceof Error ? err.message : String(err))
+      showNotice('error', errorMessage(err))
     }
   }
 
@@ -356,8 +363,5 @@ function SoftwareUpdateCard(): React.JSX.Element {
     </Card>
   )
 }
-
-// ---------- Modules ----------
-
 
 export { SoftwareUpdateCard }

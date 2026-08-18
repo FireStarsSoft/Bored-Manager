@@ -274,7 +274,11 @@ export class GpuService {
    * process usually belongs to another user (a container, a training job).
    */
   killProcess(pid: number): Promise<OkResult> {
-    return this.sudoResult(`kill -KILL ${Math.floor(pid)}`)
+    const n = Math.floor(Number(pid))
+    if (!Number.isInteger(n) || n <= 1) {
+      return Promise.resolve({ ok: false, error: 'invalid pid' })
+    }
+    return this.sudoResult(`kill -KILL ${n}`)
   }
 
   // ---------- Auto power cap ----------

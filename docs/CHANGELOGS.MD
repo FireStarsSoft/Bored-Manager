@@ -2,6 +2,13 @@
 
 All notable changes to Bored Manager. Each module keeps its own changelog in `modules/<id>/CHANGELOG.md`, because module versions are independent of the app's.
 
+## 0.3.2
+
+- **Install / update / uninstall.** `./bored-manager update` and `./bored-manager uninstall` are first-class commands. The in-app updater escapes the systemd cgroup so Confirm & install can finish, restarts without a unit via `bored-manager start`, and reports quarantined modules in `update-result.json`. `install.sh` can update an existing folder without wiping the chosen port; `--refresh` reinstalls the app while keeping accounts and settings; `--renew --yes` is a factory reset. `uninstall.sh` stops a pidfile process and accepts `--yes`.
+- **Docs and scripts match the current settings schema.** `SETTINGS_VERSION` is 6 (`docker` → `container`); the installer template, uninstall leftovers and the updater's "Task Manager" comment are gone.
+- **Hardening.** WebSocket upgrades require a same-origin `Origin`; sensitive files under `data/` are `0600` / `0700`; uploads have size limits; history stream names are validated; module and app downloads stay on GitHub hosts; password hashing is async scrypt; lockout is per username and per address. A bind of `0.0.0.0` with login off is warned in the UI and at startup. Releases attach a SHA-256 file; `install.sh` verifies it; `update.sh` keeps `data/module-data/`. Container, GPU and Processes refuse unknown actions, signals and pids before they reach the shell.
+- **CI.** Pushes to `main` run typecheck, build, and the module lock / spec / compile checks. Unused Radix packages and unused shadcn primitives (`accordion`, `popover`, `scroll-area`, `slider`) are gone.
+
 ## 0.3.1
 
 - **Fixed: changing a password crashed the page.** The password dialog (and the one for setting `bored-admin`'s first password, which is what "Require login" opens) rendered nothing but a white screen. Radix refuses to slot a dialog onto a `<form>` when a close button sits next to it, and the crash took the whole app down; two other dialogs - the terminal's custom command and a module action's prompt - were broken the same way. A render error is now caught and shown with a Reload button instead of unmounting the app.

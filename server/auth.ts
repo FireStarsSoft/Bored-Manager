@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync } from 'fs'
 import { join } from 'path'
-import type { RequestHandler, Router } from 'express'
+import type { Request, RequestHandler, Router } from 'express'
 import {
   DEFAULT_USERNAME,
   type AppSettings,
@@ -8,7 +8,7 @@ import {
   type SessionIdle
 } from '@shared/types'
 import { log } from './log'
-import { dataDir } from './services/store'
+import { dataDir, writePrivateJson } from './services/store'
 import { recordLogin, verify } from './services/users'
 
 declare module 'express-session' {
@@ -21,19 +21,24 @@ declare module 'express-session' {
 /**
  * Logging in, and the lockout that makes a weak password survivable.
  *
- * The failure counter is global, not per user or per IP: this is one WebUI on
- * a home network, and someone guessing passwords from six devices is the same
- * attacker. Once the counter reaches the limit every login is refused until
- * `./bored-manager unlock` is run in a terminal on the host - proof that the
- * person unlocking it has access to the machine itself.
+ * Failures are counted per username and per client address, not across the
+ * whole WebUI: one person guessing at one account must not lock everyone
+ * else out. Once either counter reaches the limit, that account or that
+ * address is refused until `./bored-manager unlock` is run on the host.
  *
- * The file is read on every attempt, so an unlock takes effect immediately and
- * no restart is needed.
+ * The file is read on every attempt, so an unlock takes effect immediately
+ * and no restart is needed.
  */
 
-interface LockFile {
+interface LockEntry {
   failures: number
   lockedAt: number | null
+}
+
+interface LockFile {
+  version: 2
+  users: Record<string, LockEntry>
+  ips: Record<string, LockEntry>
 }
 
 /** The idle timeout in milliseconds; 0 means the session never expires. */
@@ -43,40 +48,79 @@ export function idleMs(idle: SessionIdle): number {
   return idle.value * unit
 }
 
-const EMPTY: LockFile = { failures: 0, lockedAt: null }
+const EMPTY_ENTRY: LockEntry = { failures: 0, lockedAt: null }
+const EMPTY: LockFile = { version: 2, users: {}, ips: {} }
 
 function lockFile(): string {
   return join(dataDir(), 'auth-lock.json')
 }
 
+function parseEntry(raw: unknown): LockEntry {
+  if (!raw || typeof raw !== 'object') return { ...EMPTY_ENTRY }
+  const e = raw as Partial<LockEntry>
+  return {
+    failures: typeof e.failures === 'number' && e.failures > 0 ? Math.trunc(e.failures) : 0,
+    lockedAt: typeof e.lockedAt === 'number' ? e.lockedAt : null
+  }
+}
+
+function parseMap(raw: unknown): Record<string, LockEntry> {
+  if (!raw || typeof raw !== 'object') return {}
+  const out: Record<string, LockEntry> = {}
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!key) continue
+    out[key] = parseEntry(value)
+  }
+  return out
+}
+
 export function readLock(): LockFile {
   try {
-    if (!existsSync(lockFile())) return { ...EMPTY }
-    const raw = JSON.parse(readFileSync(lockFile(), 'utf8')) as Partial<LockFile>
-    return {
-      failures: typeof raw.failures === 'number' && raw.failures > 0 ? Math.trunc(raw.failures) : 0,
-      lockedAt: typeof raw.lockedAt === 'number' ? raw.lockedAt : null
+    if (!existsSync(lockFile())) return { version: 2, users: {}, ips: {} }
+    const raw = JSON.parse(readFileSync(lockFile(), 'utf8')) as Partial<LockFile> & {
+      failures?: number
+      lockedAt?: number | null
     }
+    // v1 was a single global counter. A leftover file is dropped rather than
+    // turning every address into a lockout on the first start of this build.
+    if (raw.version !== 2) return { version: 2, users: {}, ips: {} }
+    return { version: 2, users: parseMap(raw.users), ips: parseMap(raw.ips) }
   } catch {
-    return { ...EMPTY }
+    return { version: 2, users: {}, ips: {} }
   }
 }
 
 function writeLock(value: LockFile): void {
   try {
     mkdirSync(dataDir(), { recursive: true })
-    writeFileSync(lockFile(), JSON.stringify(value, null, 2), 'utf8')
+    writePrivateJson(lockFile(), value)
   } catch {
     /* a read-only data folder must not make logging in impossible */
   }
 }
 
-export function isLocked(settings: AppSettings): boolean {
-  const lock = readLock()
-  return lock.lockedAt !== null || lock.failures >= settings.auth.maxFailures
+function entryLocked(entry: LockEntry | undefined, max: number): boolean {
+  if (!entry) return false
+  return entry.lockedAt !== null || entry.failures >= max
 }
 
-/** Clears the counter. Used by the `unlock` subcommand. */
+function clientAddress(req: Request): string {
+  const raw = req.socket.remoteAddress ?? ''
+  return raw.startsWith('::ffff:') ? raw.slice('::ffff:'.length) : raw || 'unknown'
+}
+
+export function isLocked(
+  settings: AppSettings,
+  who: { username?: string; ip?: string }
+): boolean {
+  const lock = readLock()
+  const max = settings.auth.maxFailures
+  if (who.username && entryLocked(lock.users[who.username], max)) return true
+  if (who.ip && entryLocked(lock.ips[who.ip], max)) return true
+  return false
+}
+
+/** Clears every counter. Used by the `unlock` subcommand. */
 export function unlock(): void {
   writeLock({ ...EMPTY })
 }
@@ -93,7 +137,8 @@ export function usernameOf(session: { username?: string } | undefined, enabled: 
 
 export function authStatus(
   settings: AppSettings,
-  session: { username?: string } | undefined
+  session: { username?: string } | undefined,
+  ip?: string
 ): AuthStatus {
   const enabled = settings.auth.enabled
   return {
@@ -102,7 +147,7 @@ export function authStatus(
     // log into, and the UI only looks at this when authEnabled is true.
     authenticated: !!session?.username,
     username: session?.username ?? (enabled ? null : DEFAULT_USERNAME),
-    locked: isLocked(settings)
+    locked: isLocked(settings, { username: session?.username, ip })
   }
 }
 
@@ -111,30 +156,42 @@ export function authStatus(
  * can be switched while the server runs.
  */
 export function registerAuthRoutes(api: Router, settings: () => AppSettings): void {
-  api.post('/auth/login', (req, res) => {
+  api.post('/auth/login', async (req, res) => {
     const current = settings()
     const body = (req.body ?? {}) as { username?: string; password?: string }
     const username = typeof body.username === 'string' ? body.username.trim() : ''
     const password = typeof body.password === 'string' ? body.password : ''
+    const ip = clientAddress(req)
 
     if (!current.auth.enabled) {
       // Nothing to log in to; say so rather than pretending it worked.
       res.status(400).json({ ok: false, error: 'login is not required on this server' })
       return
     }
-    const lock = readLock()
     const max = current.auth.maxFailures
-    if (lock.lockedAt !== null || lock.failures >= max) {
+    if (isLocked(current, { username, ip })) {
       res.status(423).json({ ok: false, locked: true })
       return
     }
-    if (!username || !password || !verify(username, password)) {
-      const failures = lock.failures + 1
-      const locked = failures >= max
-      writeLock({ failures, lockedAt: locked ? Date.now() : null })
+    if (!username || !password || !(await verify(username, password))) {
+      const lock = readLock()
+      const userEntry = lock.users[username] ?? { ...EMPTY_ENTRY }
+      const ipEntry = lock.ips[ip] ?? { ...EMPTY_ENTRY }
+      userEntry.failures += 1
+      ipEntry.failures += 1
+      const userLocked = userEntry.failures >= max
+      const ipLocked = ipEntry.failures >= max
+      if (userLocked) userEntry.lockedAt = Date.now()
+      if (ipLocked) ipEntry.lockedAt = Date.now()
+      if (username) lock.users[username] = userEntry
+      lock.ips[ip] = ipEntry
+      writeLock(lock)
+      const failures = Math.max(userEntry.failures, ipEntry.failures)
+      const locked = userLocked || ipLocked
       log(
-        `failed login for "${username || '(no username)'}" - ${failures}/${max} attempts` +
-          (locked ? ', the WebUI is now locked' : '')
+        `failed login for "${username || '(no username)'}" from ${ip} - ` +
+          `${failures}/${max} attempts` +
+          (locked ? ', that username or address is now locked' : '')
       )
       res
         .status(locked ? 423 : 401)
@@ -142,7 +199,10 @@ export function registerAuthRoutes(api: Router, settings: () => AppSettings): vo
       return
     }
 
-    writeLock({ ...EMPTY })
+    const lock = readLock()
+    if (username) delete lock.users[username]
+    delete lock.ips[ip]
+    writeLock(lock)
     recordLogin(username)
     req.session.regenerate((err) => {
       if (err) {
@@ -171,7 +231,7 @@ export function registerAuthRoutes(api: Router, settings: () => AppSettings): vo
   })
 
   api.get('/auth/status', (req, res) => {
-    res.json(authStatus(settings(), req.session))
+    res.json(authStatus(settings(), req.session, clientAddress(req)))
   })
 }
 

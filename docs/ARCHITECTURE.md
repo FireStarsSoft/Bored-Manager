@@ -76,7 +76,7 @@ flowchart TB
 | `services/registry.ts` | `registry/modules.json` on the update repo | the community catalog (cached 24h in `data/registry-cache.json`) |
 | `services/users.ts` | `data/users/users.json` | accounts (`bored-admin` is created on first boot) |
 
-Everything else — the process table, network detail, disk detail, sensors, GPU, Docker — lives in a module.
+Everything else — the process table, network detail, disk detail, sensors, GPU, containers — lives in a module.
 
 ## WebSocket RPC
 

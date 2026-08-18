@@ -2,6 +2,10 @@
 
 All notable changes to the NVIDIA GPU module. Versions are independent of the app's.
 
+## 2.1.1
+
+- Killing a compute process refuses a non-integer or pid ≤ 1 before `kill` is run.
+
 ## 2.1.0
 
 - The auto power cap works per GPU instead of on one index typed into a box. The **Auto power cap** page lists every GPU the machine reports; opening a row offers its two caps, prefilled with the minimum and maximum that GPU allows.

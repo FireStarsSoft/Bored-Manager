@@ -1,0 +1,7 @@
+# Installer and launchers must stay LF. The one-liner fetches install.sh from
+# GitHub raw; CRLF would break `curl | bash` on Linux.
+*.sh text eol=lf
+bored-manager text eol=lf
+*.mjs text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf

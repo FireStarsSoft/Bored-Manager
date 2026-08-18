@@ -19,7 +19,13 @@ import {
 import type { ModuleManifest } from '@shared/modules'
 import { specProblems } from '@shared/module-ui'
 import { extractZip } from './zip'
-import { downloadFile, findArchiveRoot, type DownloadHandle } from './download'
+import {
+  assertSafeDownloadUrl,
+  downloadFile,
+  findArchiveRoot,
+  GITHUB_DOWNLOAD_HOSTS,
+  type DownloadHandle
+} from './download'
 import { compileModuleAt } from './module-compiler'
 import { defaultBranchZipUrl, latestReleaseZip, looksLikeZipUrl, parseGithubRepo } from './github'
 import type { ModulesHost } from './modules-host'
@@ -43,15 +49,6 @@ import { appVersion, deleteModuleConfig, deleteModuleData } from './store'
  * it (and confirmed, when overwriting).
  */
 
-/** Anything not on GitHub is accepted but flagged - see the `source` check. */
-const TRUSTED_HOSTS = [
-  'github.com',
-  'www.github.com',
-  'codeload.github.com',
-  'objects.githubusercontent.com',
-  'release-assets.githubusercontent.com'
-]
-
 /** How much of the compile output is kept for the UI's log panel. */
 const MAX_LOG_LINES = 400
 
@@ -64,17 +61,14 @@ function normalizeUrl(raw: string): { value: string; trusted: boolean } | { erro
   if (!trimmed) return { error: 'Paste a module .zip URL, an owner/repo, or a GitHub repo URL first' }
   let url: URL
   try {
-    url = new URL(trimmed)
-  } catch {
-    return { error: `"${trimmed}" is not a valid URL` }
-  }
-  if (url.protocol !== 'https:') {
-    return { error: `Only https:// links are accepted (got ${url.protocol}//)` }
+    url = assertSafeDownloadUrl(trimmed, GITHUB_DOWNLOAD_HOSTS)
+  } catch (err) {
+    return { error: message(err) }
   }
   if (!looksLikeZipUrl(url)) {
     return { error: 'The link must point directly at a .zip archive' }
   }
-  return { value: url.toString(), trusted: TRUSTED_HOSTS.includes(url.hostname) }
+  return { value: url.toString(), trusted: true }
 }
 
 /** The worst level present decides whether installing is allowed at all. */
@@ -155,8 +149,11 @@ export class ModuleInstallerService {
         progress: undefined
       })
       try {
-        const release = await latestReleaseZip(repo)
-        resolvedUrl = release?.url ?? (await defaultBranchZipUrl(repo))
+        const release = await latestReleaseZip(
+          repo,
+          (name) => name.toLowerCase().endsWith('.zip') && !/^bored-manager-.*\.zip$/i.test(name)
+        )
+        resolvedUrl = release?.matched ? release.url : await defaultBranchZipUrl(repo)
       } catch (err) {
         if (runId !== this.runId) return this.state
         return this.setState({ phase: 'error', error: `Could not resolve ${repo} on GitHub: ${message(err)}` })
@@ -185,6 +182,7 @@ export class ModuleInstallerService {
       const transfer = downloadFile(url.value, zipPath, {
         maxBytes: MODULE_ARCHIVE_MAX_BYTES,
         timeoutMs: MODULE_DOWNLOAD_TIMEOUT_MS,
+        allowedHosts: GITHUB_DOWNLOAD_HOSTS,
         onProgress: (receivedBytes, totalBytes) =>
           this.setState({ progress: { receivedBytes, totalBytes } })
       })
@@ -729,6 +727,7 @@ export class ModuleInstallerService {
     try {
       rmSync(target, { recursive: true, force: true })
     } catch (err) {
+      await this.host.reload(id).catch(() => undefined)
       return this.setState({ phase: 'error', error: `Could not remove the module: ${message(err)}` })
     }
     try {

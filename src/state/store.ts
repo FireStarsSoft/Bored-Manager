@@ -6,6 +6,7 @@ import type {
   AuthStatus,
   ConnectionConfig,
   ConnectionStatus,
+  OkResult,
   Density,
   ServerSettings,
   ServicesSnapshot,
@@ -19,6 +20,7 @@ import type { ModuleDescriptor } from '@shared/modules'
 import { api, type SavedSettings } from '@/lib/api'
 import { clearModule, clearModuleBus } from '@/lib/module-bus'
 import { seedModuleSnapshots, subscribeModuleStreams, useModuleSpecs } from '@/lib/module-registry'
+import { errorMessage, pruneByAge } from '@/lib/utils'
 import { wsClient, type WsState } from '@/lib/ws-client'
 
 const HISTORY_MS = 5 * 60 * 1000
@@ -50,10 +52,7 @@ export type SettingsPatch = Partial<Omit<AppSettings, 'server' | 'auth' | 'updat
 }
 
 function prune<T extends { t: number }>(arr: T[]): T[] {
-  const cutoff = Date.now() - HISTORY_MS
-  let i = 0
-  while (i < arr.length && arr[i].t < cutoff) i++
-  return i > 0 ? arr.slice(i) : arr
+  return pruneByAge(arr, HISTORY_MS)
 }
 
 /** Everything a session collects, cleared on connect, disconnect and loss. */
@@ -69,6 +68,8 @@ function emptySession(): {
 
 interface AppState {
   initialized: boolean
+  /** Set when init/boot failed so the splash can offer a retry. */
+  initError: string | null
   /** The socket to the Bored Manager server, not to the monitored machine. */
   server: WsState
   /** null until the server has been asked whether a login is required. */
@@ -94,6 +95,10 @@ interface AppState {
   connecting: boolean
 
   init(): Promise<void>
+  /** Re-run auth/boot after a failed init without re-subscribing. */
+  retryInit(): Promise<void>
+  /** Ask whether a login is needed, then open the socket if it is not. */
+  startSession(): Promise<void>
   /** Opens the socket and loads everything; also used right after a login. */
   boot(): Promise<void>
   /**
@@ -107,7 +112,7 @@ interface AppState {
   logout(): Promise<void>
   /** Pull the current server-side state again, after (re)connecting to it. */
   reseed(): Promise<void>
-  connect(cfg: ConnectionConfig): Promise<boolean>
+  connect(cfg: ConnectionConfig): Promise<OkResult>
   disconnect(): Promise<void>
   setActiveTab(tab: TabId): void
   setOverviewWindow(sec: number): void
@@ -122,6 +127,7 @@ interface AppState {
 
 export const useApp = create<AppState>((set, get) => ({
   initialized: false,
+  initError: null,
   server: 'closed',
   auth: null,
   status: { connected: false },
@@ -137,13 +143,13 @@ export const useApp = create<AppState>((set, get) => ({
 
   async init() {
     if (get().initialized) return
-    set({ initialized: true })
+    set({ initialized: true, initError: null })
 
     // Nothing can be asked before the socket is up, and everything has to be
     // asked again after it came back: the server may have been restarted, or
     // the target machine may have been connected from another browser.
     wsClient.onStateChange = (server) => set({ server })
-    wsClient.onReconnected = () => void get().reseed()
+    wsClient.onReconnected = () => void get().reseed().catch((err) => get().showNotice('error', errorMessage(err)))
     wsClient.onUnauthorized = (reason) =>
       get().requireLogin(
         reason === 'login required'
@@ -170,7 +176,7 @@ export const useApp = create<AppState>((set, get) => ({
       }
       const was = get().status.connected
       if (status.connected && !was) {
-        void get().reseed()
+        void get().reseed().catch((err) => get().showNotice('error', errorMessage(err)))
         get().showNotice('info', `Another client connected to ${status.label ?? 'a machine'}`)
         return
       }
@@ -183,12 +189,29 @@ export const useApp = create<AppState>((set, get) => ({
     })
     api.terminals.onExit(() => void get().refreshTerminals())
 
-    // Whether a login is needed is the first thing to know: with one required
-    // and no session, opening the socket would only be refused.
-    const auth = await api.auth.status()
-    set({ auth })
-    if (auth.authEnabled && !auth.authenticated) return
-    await get().boot()
+    await get().startSession()
+  },
+
+  async retryInit() {
+    set({ initError: null })
+    if (!get().initialized) {
+      await get().init()
+      return
+    }
+    await get().startSession()
+  },
+
+  async startSession() {
+    try {
+      // Whether a login is needed is the first thing to know: with one required
+      // and no session, opening the socket would only be refused.
+      const auth = await api.auth.status()
+      set({ auth, initError: null })
+      if (auth.authEnabled && !auth.authenticated) return
+      await get().boot()
+    } catch (err) {
+      set({ initError: errorMessage(err) })
+    }
   },
 
   async boot() {
@@ -208,9 +231,13 @@ export const useApp = create<AppState>((set, get) => ({
     // First start after an update: report what the update script did.
     const result = await api.update.consumeResult()
     if (result?.ok) {
+      const quarantined = (result.quarantined ?? []).filter(Boolean)
+      const extra = quarantined.length
+        ? `. These modules could not be built against the new version and were moved to modules-disabled/: ${quarantined.join(', ')}`
+        : ''
       get().showNotice(
         'info',
-        `Bored Manager was updated${result.version ? ` to version ${result.version}` : ''}`
+        `Bored Manager was updated${result.version ? ` to version ${result.version}` : ''}${extra}`
       )
     } else if (result) {
       get().showNotice('error', `Update failed: ${result.error || 'see data/update.log'}`)
@@ -218,10 +245,14 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   async adoptSession() {
-    const auth = await api.auth.status()
-    set({ auth })
-    wsClient.disconnect()
-    await get().boot()
+    try {
+      const auth = await api.auth.status()
+      set({ auth })
+      wsClient.disconnect()
+      await get().boot()
+    } catch (err) {
+      get().showNotice('error', errorMessage(err))
+    }
   },
 
   requireLogin(reason) {
@@ -261,6 +292,7 @@ export const useApp = create<AppState>((set, get) => ({
     set({ ...emptySession(), status })
     seedModuleSnapshots(history.modules)
     set({ system: history.system, topNow: history.top, servicesNow: history.services })
+    await get().refreshTerminals()
     // A fresh socket has no active tab on the server side yet.
     api.ui.setActiveTab(get().activeTab)
   },
@@ -271,8 +303,8 @@ export const useApp = create<AppState>((set, get) => ({
     try {
       const res = await api.connection.connect(cfg)
       if (!res.ok) {
-        get().showNotice('error', res.error || 'Connection failed')
-        return false
+        if (!res.hostKey) get().showNotice('error', res.error || 'Connection failed')
+        return res
       }
       if (res.error) {
         // Connected, but with a warning (e.g. sudo password rejected).
@@ -287,8 +319,9 @@ export const useApp = create<AppState>((set, get) => ({
       set({ ...emptySession(), status, activeTab: 'overview' })
       seedModuleSnapshots(history.modules)
       set({ system: history.system, topNow: history.top, servicesNow: history.services })
+      await get().refreshTerminals()
       api.ui.setActiveTab('overview')
-      return true
+      return res
     } finally {
       selfChanging--
       set({ connecting: false })
@@ -364,8 +397,12 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   async refreshTerminals() {
-    const terminals = await api.terminals.list()
-    set({ terminals })
+    try {
+      const terminals = await api.terminals.list()
+      set({ terminals })
+    } catch (err) {
+      get().showNotice('error', errorMessage(err))
+    }
   },
 
   // The owning module pushes the fresh snapshot itself, so this only has to
@@ -375,6 +412,8 @@ export const useApp = create<AppState>((set, get) => ({
     set((st) => ({ slowRefreshing: { ...st.slowRefreshing, [target]: true } }))
     try {
       await api.metrics.refreshSlow(target)
+    } catch (err) {
+      get().showNotice('error', errorMessage(err))
     } finally {
       set((st) => ({ slowRefreshing: { ...st.slowRefreshing, [target]: false } }))
     }

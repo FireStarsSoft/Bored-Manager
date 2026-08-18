@@ -24,6 +24,7 @@ What the script does, in order:
 5. Checks the staged copy against `REQUIRED_ENTRIES` (kept in step with the in-app updater — see [MAINTENANCE.md](MAINTENANCE.md#keeping-the-two-required-file-lists-in-step)).
 6. Zips it with a single root folder `bored-manager-<version>/`, like GitHub's own source archives, so unpacking never litters the current directory.
 7. Reads the archive back to confirm the file count and that `<folder>/package.json` is there.
+8. Writes `bored-manager-<version>.zip.sha256` next to the zip (SHA-256 of the archive).
 
 A zip created on Linux keeps the `+x` bit, so `./install.sh` runs straight away.
 
@@ -55,9 +56,9 @@ Pushing a tag matching `v*` runs `.github/workflows/release.yml`:
 
 1. checkout, Node 20
 2. `bash scripts/package.sh dist`
-3. `gh release create "$GITHUB_REF_NAME" dist/*.zip --generate-notes`
+3. `gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.sha256 --generate-notes`
 
-The asset name is `bored-manager-<version>.zip` (the version inside `package.json`). Users' one-liner and Settings → Check for updates look for that asset on `releases/latest`; if the repo has no release yet they fall back to the source zip of `main`.
+The asset name is `bored-manager-<version>.zip` (the version inside `package.json`), with a matching `.sha256` file. Users' one-liner verifies that checksum when it is present. Settings → Check for updates look for the zip on `releases/latest`; if the repo has no release yet they fall back to the source zip of `main`.
 
 ## Installing
 
@@ -65,7 +66,7 @@ On a new Linux machine the bootstrap is one command (see the README). `install.s
 
 1. Refuse to run as root unless `BM_ALLOW_ROOT=1` (data would live in `/root`).
 2. Require Node.js 20+, and `curl` or `wget`, and `unzip`.
-3. Resolve the source: in-place (the script already sits in an app folder), a local `--source` zip, a zip URL, the latest GitHub release asset `bored-manager-*.zip`, or `codeload.github.com/.../main` if there is no release.
+3. Resolve the source: in-place (the script already sits in an app folder), a local `--source` zip, a zip URL, the latest GitHub release asset `bored-manager-*.zip`, or `codeload.github.com/.../main` if there is no release. A sibling `.sha256` file is checked when one is available.
 4. Unpack, find the unique folder that contains `package.json` named `bored-manager`.
 5. Copy into `--dir` (default `~/bored-manager`), keeping an existing `data/`.
 6. `npm install --include=dev`, drop ssh2's optional native bindings, probe `node-pty` (delete it if it is broken), `npm run build`.
@@ -75,8 +76,16 @@ On a new Linux machine the bootstrap is one command (see the README). `install.s
 
 `--repair` is steps 6 only, in the current folder — what `run.sh` and the in-app updater call.
 
+`--refresh` stops the app, deletes the install folder except accounts / settings / UI config / `data/module-data/` / the secret key / known hosts, then copies the new tree, restores those files, rebuilds and starts the service. Custom modules, metrics, sessions and logs are discarded.
+
+`--renew` is a factory reset: after a `YES` prompt (or `--yes` when there is no TTY) it removes the user unit and the whole folder, then installs from scratch.
+
+Running `./install.sh` (or the one-liner) against an existing install is an in-place update: the running process is stopped first, `data/` is kept, `--port` / `--host` are only written when you pass those flags, and the service is restarted.
+
 ```bash
 ./install.sh --repair
+./install.sh --refresh
+./install.sh --renew --yes
 ```
 
 The unit is a systemd **user** unit:
@@ -94,7 +103,12 @@ RestartSec=3
 
 ## Updating the app
 
-Because the app is a source folder, updating means *replace the whole folder, reinstall dependencies, rebuild*. That cannot be done from inside a running process, so it is split in two: **the app downloads and checks**, **`scripts/update.sh` replaces and installs**.
+Because the app is a source folder, updating means *replace the whole folder, reinstall dependencies, rebuild*. That cannot be done from inside a running process, so it is split in two: **the app (or `./bored-manager update`) downloads and checks**, **`scripts/update.sh` replaces and installs**.
+
+```bash
+./bored-manager update                  # latest release of settings.update.repo
+./bored-manager update --source ./bored-manager-0.3.2.zip
+```
 
 ### 1. Download and check
 
@@ -129,7 +143,7 @@ Non-blocking warnings: the new version is not newer than the installed one (rein
 2. Wait for the app process to disappear (up to 2 minutes).
 3. Rename **the whole app folder** to `<folder-name>.update-backup-<yyyymmdd-hhmmss>` next to it.
 4. Copy the new version into the original path.
-5. Restore from the backup: `data/connections.json` if still present (legacy), `data/user-settings/`, `data/users/`, `data/secret.key`. Metrics history and logs are not kept.
+5. Restore from the backup: `data/connections.json` if still present (legacy), `data/user-settings/`, `data/users/`, `data/secret.key`, `data/module-data/`, `data/known-hosts.json`. Metrics history and logs are not kept.
 6. Restore **custom modules** — every folder in the backup's `modules/` the new version does not ship.
 7. `install.sh --repair`. If that fails **and** modules were restored, move them to `modules-disabled/` and build once more.
 8. Write `data/update-result.json` (`ok`, `version`, `error`, `finishedAt`, `logPath`) and copy the log to `data/update.log`.
@@ -145,6 +159,8 @@ The next start reads and deletes `data/update-result.json` and shows a notice. T
 |---|---|
 | `data/users/` (accounts + per-user saved connections) | **kept** |
 | `data/secret.key` | **kept** — otherwise saved passwords and the session cookie secret would not decrypt |
+| `data/module-data/` | **kept** |
+| `data/known-hosts.json` | **kept** |
 | `data/user-settings/settings.json` | **kept and migrated** |
 | `data/user-settings/modules.json` | **kept** |
 | Modules that ship with the app | replaced by the new version's |
@@ -177,8 +193,10 @@ Attach the zip to a GitHub release and either hand out the asset URL or open a P
 ## Uninstalling
 
 ```bash
-./uninstall.sh            # stop and remove the user unit; leave the folder
-./uninstall.sh --purge    # also delete the folder (type YES)
+./uninstall.sh                 # stop the user unit and any pidfile process; leave the folder
+./uninstall.sh --purge         # also delete the folder (type YES)
+./uninstall.sh --purge --yes   # same, no prompt
+./bored-manager uninstall --purge --yes
 ```
 
 Without `--purge`, delete the folder yourself. The app and all of its data — settings, accounts, logs, metrics history, modules — live inside that folder.

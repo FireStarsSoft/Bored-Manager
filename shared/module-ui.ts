@@ -467,14 +467,14 @@ const FORM_INPUTS = new Set<FormInput>([
 ])
 
 /** Blocks nested inside `blocks`/`rowDetail`/`else`; walked to check they never reference a CDN. */
-function nestedBlockArrays(block: Record<string, unknown>): unknown[][] {
-  const out: unknown[][] = []
+function nestedBlockArrays(block: Record<string, unknown>): Array<{ path: string; blocks: unknown[] }> {
+  const out: Array<{ path: string; blocks: unknown[] }> = []
   const blocks = block['blocks']
   const rowDetail = block['rowDetail']
   const elseBlocks = block['else']
-  if (Array.isArray(blocks)) out.push(blocks)
-  if (Array.isArray(rowDetail)) out.push(rowDetail)
-  if (Array.isArray(elseBlocks)) out.push(elseBlocks)
+  if (Array.isArray(blocks)) out.push({ path: 'blocks', blocks })
+  if (Array.isArray(rowDetail)) out.push({ path: 'rowDetail', blocks: rowDetail })
+  if (Array.isArray(elseBlocks)) out.push({ path: 'else', blocks: elseBlocks })
   return out
 }
 
@@ -755,7 +755,7 @@ export function specProblems(spec: unknown, manifest: ModuleManifest): string[] 
       checkBlock(problems, where, block, manifest)
       if (typeof block === 'object' && block !== null) {
         for (const nested of nestedBlockArrays(block as Record<string, unknown>)) {
-          walk(nested, `${where}.blocks`)
+          walk(nested.blocks, `${where}.${nested.path}`)
         }
       }
     })

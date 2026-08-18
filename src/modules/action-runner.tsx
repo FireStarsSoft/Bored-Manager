@@ -15,11 +15,9 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { errorMessage } from '@/lib/utils'
 import { resolveActionArgs, resolvePath } from './binding'
 
-function message(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
-}
 
 /**
  * Many methods resolve successfully with `{ ok: false, error }` instead of
@@ -77,7 +75,7 @@ export function ActionButton({
       ])
       onDone?.()
     } catch (err) {
-      showNotice('error', `${action.label} failed: ${message(err)}`)
+      showNotice('error', `${action.label} failed: ${errorMessage(err)}`)
     } finally {
       setBusy(false)
     }

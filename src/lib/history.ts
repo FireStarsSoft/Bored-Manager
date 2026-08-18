@@ -2,6 +2,7 @@ import * as React from 'react'
 import type { HistoryPoint, HistoryStream } from '@shared/types'
 import { api } from '@/lib/api'
 import { useApp } from '@/state/store'
+import { errorMessage } from '@/lib/utils'
 
 /** Windows up to this length are served from the live buffer in the store. */
 export const LIVE_WINDOW_SEC = 600
@@ -71,9 +72,13 @@ export function useWindowedSeries<T extends { t: number }>(
     }
     let cancelled = false
     const load = async (): Promise<void> => {
-      const now = Date.now()
-      const points = await api.history.query(stream, now - windowSec * 1000, now, maxPoints)
-      if (!cancelled) setArchive(points.map(toPointRef.current))
+      try {
+        const now = Date.now()
+        const points = await api.history.query(stream, now - windowSec * 1000, now, maxPoints)
+        if (!cancelled) setArchive(points.map(toPointRef.current))
+      } catch (err) {
+        if (!cancelled) useApp.getState().showNotice('error', errorMessage(err))
+      }
     }
     void load()
     // One refetch per ~1% of the window: enough to look live, cheap enough

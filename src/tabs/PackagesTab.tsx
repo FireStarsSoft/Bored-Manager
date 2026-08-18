@@ -11,75 +11,29 @@ import {
   Trash2,
   X
 } from 'lucide-react'
-import type {
-  PackageHistoryEntry,
-  PackageInfo,
-  PackageSearchResult,
-  PackagesOverview,
-  PkgAction,
-  PkgActionState,
-  UpgradablePackage
-} from '@shared/types'
+import type { PackagesOverview, PkgAction, PkgActionState, PackageSearchResult } from '@shared/types'
 import { api } from '@/lib/api'
 import { useApp } from '@/state/store'
 import { StatCard } from '@/components/StatCard'
-import { DataTable, type DataTableColumns } from '@/components/data-table'
+import { DataTable } from '@/components/data-table'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Input } from '@/components/ui/input'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { cn, formatBytes } from '@/lib/utils'
+import { cn, errorMessage, formatBytes } from '@/lib/utils'
+import {
+  historyColumns,
+  historyRowId,
+  installedColumns,
+  searchColumns,
+  upgradableColumns,
+  type PendingConfirm
+} from './packages-columns'
 
 /** Rows per page of the installed list; the full list can be many thousands. */
 const MAX_INSTALLED_ROWS = 500
 const MAX_LOG_CHARS = 200_000
-
-const historyColumns: DataTableColumns<PackageHistoryEntry> = [
-  {
-    accessorKey: 'date',
-    header: 'When',
-    cell: (c) => <span className="mono text-muted-foreground">{c.getValue<string>()}</span>
-  },
-  {
-    accessorKey: 'action',
-    header: 'Action',
-    cell: (c) => {
-      const action = c.getValue<string>()
-      return (
-        <Badge
-          variant={
-            /remove|purge/i.test(action)
-              ? 'destructive'
-              : /upgrade/i.test(action)
-                ? 'default'
-                : 'success'
-          }
-        >
-          {action}
-        </Badge>
-      )
-    }
-  },
-  {
-    accessorKey: 'packages',
-    header: 'Packages',
-    cell: (c) => (
-      <span className="text-muted-foreground" title={c.getValue<string>()}>
-        {c.getValue<string>()}
-      </span>
-    )
-  }
-]
-
-interface PendingConfirm {
-  action: PkgAction
-  pkg?: string
-  title: string
-  message: React.ReactNode
-  confirmLabel: string
-}
 
 export function PackagesTab({ active }: { active: boolean }): React.JSX.Element {
   const status = useApp((s) => s.status)
@@ -102,10 +56,12 @@ export function PackagesTab({ active }: { active: boolean }): React.JSX.Element 
     setLoading(true)
     try {
       setOverview(await api.packages.overview())
+    } catch (err) {
+      showNotice('error', errorMessage(err))
     } finally {
       setLoading(false)
     }
-  }, [status.connected])
+  }, [status.connected, showNotice])
 
   // Load once when the tab is first opened (data is on-demand, no polling).
   React.useEffect(() => {
@@ -137,7 +93,7 @@ export function PackagesTab({ active }: { active: boolean }): React.JSX.Element 
         void load()
       }
     })
-    void api.packages.state().then(setOpState)
+    void api.packages.state().then(setOpState).catch((err) => showNotice('error', errorMessage(err)))
     return () => {
       offLog()
       offState()
@@ -160,6 +116,8 @@ export function PackagesTab({ active }: { active: boolean }): React.JSX.Element 
     setSearching(true)
     try {
       setSearchResults(await api.packages.search(q))
+    } catch (err) {
+      showNotice('error', errorMessage(err))
     } finally {
       setSearching(false)
     }
@@ -179,189 +137,9 @@ export function PackagesTab({ active }: { active: boolean }): React.JSX.Element 
     ).length
   }, [installedRows, filter])
 
-  const upgradableColumns = React.useMemo<DataTableColumns<UpgradablePackage>>(
-    () => [
-      { accessorKey: 'name', header: 'Package', cell: (c) => <span className="font-medium">{c.getValue<string>()}</span> },
-      {
-        accessorKey: 'currentVersion',
-        header: 'Current',
-        cell: (c) => <span className="mono text-muted-foreground">{c.getValue<string>() || '—'}</span>
-      },
-      {
-        accessorKey: 'newVersion',
-        header: 'New version',
-        cell: (c) => <span className="mono text-success">{c.getValue<string>()}</span>
-      },
-      {
-        accessorKey: 'repo',
-        header: 'Repo',
-        cell: (c) => <span className="text-muted-foreground">{c.getValue<string>() || '—'}</span>
-      },
-      {
-        id: 'actions',
-        header: '',
-        enableSorting: false,
-        meta: { align: 'right' },
-        cell: (c) => (
-          <Button
-            variant="secondary"
-            size="xs"
-            disabled={busy}
-            onClick={() => void runAction('upgrade', c.row.original.name)}
-          >
-            Upgrade
-          </Button>
-        )
-      }
-    ],
-    [busy]
-  )
-
-  const searchColumns = React.useMemo<DataTableColumns<PackageSearchResult>>(
-    () => [
-      { accessorKey: 'name', header: 'Package', cell: (c) => <span className="font-medium">{c.getValue<string>()}</span> },
-      {
-        accessorKey: 'summary',
-        header: 'Description',
-        cell: (c) => <span className="text-muted-foreground">{c.getValue<string>()}</span>
-      },
-      {
-        id: 'actions',
-        header: '',
-        enableSorting: false,
-        meta: { align: 'right' },
-        cell: (c) => (
-          <Button
-            variant="secondary"
-            size="xs"
-            disabled={busy}
-            onClick={() => void runAction('install', c.row.original.name)}
-          >
-            Install
-          </Button>
-        )
-      }
-    ],
-    [busy]
-  )
-
-  const installedColumns = React.useMemo<DataTableColumns<PackageInfo>>(
-    () => [
-      {
-        accessorKey: 'name',
-        header: 'Package',
-        // Truncated data cells keep the native tooltip: a Radix one per cell
-        // would mean hundreds of instances on a page of packages.
-        cell: (c) => (
-          <span className="font-medium" title={c.getValue<string>()}>
-            {c.getValue<string>()}
-          </span>
-        )
-      },
-      {
-        accessorKey: 'version',
-        header: 'Version',
-        cell: (c) => (
-          <span className="mono text-muted-foreground" title={c.getValue<string>()}>
-            {c.getValue<string>()}
-          </span>
-        )
-      },
-      {
-        accessorKey: 'arch',
-        header: 'Arch',
-        cell: (c) => <span className="text-muted-foreground">{c.getValue<string>() || '—'}</span>
-      },
-      {
-        accessorKey: 'sizeKb',
-        header: 'Size',
-        meta: { align: 'right' },
-        cell: (c) => {
-          const kb = c.getValue<number>()
-          return <span className="text-muted-foreground">{kb ? formatBytes(kb * 1024) : '—'}</span>
-        }
-      },
-      {
-        accessorKey: 'summary',
-        header: 'Description',
-        cell: (c) => (
-          <span className="text-muted-foreground" title={c.getValue<string>()}>
-            {c.getValue<string>() || '—'}
-          </span>
-        )
-      },
-      {
-        id: 'actions',
-        header: '',
-        enableSorting: false,
-        enableGlobalFilter: false,
-        meta: { align: 'right' },
-        cell: (c) => {
-          const p = c.row.original
-          return (
-            <div className="flex justify-end gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    aria-label={`Remove ${p.name}`}
-                    className="hover:bg-warning/20 hover:text-warning"
-                    disabled={busy}
-                    onClick={() =>
-                      setConfirm({
-                        action: 'remove',
-                        pkg: p.name,
-                        title: 'Remove package',
-                        message: (
-                          <>
-                            Remove <b>{p.name}</b> ({p.version})? Configuration files are kept.
-                          </>
-                        ),
-                        confirmLabel: 'Remove'
-                      })
-                    }
-                  >
-                    <X aria-hidden />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Remove (keep config)</TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    aria-label={`Purge ${p.name}`}
-                    className="hover:bg-destructive/20 hover:text-destructive"
-                    disabled={busy}
-                    onClick={() =>
-                      setConfirm({
-                        action: 'purge',
-                        pkg: p.name,
-                        title: 'Purge package',
-                        message: (
-                          <>
-                            Purge <b>{p.name}</b> ({p.version})? The package and its configuration
-                            files are removed.
-                          </>
-                        ),
-                        confirmLabel: 'Purge'
-                      })
-                    }
-                  >
-                    <Trash2 aria-hidden />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Purge (remove including config)</TooltipContent>
-              </Tooltip>
-            </div>
-          )
-        }
-      }
-    ],
-    [busy]
-  )
+  const upgradeCols = React.useMemo(() => upgradableColumns(busy, runAction), [busy])
+  const searchCols = React.useMemo(() => searchColumns(busy, runAction), [busy])
+  const installedCols = React.useMemo(() => installedColumns(busy, setConfirm), [busy])
 
   if (overview && manager === 'none') {
     return (
@@ -512,7 +290,7 @@ export function PackagesTab({ active }: { active: boolean }): React.JSX.Element 
           <div className="p-3 pt-2">
             <DataTable
               data={overview.upgradable}
-              columns={upgradableColumns}
+              columns={upgradeCols}
               getRowId={(u) => u.name}
               initialSorting={[{ id: 'name', desc: false }]}
             />
@@ -548,7 +326,7 @@ export function PackagesTab({ active }: { active: boolean }): React.JSX.Element 
           ) : (
             <DataTable
               data={searchResults}
-              columns={searchColumns}
+              columns={searchCols}
               getRowId={(r) => r.name}
               emptyText="No packages found."
             />
@@ -578,7 +356,7 @@ export function PackagesTab({ active }: { active: boolean }): React.JSX.Element 
         <div className="p-3 pt-2">
           <DataTable
             data={installedRows}
-            columns={installedColumns}
+            columns={installedCols}
             globalFilter={filter}
             getRowId={(p) => `${p.name}-${p.arch}`}
             initialSorting={[{ id: 'name', desc: false }]}
@@ -597,7 +375,11 @@ export function PackagesTab({ active }: { active: boolean }): React.JSX.Element 
             <History className="size-3.5 text-metric-mem" /> Recent operations
           </div>
           <div className="p-3 pt-2">
-            <DataTable data={overview.history} columns={historyColumns} />
+            <DataTable
+              data={overview.history}
+              columns={historyColumns}
+              getRowId={historyRowId}
+            />
           </div>
         </Card>
       )}

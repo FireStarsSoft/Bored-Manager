@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "gpu",
   "name": "NVIDIA GPU",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Utilisation, VRAM, temperature and power charts for every NVIDIA GPU, with power limit, persistence and clock controls plus an auto power cap that follows the GPUs the machine actually has.",
   "author": "Bored Manager",
   "minAppVersion": "0.0.1",

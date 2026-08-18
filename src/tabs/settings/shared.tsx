@@ -3,10 +3,6 @@ import { Button } from '@/components/ui/button'
 
 /** Shared helpers for the Settings cards in this folder. */
 
-function message(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
-}
-
 /**
  * A Button that opens the browser's file picker. Files now travel from the
  * device the UI runs on to the server, so there is no host file dialog to open
@@ -54,4 +50,4 @@ function timeLabel(ms: number | null): string {
   return ms ? new Date(ms).toLocaleString() : '—'
 }
 
-export { message, FilePickerButton, timeLabel }
+export { FilePickerButton, timeLabel }

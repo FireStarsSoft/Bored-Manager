@@ -33,6 +33,8 @@ export async function listProcesses(ctx: ModuleContext): Promise<ProcessInfo[]> 
   return procs
 }
 
+const SIGNALS: ReadonlySet<string> = new Set(['TERM', 'KILL'])
+
 export async function killProcess(
   ctx: ModuleContext,
   pid: number,
@@ -40,6 +42,7 @@ export async function killProcess(
   asRoot: boolean
 ): Promise<OkResult> {
   if (!Number.isInteger(pid) || pid <= 1) return { ok: false, error: 'invalid pid' }
+  if (!SIGNALS.has(signal)) return { ok: false, error: 'invalid signal' }
   const cmd = `kill -${signal} ${pid}`
   const res = asRoot ? await ctx.execSudo(cmd) : await ctx.exec(cmd)
   if (res.code === 0) return { ok: true }

@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "processes",
   "name": "Processes",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "A sortable, filterable process table with a glances-style system detail strip, plus kill (SIGTERM/SIGKILL) and renice.",
   "author": "Bored Manager",
   "minAppVersion": "0.0.1",

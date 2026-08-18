@@ -111,11 +111,16 @@ class ModuleErrorBoundary extends React.Component<BoundaryProps, BoundaryState> 
 }
 
 /** Renders a block array, each one isolated so a broken block cannot blank the rest. */
+function blockKey(block: Block, index: number): string {
+  const t = typeof block === 'object' && block !== null && 'type' in block ? String(block.type) : 'block'
+  return `${t}-${index}`
+}
+
 export function BlockList({ blocks, ctx }: { blocks: Block[]; ctx: BlockCtx }): React.JSX.Element {
   return (
     <>
       {blocks.map((block, i) => (
-        <ModuleErrorBoundary key={i} what="This block">
+        <ModuleErrorBoundary key={blockKey(block, i)} what="This block">
           <BlockView block={block} ctx={ctx} />
         </ModuleErrorBoundary>
       ))}

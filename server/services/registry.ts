@@ -124,7 +124,10 @@ export async function getCatalog(repo: string, force = false): Promise<ModuleCat
   }
 
   try {
-    const res = await fetch(url, { headers: { 'User-Agent': 'bored-manager' } })
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'bored-manager' },
+      signal: AbortSignal.timeout(15_000)
+    })
     if (!res.ok) throw new Error(`GitHub returned ${res.status} for ${url}`)
     const payload = parsePayload(await res.json())
     const fetchedAt = Date.now()

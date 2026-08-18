@@ -2,24 +2,24 @@
   "version": 1,
   "modules": {
     "container": {
-      "version": "3.1.0",
-      "hash": "3c9b2a10c3088a2764b54ea2c7000d151f00ede530f9978411598b72682ca948"
+      "version": "3.1.1",
+      "hash": "c3f2f0db89bd31650c9239d9af748bf226e8a028ed36065a624c50f23bd90f68"
     },
     "disk": {
       "version": "2.0.0",
       "hash": "e4295d8b3a87b8970b3b3946851145a7da77549c1d7d7c34cef82f58a80fd996"
     },
     "gpu": {
-      "version": "2.1.0",
-      "hash": "d202bac13a3589cfa4c0f2599ab021591acf0b0b0b72341413e78d1b58b30437"
+      "version": "2.1.1",
+      "hash": "d2df814b81fa234aeaecda341232b1d56ce761d3604b1004c8150c98e2086364"
     },
     "network": {
       "version": "3.0.0",
       "hash": "f276075f1decfb5156cba9bc171ef491d049701f8591a936a00b40007e389186"
     },
     "processes": {
-      "version": "2.0.0",
-      "hash": "3822dc8c716b43bf4e2c8f7edf9f9717ca2122f21f12e0797bf7550b24cb7bac"
+      "version": "2.0.1",
+      "hash": "1e23ff9f6ba5f6c6d0ca3c581969439a740296bd2b9b1b9b087e0ab61245e6cf"
     },
     "sensors": {
       "version": "2.0.0",

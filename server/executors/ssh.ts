@@ -4,6 +4,7 @@ import { homedir } from 'os'
 import { join } from 'path'
 import type { ExecOptions, ExecResult, Executor, ShellHandle, StreamHandle } from './types'
 import type { ConnectionConfig } from '@shared/types'
+import { checkHostKey } from '../services/known-hosts'
 
 /**
  * The key path is typed in a browser but read on the host, so the shell
@@ -83,13 +84,28 @@ export class SSHExecutor implements Executor {
       client.on('close', () => {
         if (settled && !this.disposed) this.handleLost()
       })
+      const host = cfg.host ?? ''
+      const port = cfg.port || 22
       const connectCfg: Record<string, unknown> = {
-        host: cfg.host,
-        port: cfg.port || 22,
+        host,
+        port,
         username: cfg.username,
         readyTimeout: 15000,
         keepaliveInterval: 10000,
-        keepaliveCountMax: 3
+        keepaliveCountMax: 3,
+        hostHash: 'sha256',
+        hostVerifier: (hashedKey: string) => {
+          try {
+            checkHostKey(host, port, hashedKey, cfg.acceptHostKey === true)
+            return true
+          } catch (err) {
+            if (!settled) {
+              settled = true
+              reject(err)
+            }
+            return false
+          }
+        }
       }
       if (cfg.privateKeyPath) {
         connectCfg.privateKey = readFileSync(expandHome(cfg.privateKeyPath))

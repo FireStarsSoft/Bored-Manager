@@ -9,8 +9,9 @@ import { createHttpApp } from './http'
 import { cleanClose, currentSettings, registerRpc } from './ipc'
 import { log, startLogSession } from './log'
 import { RpcRouter } from './rpc'
-import { appRoot, dataDir } from './services/store'
+import { appRoot, dataDir, hardenDataPermissions } from './services/store'
 import { ensureDefaultAdmin } from './services/users'
+import { isOpenBind } from '@shared/types'
 
 /**
  * The Bored Manager server: one Express app for the built renderer and the
@@ -31,6 +32,7 @@ if (process.argv[2] === 'unlock') {
 const root = appRoot()
 startLogSession()
 ensureDefaultAdmin()
+hardenDataPermissions()
 
 function pidPath(): string {
   return join(dataDir(), 'server.pid')
@@ -98,6 +100,33 @@ const alive = new WeakSet<WebSocket>()
  * from the store - an upgrade never sends a response body, so a bare object
  * stands in for the one it would write to.
  */
+/**
+ * Same-origin check for the WebSocket upgrade. A browser always sends Origin
+ * on a socket; a page on another site would send that site's origin, which
+ * is how a drive-by tab reaches this server when login is off.
+ * Vite's dev proxy is the one exception: the page is on :5173, the socket
+ * is forwarded to the API port, and BM_DEV=1 is set on that process.
+ */
+function originAllowed(req: IncomingMessage): boolean {
+  const origin = req.headers.origin
+  if (!origin) return true
+  let url: URL
+  try {
+    url = new URL(origin)
+  } catch {
+    return false
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
+  const host = req.headers.host
+  if (host && url.host === host) return true
+  if (process.env.BM_DEV === '1') {
+    const loopback = new Set(['localhost', '127.0.0.1', '[::1]', '::1'])
+    const reqHost = host?.split(':')[0]
+    return loopback.has(url.hostname) && (!reqHost || loopback.has(reqHost))
+  }
+  return false
+}
+
 function readSession(req: IncomingMessage): Promise<{ username: string | null; sid: string | null }> {
   return new Promise((resolve) => {
     const request = req as unknown as Parameters<RequestHandler>[0]
@@ -135,6 +164,12 @@ server.on('upgrade', (req, socket, head) => {
     return
   }
   void (async () => {
+    if (!originAllowed(req)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')
+      socket.destroy()
+      log('rejected a WebSocket upgrade from another origin')
+      return
+    }
     // The socket carries every call the UI makes, so it is gated exactly like
     // /api is: no valid session while a login is required means no socket.
     const found = await readSession(req)
@@ -176,6 +211,13 @@ registerRpc(router, api)
 
 server.listen(port(), host(), () => {
   log(`listening on http://${host()}:${port()}`)
+  if (isOpenBind(host()) && !currentSettings().auth.enabled) {
+    log(
+      'WARNING: login is off and the server is bound to every interface - ' +
+        'anyone who can reach this address has full access. Enable login in Settings, ' +
+        'or bind 127.0.0.1.'
+    )
+  }
 })
 server.on('error', (err) => {
   log(`FATAL: the server could not start: ${String(err)}`)

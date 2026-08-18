@@ -14,6 +14,8 @@ export interface ConnectionConfig {
   privateKeyPath?: string
   sudoPassword?: string
   rememberPassword?: boolean
+  /** One-shot: persist the host key presented on this attempt. */
+  acceptHostKey?: boolean
 }
 
 export interface ConnectionStatus {
@@ -677,9 +679,14 @@ export interface SessionIdle {
 export interface AuthSettings {
   /** Off by default: everyone is `bored-admin` and no login is asked for. */
   enabled: boolean
-  /** Wrong passwords, counted across all clients, before the WebUI locks. */
+  /** Wrong passwords, counted per username and per client address, before that account or address locks. */
   maxFailures: number
   sessionIdle: SessionIdle
+}
+
+/** True when the listen address answers on every interface, not just this machine. */
+export function isOpenBind(host: string): boolean {
+  return host === '0.0.0.0' || host === '::' || host === '[::]'
 }
 
 export interface UpdateSettings {
@@ -1105,11 +1112,11 @@ export interface UpdateState {
 /** What `update:checkRepo` found on GitHub. */
 export interface UpdateRepoInfo {
   currentVersion: string
-  /** null when the repo has no release yet */
+  /** null when the repo has no matching release zip */
   latestVersion: string | null
-  /** Zip to download when a release (or its fallback zipball) exists. */
+  /** Zip of a `bored-manager-*.zip` release asset, when one exists. */
   assetUrl?: string
-  /** Source zip of the default branch, when there is no release. */
+  /** Source zip of the default branch, when there is no matching asset. */
   fallbackUrl?: string
   notes?: string
 }
@@ -1121,6 +1128,8 @@ export interface UpdateResult {
   error?: string
   finishedAt?: number
   logPath?: string
+  /** Custom modules that failed to build against the new version. */
+  quarantined?: string[]
 }
 
 // ---------- Terminals ----------
@@ -1207,8 +1216,16 @@ export interface HistoryPayload {
   modules: Record<string, Record<string, unknown>>
 }
 
+export interface HostKeyChallenge {
+  kind: 'unknown' | 'changed'
+  fingerprint: string
+  host: string
+  port: number
+}
+
 export interface OkResult {
   ok: boolean
   error?: string
   data?: string
+  hostKey?: HostKeyChallenge
 }

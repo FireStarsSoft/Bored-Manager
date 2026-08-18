@@ -152,7 +152,6 @@ export function createWsApi(client: WsClient): Api {
 
     modules: {
       list: () => invoke<ModuleDescriptor[]>('modules:list'),
-      enabledIds: () => invoke<string[]>('modules:enabledIds'),
       specs: () => invoke<ModuleSpecsEntry[]>('modules:specs'),
       setEnabled: (id: string, enabled: boolean) =>
         invoke<ModuleDescriptor[]>('modules:setEnabled', id, enabled),
@@ -186,6 +185,7 @@ export function createWsApi(client: WsClient): Api {
     auth: {
       status: async () => {
         const res = await fetch('/api/auth/status')
+        if (!res.ok) throw new Error(`auth status failed (${res.status})`)
         return (await res.json()) as AuthStatus
       },
       login: async (username: string, password: string) => {

@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { pruneByAge } from '@/lib/utils'
 
 /**
  * Where the snapshots a module's main half pushes are kept for its renderer
@@ -20,10 +21,7 @@ interface Timestamped {
 }
 
 function prune<T extends Timestamped>(arr: T[]): T[] {
-  const cutoff = Date.now() - RING_MS
-  let i = 0
-  while (i < arr.length && arr[i].t < cutoff) i++
-  return i > 0 ? arr.slice(i) : arr
+  return pruneByAge(arr, RING_MS)
 }
 
 interface ModuleBusState {

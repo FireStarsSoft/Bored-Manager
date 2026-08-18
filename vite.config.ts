@@ -27,10 +27,14 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(pkg.version)
   },
   server: {
-    proxy: {
-      '/ws': { target: 'ws://localhost:8686', ws: true },
-      '/api': 'http://localhost:8686'
-    }
+    proxy: (() => {
+      const port = process.env.BM_PORT || '8686'
+      const target = `http://localhost:${port}`
+      return {
+        '/ws': { target: target.replace(/^http/, 'ws'), ws: true },
+        '/api': target
+      }
+    })()
   },
   build: {
     outDir: resolve(__dirname, 'out/renderer'),

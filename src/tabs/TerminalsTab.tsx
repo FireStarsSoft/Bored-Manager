@@ -2,6 +2,7 @@ import * as React from 'react'
 import { Plus, TerminalSquare, X } from 'lucide-react'
 import type { TerminalPreset } from '@shared/types'
 import { api } from '@/lib/api'
+import { createTargetTerminal } from '@/lib/terminals'
 import { useApp } from '@/state/store'
 import { Button } from '@/components/ui/button'
 import {
@@ -42,19 +43,23 @@ export function TerminalsTab({ active }: { active: boolean }): React.JSX.Element
   const [customCmd, setCustomCmd] = React.useState('')
 
   React.useEffect(() => {
+    if (active) void refreshTerminals()
+  }, [active, refreshTerminals])
+
+  React.useEffect(() => {
     if (terminals.length > 0 && !terminals.some((t) => t.id === activeId)) {
       setActiveId(terminals[terminals.length - 1].id)
     }
   }, [terminals, activeId])
 
   const create = async (preset: TerminalPreset, customCommand?: string): Promise<void> => {
-    const res = await api.terminals.create(preset, 100, 30, customCommand)
-    if ('ok' in res && !res.ok) {
-      showNotice('error', res.error || 'Failed to open terminal')
+    const res = await createTargetTerminal(preset, 100, 30, customCommand)
+    if (!res.ok) {
+      showNotice('error', res.error)
       return
     }
     await refreshTerminals()
-    if ('id' in res) setActiveId(res.id)
+    setActiveId(res.info.id)
   }
 
   const close = async (id: string): Promise<void> => {

@@ -4,7 +4,8 @@ import { api } from '@/lib/api'
 import { useApp } from '@/state/store'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { FilePickerButton, message } from './shared'
+import { errorMessage } from '@/lib/utils'
+import { FilePickerButton } from './shared'
 
 /** Take the settings file to another machine, or bring one back. */
 export function BackupCard(): React.JSX.Element {
@@ -26,7 +27,7 @@ export function BackupCard(): React.JSX.Element {
         showNotice('error', res.error || 'Import failed')
       }
     } catch (err) {
-      showNotice('error', `Import failed: ${message(err)}`)
+      showNotice('error', `Import failed: ${errorMessage(err)}`)
     }
   }
 

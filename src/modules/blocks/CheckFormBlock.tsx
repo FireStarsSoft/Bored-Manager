@@ -11,11 +11,8 @@ import { moduleCall } from '@/lib/modules'
 import { callAction } from '../action-runner'
 import { resolvePath } from '../binding'
 import type { BlockCtx } from '../BlockRenderer'
+import { errorMessage } from '@/lib/utils'
 import { FormFields, coerceFormValues, initialFieldState, type FieldState, type FormValues } from './form-fields'
-
-function message(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
-}
 
 const LEVELS: ReadonlySet<string> = new Set<ModuleCheckLevel>(['pass', 'info', 'warning', 'error'])
 
@@ -86,7 +83,7 @@ export function CheckFormBlockView({
       const raw = await moduleCall<unknown>(ctx.moduleId, block.checkMethod, ...scopeArgs, sent)
       setChecked({ report: toReport(raw), values: sent })
     } catch (err) {
-      setError(message(err))
+      setError(errorMessage(err))
     } finally {
       setBusy(null)
     }
@@ -107,7 +104,7 @@ export function CheckFormBlockView({
       ])
       showNotice('info', `${block.title ?? block.applyMethod}: applied`)
     } catch (err) {
-      setError(`${message(err)} - check again before retrying`)
+      setError(`${errorMessage(err)} - check again before retrying`)
     } finally {
       // The token was single-use whether or not the call got that far, so the
       // report it belonged to is spent either way and a fresh check is the

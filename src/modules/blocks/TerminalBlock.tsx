@@ -2,6 +2,7 @@ import * as React from 'react'
 import { TerminalSquare, X } from 'lucide-react'
 import type { TerminalBlock } from '@shared/module-ui'
 import { api } from '@/lib/api'
+import { createTargetTerminal } from '@/lib/terminals'
 import { useApp } from '@/state/store'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -34,12 +35,12 @@ export function TerminalBlockView({ block, ctx }: { block: TerminalBlock; ctx: B
     setOpening(true)
     try {
       const command = interpolate(block.commandTemplate, ctx.scope)
-      const res = await api.terminals.create('custom', 100, 30, command)
-      if ('ok' in res && !res.ok) {
-        showNotice('error', res.error || 'Failed to open the terminal')
+      const res = await createTargetTerminal('custom', 100, 30, command)
+      if (!res.ok) {
+        showNotice('error', res.error)
         return
       }
-      if ('id' in res) setTerminalId(res.id)
+      setTerminalId(res.info.id)
     } finally {
       setOpening(false)
     }

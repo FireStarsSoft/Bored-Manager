@@ -5,6 +5,19 @@ export function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs))
 }
 
+/** Turn an unknown throw into a string a toast or form can show. */
+export function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
+/** Drop samples older than `maxAgeMs` from the front of a time-ordered ring. */
+export function pruneByAge<T extends { t: number }>(arr: T[], maxAgeMs: number, now = Date.now()): T[] {
+  const cutoff = now - maxAgeMs
+  let i = 0
+  while (i < arr.length && arr[i].t < cutoff) i++
+  return i > 0 ? arr.slice(i) : arr
+}
+
 export function formatBytes(bytes: number, digits = 1): string {
   if (!Number.isFinite(bytes) || bytes < 0) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']

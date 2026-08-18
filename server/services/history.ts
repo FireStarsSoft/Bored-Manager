@@ -15,8 +15,15 @@ import {
   HISTORY_RING_MS,
   SYSTEM_HISTORY_STREAM
 } from '@shared/types'
+import { HISTORY_STREAM_PATTERN } from '@shared/modules'
 import { registry } from '../session-registry'
 import { dataDir } from './store'
+
+function assertHistoryStream(stream: string): void {
+  if (!HISTORY_STREAM_PATTERN.test(stream)) {
+    throw new Error(`invalid history stream "${stream}"`)
+  }
+}
 
 /** UTC hour bucket: one file per stream per hour, sorts chronologically. */
 function hourKey(t: number): string {
@@ -112,6 +119,7 @@ export class MetricsHistoryService {
    * their own stream name; the app only writes the `system` stream itself.
    */
   add(stream: HistoryStream, point: HistoryPoint): void {
+    if (!HISTORY_STREAM_PATTERN.test(stream)) return
     if (!this.hostKey || !this.settings.enabled) return
     const ring = this.ring.get(stream) ?? []
     ring.push(point)
@@ -315,6 +323,7 @@ export class MetricsHistoryService {
     toMs: number,
     maxPoints = 600
   ): Promise<HistoryPoint[]> {
+    assertHistoryStream(stream)
     const ring = this.ring.get(stream) ?? []
     const ringStart = ring.length ? ring[0].t : Infinity
     const points: HistoryPoint[] = []
@@ -338,6 +347,7 @@ export class MetricsHistoryService {
     fromMs: number,
     toMs: number
   ): Promise<HistoryPoint[]> {
+    assertHistoryStream(stream)
     const dir = this.hostDir()
     if (!dir || !existsSync(dir)) return []
     const out: HistoryPoint[] = []

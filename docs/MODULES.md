@@ -126,7 +126,7 @@ The hash is recorded at install time, from the lock file for the modules that sh
 | Result | Meaning |
 |---|---|
 | `ok` | The files are exactly what was installed. |
-| `modified` | Something on disk differs. Editing a module during development does this — it is a fact, not an accusation. The badge says "files modified"; the module still runs. |
+| `modified` | Something on disk differs. Editing a module during development does this — it is a fact, not an accusation. The badge says "files modified". In production the host refuses to activate a modified module; with `BM_DEV=1` it still runs. |
 | `unknown` | The folder could not be read. |
 
 A module with no recorded hash (installed by an older build, or a release without a lock file) adopts what is on disk rather than reporting a false positive.
@@ -189,7 +189,7 @@ A module with settings of its **own** — limits, thresholds, anything the app h
 
 ## Migrating from before modules existed
 
-A settings file with `settingsVersion` below 3 has a switch per feature and a fixed list of extended Overview cards. On the first start of a current build that file is rewritten through v3 (module enable flags, `overviewWidgets`) and then v4 (server/auth/update). The conversion only ever *disables*: a module you have since switched on is not turned off again by an old file.
+A settings file with `settingsVersion` below 3 has a switch per feature and a fixed list of extended Overview cards. On the first start of a current build that file is rewritten through v3 (module enable flags, `overviewWidgets`), v4 (server/auth/update), v5 (theme) and v6 (`docker` → `container` interval and widget keys). The conversion only ever *disables*: a module you have since switched on is not turned off again by an old file.
 
 The same conversion runs when you **import** a settings file exported by an older version.
 

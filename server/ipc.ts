@@ -2,6 +2,7 @@ import { mkdirSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { basename, join } from 'path'
 import multer from 'multer'
+import type { RequestHandler } from 'express'
 import type {
   AppSettings,
   ConnectionConfig,
@@ -16,8 +17,10 @@ import type {
   TerminalPreset
 } from '@shared/types'
 import { DEFAULT_USERNAME, REFRESH_INTERVAL_MS } from '@shared/types'
+import { MODULE_ARCHIVE_MAX_BYTES, HISTORY_STREAM_PATTERN } from '@shared/modules'
 import { registerAuthRoutes, usernameOf } from './auth'
 import { connection } from './connection'
+import { HostKeyError } from './services/known-hosts'
 import { registry } from './session-registry'
 import type { HttpApi } from './http'
 import { log } from './log'
@@ -184,11 +187,35 @@ const uploadStorage = multer.diskStorage({
   }
 })
 
-const upload = multer({ storage: uploadStorage })
+const SETTINGS_UPLOAD_MAX = 2 * 1024 * 1024
+const upload = multer({
+  storage: uploadStorage,
+  limits: { fileSize: SETTINGS_UPLOAD_MAX }
+})
+const moduleUpload = multer({
+  storage: uploadStorage,
+  limits: { fileSize: MODULE_ARCHIVE_MAX_BYTES }
+})
 const updateUpload = multer({
   storage: uploadStorage,
   limits: { fileSize: 300 * 1024 * 1024 }
 })
+
+function withUpload(mw: RequestHandler): RequestHandler {
+  return (req, res, next) => {
+    mw(req, res, (err?: unknown) => {
+      if (!err) {
+        next()
+        return
+      }
+      const tooBig = err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE'
+      res.status(tooBig ? 413 : 400).json({
+        ok: false,
+        error: tooBig ? 'the file is larger than the limit' : String(err)
+      })
+    })
+  }
+}
 
 /**
  * Start or stop everything that polls, from the current settings, connection
@@ -285,6 +312,9 @@ export function registerRpc(rpc: RpcRouter, api: HttpApi): void {
       try {
         await connection.connect(cfg)
       } catch (err) {
+        if (err instanceof HostKeyError) {
+          return { ok: false, error: err.message, hostKey: err.hostKey }
+        }
         const keep = (err as { keepConnection?: boolean }).keepConnection
         if (!keep) {
           return { ok: false, error: err instanceof Error ? err.message : String(err) }
@@ -358,8 +388,12 @@ export function registerRpc(rpc: RpcRouter, api: HttpApi): void {
 
   rpc.registerHandler(
     'history:query',
-    (stream: HistoryStream, fromMs: number, toMs: number, maxPoints?: number) =>
-      metricsHistory.query(stream, fromMs, toMs, maxPoints)
+    (stream: HistoryStream, fromMs: number, toMs: number, maxPoints?: number) => {
+      if (typeof stream !== 'string' || !HISTORY_STREAM_PATTERN.test(stream)) {
+        throw new Error(`invalid history stream "${String(stream)}"`)
+      }
+      return metricsHistory.query(stream, fromMs, toMs, maxPoints)
+    }
   )
   rpc.registerHandler('history:stats', () => metricsHistory.stats())
   rpc.registerHandler('history:flush', () => {
@@ -442,8 +476,8 @@ export function registerRpc(rpc: RpcRouter, api: HttpApi): void {
   // system would be pretending otherwise.
 
   rpc.registerHandler('auth:users', () => users.listUsers())
-  rpc.registerHandler('auth:createUser', (input: { username: string; password: string }) => {
-    users.createUser(String(input?.username ?? '').trim(), String(input?.password ?? ''))
+  rpc.registerHandler('auth:createUser', async (input: { username: string; password: string }) => {
+    await users.createUser(String(input?.username ?? '').trim(), String(input?.password ?? ''))
     return users.listUsers()
   })
   rpc.registerClientHandler('auth:deleteUser', (client, input: { username: string }) => {
@@ -458,8 +492,8 @@ export function registerRpc(rpc: RpcRouter, api: HttpApi): void {
     log(`account "${username}" deleted by "${ownerOf(client)}"`)
     return users.listUsers()
   })
-  rpc.registerHandler('auth:setPassword', (input: { username: string; password: string }) => {
-    users.setPassword(String(input?.username ?? ''), String(input?.password ?? ''))
+  rpc.registerHandler('auth:setPassword', async (input: { username: string; password: string }) => {
+    await users.setPassword(String(input?.username ?? ''), String(input?.password ?? ''))
     return users.listUsers()
   })
   rpc.registerClientHandler('auth:setEnabled', (client, input: { enabled: boolean }) => {
@@ -486,7 +520,7 @@ export function registerRpc(rpc: RpcRouter, api: HttpApi): void {
     res.download(store.settingsFile(), 'bored-manager-settings.json')
   })
 
-  api.post('/settings/import', upload.single('file'), (req, res) => {
+  api.post('/settings/import', withUpload(upload.single('file')), (req, res) => {
     const file = req.file
     if (!file) {
       res.status(400).json({ ok: false, error: 'no file was uploaded' })
@@ -521,11 +555,15 @@ export function registerRpc(rpc: RpcRouter, api: HttpApi): void {
   rpc.registerHandler('modules:specs', () => modulesHost.specsPayload())
   rpc.registerHandler('modules:setEnabled', (id: string, enabled: boolean) => {
     modulesHost.setEnabled(id, enabled)
-    return modulesHost.list()
+    const list = modulesHost.list()
+    send('push:modules-list', list)
+    return list
   })
   rpc.registerHandler('modules:verify', (id: string) => {
     modulesHost.verify(id)
-    return modulesHost.list()
+    const list = modulesHost.list()
+    send('push:modules-list', list)
+    return list
   })
   rpc.registerHandler('modules:reload', async (id: string) => {
     const result = await modulesHost.reload(id)
@@ -541,7 +579,7 @@ export function registerRpc(rpc: RpcRouter, api: HttpApi): void {
   rpc.registerHandler('modules:catalogRefresh', () => getCatalog(appSettings.update.repo, true))
 
   // A module archive arrives as an upload; the installer grades the file on disk.
-  api.post('/modules/check-file', upload.single('file'), async (req, res) => {
+  api.post('/modules/check-file', withUpload(moduleUpload.single('file')), async (req, res) => {
     const file = req.file
     if (!file) {
       res.status(400).json({ ok: false, error: 'no file was uploaded' })
@@ -564,7 +602,7 @@ export function registerRpc(rpc: RpcRouter, api: HttpApi): void {
   rpc.registerHandler('update:apply', () => updaterService.apply())
   rpc.registerHandler('update:consumeResult', () => updaterService.consumeResult())
 
-  api.post('/update/check-file', updateUpload.single('file'), async (req, res) => {
+  api.post('/update/check-file', withUpload(updateUpload.single('file')), async (req, res) => {
     const file = req.file
     if (!file) {
       res.status(400).json({ ok: false, error: 'no file was uploaded' })

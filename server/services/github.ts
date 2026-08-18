@@ -69,6 +69,8 @@ export interface GithubReleaseZip {
   /** tag_name with a leading "v" stripped, "" when the release did not set one */
   version: string
   notes?: string
+  /** True when `pickAsset` found a release asset; false when `url` is the branch zip. */
+  matched: boolean
 }
 
 /**
@@ -94,6 +96,9 @@ export async function latestReleaseZip(
   }
   const version = String(body.tag_name ?? '').replace(/^v/i, '')
   const asset = (body.assets ?? []).find((a) => pickAsset(a.name ?? ''))
-  const url = asset?.browser_download_url ?? (await defaultBranchZipUrl(repo))
-  return { url, version, notes: typeof body.body === 'string' ? body.body : undefined }
+  const notes = typeof body.body === 'string' ? body.body : undefined
+  if (asset?.browser_download_url) {
+    return { url: asset.browser_download_url, version, notes, matched: true }
+  }
+  return { url: await defaultBranchZipUrl(repo), version, notes, matched: false }
 }

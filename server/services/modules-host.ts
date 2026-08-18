@@ -552,7 +552,7 @@ export class ModulesHost {
       enabled: prev?.enabled ?? true,
       version,
       hash,
-      source: prev?.source === 'default' ? 'default' : source,
+      source,
       installedAt: prev?.installedAt ?? now,
       updatedAt: now
     })
@@ -585,9 +585,9 @@ export class ModulesHost {
   }
 
   /**
-   * Compile (only if the source is newer than the last build) and construct a
-   * module's main half. Callers decide whether a module should be activated at
-   * all (`apply()`, `reload()`) - this always tries, whatever the enabled flag says.
+   * Compile from source and construct a module's main half. Callers decide
+   * whether a module should be activated at all (`apply()`, `reload()`) - this
+   * always tries, whatever the enabled flag says.
    */
   private async activate(id: string): Promise<{ ok: true } | { ok: false; error: string }> {
     const loaded = this.compiled.get(id)
@@ -603,7 +603,15 @@ export class ModulesHost {
       revoked: false
     }
     try {
-      if (this.needsCompile(id)) await compileModule(id)
+      const integrity = this.integrity.get(id) ?? this.verify(id)
+      if (integrity === 'modified' && process.env.BM_DEV !== '1') {
+        throw new Error(
+          'module files were modified after install; refuse to activate (set BM_DEV=1 to override)'
+        )
+      }
+      // Always compile from source so a planted `.dist/main.mjs` cannot skip
+      // the import sandbox. mtime is not trusted.
+      await compileModule(id)
       const dist = join(moduleDir(id), '.dist', 'main.mjs')
       const mod = (await import(`${pathToFileURL(dist).href}?v=${Date.now()}`)) as {
         default?: ModuleActivate

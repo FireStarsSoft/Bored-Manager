@@ -1,8 +1,7 @@
 import * as React from 'react'
 import { LayoutGrid } from 'lucide-react'
 import { useApp } from '@/state/store'
-import { useModuleSpecs } from '@/lib/module-registry'
-import { isWidgetOn, listModuleWidgets } from '@/lib/overview-widgets'
+import { isWidgetOn, listModuleWidgetToggles } from '@/lib/overview-widgets'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
@@ -12,10 +11,10 @@ function OverviewCardsCard(): React.JSX.Element | null {
   const settings = useApp((s) => s.settings)
   const updateSettings = useApp((s) => s.updateSettings)
   const enabledIds = useApp((s) => s.enabledModules)
-  const specsList = useModuleSpecs((s) => s.list)
+  const modules = useApp((s) => s.modules)
   const moduleWidgets = React.useMemo(
-    () => listModuleWidgets(enabledIds, specsList),
-    [enabledIds, specsList]
+    () => listModuleWidgetToggles(enabledIds, modules),
+    [enabledIds, modules]
   )
   if (!settings) return null
 

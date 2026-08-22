@@ -22,7 +22,7 @@ import {
   Zap
 } from 'lucide-react'
 import { create } from 'zustand'
-import type { ModuleManifest } from '@shared/modules'
+import type { ModuleDescriptor, ModuleManifest } from '@shared/modules'
 import type { ModuleSpecsEntry, PageSpec, WidgetSpec } from '@shared/module-ui'
 import { api } from '@/lib/api'
 import { pushLatest, pushSeries, seedSeries } from '@/lib/module-bus'
@@ -224,8 +224,11 @@ export function sidebarEntries(enabledIds: readonly string[], specsList: ModuleS
   return out
 }
 
-/** One Overview widget of an enabled module that has a loaded spec for it. */
-export interface OverviewWidgetEntry {
+/**
+ * One Overview widget a module declares. Settings uses this without a spec;
+ * the Overview grid adds `spec` once `modules:specs` has loaded the JSON.
+ */
+export interface OverviewWidgetDecl {
   /** `<moduleId>.<widgetId>` - also the key the saved grid layout uses. */
   id: string
   moduleId: string
@@ -234,7 +237,40 @@ export interface OverviewWidgetEntry {
   label: string
   defaultEnabled?: boolean
   order?: number
+}
+
+/** One Overview widget of an enabled module that has a loaded spec for it. */
+export interface OverviewWidgetEntry extends OverviewWidgetDecl {
   spec: WidgetSpec
+}
+
+/**
+ * Settings → Overview cards. Comes from the installed-module list, not from
+ * `modules:specs`: a widget toggle is intent, and the spec is only needed
+ * when the Overview actually renders the card.
+ */
+export function listModuleWidgetToggles(
+  enabledIds: readonly string[],
+  modules: readonly ModuleDescriptor[]
+): OverviewWidgetDecl[] {
+  const enabled = new Set(enabledIds)
+  const out: OverviewWidgetDecl[] = []
+  for (const module of modules) {
+    const id = module.manifest.id
+    if (!enabled.has(id) || module.problem) continue
+    for (const decl of module.manifest.widgets ?? []) {
+      out.push({
+        id: `${id}.${decl.id}`,
+        moduleId: id,
+        widgetId: decl.id,
+        moduleName: module.manifest.name,
+        label: decl.label,
+        defaultEnabled: decl.defaultEnabled,
+        order: decl.order
+      })
+    }
+  }
+  return out
 }
 
 export function listModuleWidgets(

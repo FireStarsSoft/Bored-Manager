@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 
 import { beforeAll, describe, expect, it, vi } from 'vitest'
-import { DEFAULT_SETTINGS, type MachinePayload, type SystemSnapshot } from '@shared/types'
+import { DEFAULT_SETTINGS, type MachinePayload, type MachineStatus, type SystemSnapshot } from '@shared/types'
 
 const mocks = vi.hoisted(() => {
   let systemListener: ((payload: MachinePayload<SystemSnapshot>) => void) | null = null
+  let statusListener: ((machines: MachineStatus[]) => void) | null = null
   const noopSubscription = vi.fn(() => () => undefined)
   const api = {
     auth: {
@@ -21,7 +22,10 @@ const mocks = vi.hoisted(() => {
       reconnect: vi.fn(),
       disconnect: vi.fn(),
       onLost: noopSubscription,
-      onStatus: noopSubscription
+      onStatus: vi.fn((listener: (machines: MachineStatus[]) => void) => {
+        statusListener = listener
+        return () => undefined
+      })
     },
     metrics: {
       history: vi.fn(),
@@ -52,6 +56,7 @@ const mocks = vi.hoisted(() => {
   return {
     api,
     getSystemListener: () => systemListener,
+    getStatusListener: () => statusListener,
     refreshSpecs: vi.fn(),
     seedSnapshots: vi.fn(),
     clearBus: vi.fn()
@@ -177,5 +182,73 @@ describe('multi-machine renderer state', () => {
     expect(useApp.getState().system.at(-1)?.hostname).toBe(beta.machineId)
     expect(mocks.api.ui.setActiveMachine).toHaveBeenLastCalledWith(beta.machineId)
     expect(sessionStorage.getItem('bm.activeMachine')).toBe(beta.machineId)
+  })
+
+  it('refreshes module specs before seeding after connect', async () => {
+    await useApp.getState().init()
+    mocks.refreshSpecs.mockClear()
+    mocks.api.metrics.history.mockClear()
+    const order: string[] = []
+    mocks.refreshSpecs.mockImplementation(async () => {
+      order.push('refresh')
+    })
+    mocks.api.metrics.history.mockImplementation(async (machineId: string) => {
+      order.push('history')
+      return {
+        system: [snapshot(1, machineId)],
+        top: null,
+        services: null,
+        modules: {}
+      }
+    })
+    mocks.api.connection.connect.mockResolvedValue({ ok: true, machineId: alpha.machineId })
+    mocks.api.connection.status.mockResolvedValue([alpha])
+
+    await useApp.getState().connect({ mode: 'local' })
+
+    expect(mocks.refreshSpecs).toHaveBeenCalled()
+    expect(order.indexOf('refresh')).toBeGreaterThanOrEqual(0)
+    expect(order.indexOf('history')).toBeGreaterThan(order.indexOf('refresh'))
+  })
+
+  it('refreshes module specs before seeding after reconnect', async () => {
+    await useApp.getState().init()
+    mocks.refreshSpecs.mockClear()
+    mocks.api.metrics.history.mockClear()
+    const order: string[] = []
+    mocks.refreshSpecs.mockImplementation(async () => {
+      order.push('refresh')
+    })
+    mocks.api.metrics.history.mockImplementation(async (machineId: string) => {
+      order.push('history')
+      return {
+        system: [snapshot(1, machineId)],
+        top: null,
+        services: null,
+        modules: {}
+      }
+    })
+    mocks.api.connection.reconnect.mockResolvedValue({ ok: true, machineId: beta.machineId })
+    mocks.api.connection.status.mockResolvedValue([beta])
+
+    await useApp.getState().reconnect('tester@beta')
+
+    expect(mocks.refreshSpecs).toHaveBeenCalled()
+    expect(order.indexOf('refresh')).toBeGreaterThanOrEqual(0)
+    expect(order.indexOf('history')).toBeGreaterThan(order.indexOf('refresh'))
+  })
+
+  it('refreshes module specs when another client connects a new machine', async () => {
+    await useApp.getState().init()
+    mocks.refreshSpecs.mockClear()
+    const gamma = {
+      ...beta,
+      machineId: 'tester@gamma',
+      host: 'gamma'
+    }
+    mocks.getStatusListener()?.([alpha, beta, gamma])
+    await vi.waitFor(() => {
+      expect(mocks.refreshSpecs).toHaveBeenCalled()
+    })
   })
 })

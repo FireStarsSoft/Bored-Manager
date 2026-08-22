@@ -454,6 +454,9 @@ export function registerRpc(rpc: RpcRouter, api: HttpApi, sessions: SessionContr
       modulesHost.resumeMachine(machine.id)
       applyPollers()
       await modulesHost.apply()
+      // Specs are live-instance gated; tell every browser to refetch them now
+      // that this host has activated its enabled modules.
+      send('push:modules-list', modulesHost.list())
       log(`machine ${machine.id} connected`)
       return {
         ok: true,

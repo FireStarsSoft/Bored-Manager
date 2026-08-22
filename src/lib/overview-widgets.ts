@@ -1,11 +1,15 @@
 import * as React from 'react'
 import type { OverviewWidgetSettings } from '@shared/types'
 import type { ModuleSpecsEntry } from '@shared/module-ui'
-import { listModuleWidgets, type OverviewWidgetEntry } from '@/lib/module-registry'
+import {
+  listModuleWidgets,
+  listModuleWidgetToggles,
+  type OverviewWidgetEntry
+} from '@/lib/module-registry'
 import { ModuleWidget as ModuleWidgetView } from '@/modules/BlockRenderer'
 
 export type { OverviewWidgetEntry }
-export { listModuleWidgets }
+export { listModuleWidgets, listModuleWidgetToggles }
 
 /** Whether a widget is shown: the user's choice, or the card's own default. */
 export function isWidgetOn(

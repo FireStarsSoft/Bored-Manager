@@ -293,15 +293,21 @@ export const useApp = create<AppState>((set, get) => ({
         preferred === current &&
         before.find((machine) => machine.machineId === preferred)?.revision !==
           machines.find((machine) => machine.machineId === preferred)?.revision
+      // The pool list is connected machines only, so a new id means a host just
+      // went live and `modules:specs` can now return its pages.
+      const newlyLive = machines.some((machine) => !beforeIds.has(machine.machineId))
 
       set({ machines, sessionMachines })
-      if (preferred !== current || activeRevisionChanged) {
-        void get()
-          .setActiveMachine(preferred)
-          .catch((err) => get().showNotice('error', errorMessage(err)))
-      } else {
-        set({ status: machines.find((machine) => machine.machineId === preferred) ?? { connected: false } })
-      }
+      void (async () => {
+        if (newlyLive) await useModuleSpecs.getState().refresh()
+        if (preferred !== current || activeRevisionChanged) {
+          await get().setActiveMachine(preferred)
+          return
+        }
+        set({
+          status: machines.find((machine) => machine.machineId === preferred) ?? { connected: false }
+        })
+      })().catch((err) => get().showNotice('error', errorMessage(err)))
 
       if (selfChanging === 0) {
         if (activeRevisionChanged && preferred) {
@@ -466,6 +472,9 @@ export const useApp = create<AppState>((set, get) => ({
       const machines = await api.connection.status()
       const sessionMachines = mergeSessionMachines(get().sessionMachines, machines)
       set({ machines, sessionMachines, activeTab: 'overview' })
+      // Specs were fetched at boot while nothing was live; pages exist only
+      // after activate(), which connect just awaited on the server.
+      await useModuleSpecs.getState().refresh()
       if (res.machineId) await get().setActiveMachine(res.machineId)
       reportActiveTab('overview')
       return res
@@ -490,6 +499,7 @@ export const useApp = create<AppState>((set, get) => ({
       const machines = await api.connection.status()
       const sessionMachines = mergeSessionMachines(get().sessionMachines, machines)
       set({ machines, sessionMachines })
+      await useModuleSpecs.getState().refresh()
       if (res.machineId) await get().setActiveMachine(res.machineId)
       return res
     } finally {

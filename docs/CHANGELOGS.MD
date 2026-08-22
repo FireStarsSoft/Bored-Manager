@@ -2,6 +2,10 @@
 
 All notable changes to Bored Manager. Each module keeps its own changelog in `modules/<id>/CHANGELOG.md`, because module versions are independent of the app's.
 
+## 0.3.6
+
+- **Fixed: connecting a machine left module pages and Overview cards empty until a refresh.** Module specs are gated on a live instance, but the UI still used the empty list fetched at boot. After connect/reconnect the renderer now reloads specs before seeding history; a newly live host (including one another browser connected) also triggers a refresh; and the server pushes the updated module list as soon as that host activates. Settings → Overview cards lists widget toggles from the installed-module manifests, so the switches no longer wait for a live spec.
+
 ## 0.3.5
 
 - **Fixed: a fresh install crash-looped and never listened on port 8686.** `install.sh` wrote a `settingsVersion` 6 file with only `server.port` / `server.host`. The server requires an `auth` object on v4+ files, so Node exited before `listen` and systemd restarted it every 3 seconds. Settings are now seeded from `DEFAULT_SETTINGS` (`scripts/seed-settings.ts`). `--repair` (what `bored-manager update` runs) heals the v0.3.4 stub. An omitted `auth` field is treated as first-run defaults; a present but malformed `auth` object still refuses to start.

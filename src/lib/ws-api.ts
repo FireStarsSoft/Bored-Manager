@@ -2,12 +2,14 @@ import type {
   AppSettings,
   AuthStatus,
   ConnectionConfig,
-  ConnectionStatus,
+  ConnectionResult,
   HistoryPayload,
   HistoryPoint,
   HistoryStats,
   HistoryStream,
   OkResult,
+  MachinePayload,
+  MachineStatus,
   PackageSearchResult,
   PackagesOverview,
   PkgAction,
@@ -76,28 +78,36 @@ export function createWsApi(client: WsClient): Api {
 
   return {
     connection: {
-      connect: (cfg: ConnectionConfig) => invoke<OkResult>('conn:connect', cfg),
-      disconnect: () => invoke<OkResult>('conn:disconnect'),
-      status: () => invoke<ConnectionStatus>('conn:status'),
+      connect: (cfg: ConnectionConfig) => invoke<ConnectionResult>('conn:connect', cfg),
+      reconnect: (savedId: string, confirmation?: ConnectionConfig['hostKeyConfirmation']) =>
+        invoke<ConnectionResult>('conn:reconnect', savedId, confirmation),
+      disconnect: (machineId: string) => invoke<OkResult>('conn:disconnect', machineId),
+      status: () => invoke<MachineStatus[]>('conn:status'),
       listSaved: () => invoke<SavedConnection[]>('conn:list'),
       getCredentials: (id: string) =>
         invoke<{ password?: string; sudoPassword?: string } | null>('conn:credentials', id),
       deleteSaved: (id: string) => invoke<SavedConnection[]>('conn:delete', id),
-      onLost: (cb: () => void) => on('push:conn-lost', cb),
-      onStatus: (cb: (s: ConnectionStatus) => void) => on('push:conn-status', cb)
+      onLost: (cb: (payload: { machineId: string }) => void) => on('push:conn-lost', cb),
+      onStatus: (cb: (machines: MachineStatus[]) => void) => on('push:conn-status', cb)
     },
 
     metrics: {
-      history: () => invoke<HistoryPayload>('metrics:history'),
-      refreshSlow: (target: SlowRefreshTarget) => invoke<void>('metrics:refreshSlow', target),
-      onSystem: (cb: (s: SystemSnapshot) => void) => on('push:system', cb),
-      onTop: (cb: (s: TopConsumersSnapshot) => void) => on('push:top', cb),
+      history: (machineId: string) => invoke<HistoryPayload>('metrics:history', machineId),
+      refreshSlow: (machineId: string, target: SlowRefreshTarget) =>
+        invoke<void>('metrics:refreshSlow', machineId, target),
+      onSystem: (cb: (s: MachinePayload<SystemSnapshot>) => void) => on('push:system', cb),
+      onTop: (cb: (s: MachinePayload<TopConsumersSnapshot>) => void) => on('push:top', cb),
       onServices: (cb: (s: ServicesSnapshot) => void) => on('push:services', cb)
     },
 
     history: {
-      query: (stream: HistoryStream, fromMs: number, toMs: number, maxPoints?: number) =>
-        invoke<HistoryPoint[]>('history:query', stream, fromMs, toMs, maxPoints),
+      query: (
+        machineId: string,
+        stream: HistoryStream,
+        fromMs: number,
+        toMs: number,
+        maxPoints?: number
+      ) => invoke<HistoryPoint[]>('history:query', machineId, stream, fromMs, toMs, maxPoints),
       stats: () => invoke<HistoryStats>('history:stats'),
       flush: () => invoke<HistoryStats>('history:flush'),
       purge: () => invoke<HistoryStats>('history:purge'),
@@ -105,22 +115,33 @@ export function createWsApi(client: WsClient): Api {
     },
 
     ui: {
-      setActiveTab: (tab: string) => client.send('ui:activeTab', tab)
+      setActiveTab: (tab: string | null) => client.send('ui:activeTab', tab),
+      setActiveMachine: (machineId: string | null) =>
+        client.send('ui:activeMachine', machineId)
     },
 
     packages: {
-      overview: () => invoke<PackagesOverview>('packages:overview'),
-      search: (query: string) => invoke<PackageSearchResult[]>('packages:search', query),
-      action: (action: PkgAction, pkg?: string) => invoke<OkResult>('packages:action', action, pkg),
-      cancel: () => invoke<void>('packages:cancel'),
-      state: () => invoke<PkgActionState>('packages:state'),
-      onLog: (cb: (data: string) => void) => on('packages:log', cb),
-      onState: (cb: (s: PkgActionState) => void) => on('packages:state', cb)
+      overview: (machineId: string) =>
+        invoke<PackagesOverview>('packages:overview', machineId),
+      search: (machineId: string, query: string) =>
+        invoke<PackageSearchResult[]>('packages:search', machineId, query),
+      action: (machineId: string, action: PkgAction, pkg?: string) =>
+        invoke<OkResult>('packages:action', machineId, action, pkg),
+      cancel: (machineId: string) => invoke<void>('packages:cancel', machineId),
+      state: (machineId: string) => invoke<PkgActionState>('packages:state', machineId),
+      onLog: (cb: (payload: MachinePayload<string>) => void) => on('packages:log', cb),
+      onState: (cb: (payload: MachinePayload<PkgActionState>) => void) =>
+        on('packages:state', cb)
     },
 
     terminals: {
-      create: (preset: TerminalPreset, cols: number, rows: number, customCommand?: string) =>
-        invoke<TerminalInfo | OkResult>('term:create', preset, cols, rows, customCommand),
+      create: (
+        machineId: string,
+        preset: TerminalPreset,
+        cols: number,
+        rows: number,
+        customCommand?: string
+      ) => invoke<TerminalInfo | OkResult>('term:create', machineId, preset, cols, rows, customCommand),
       list: () => invoke<TerminalInfo[]>('term:list'),
       buffer: (id: string) => invoke<string>('term:buffer', id),
       write: (id: string, data: string) => client.send('term:write', id, data),
@@ -160,7 +181,8 @@ export function createWsApi(client: WsClient): Api {
       installState: () => invoke<ModuleInstallState>('modules:installState'),
       checkUrl: (url: string) => invoke<ModuleInstallState>('modules:checkUrl', url),
       checkFile: (file: File) => postFile<ModuleInstallState>('/api/modules/check-file', file),
-      install: () => invoke<ModuleInstallState>('modules:install'),
+      install: (confirmationToken: string) =>
+        invoke<ModuleInstallState>('modules:install', confirmationToken),
       uninstall: (id: string) => invoke<ModuleInstallState>('modules:uninstall', id),
       cancel: () => invoke<ModuleInstallState>('modules:cancel'),
       onInstallState: (cb: (s: ModuleInstallState) => void) => on('push:modules', cb),
@@ -168,9 +190,13 @@ export function createWsApi(client: WsClient): Api {
       catalog: () => invoke<ModuleCatalog>('modules:catalog'),
       catalogRefresh: () => invoke<ModuleCatalog>('modules:catalogRefresh'),
 
-      invoke: <T>(moduleId: string, method: string, args: unknown[]) =>
-        invoke<T>(`module:${moduleId}:invoke:${method}`, ...args),
-      onEvent: <T>(moduleId: string, event: string, cb: (payload: T) => void) =>
+      invoke: <T>(machineId: string, moduleId: string, method: string, args: unknown[]) =>
+        invoke<T>(`module:${moduleId}:invoke:${method}`, machineId, ...args),
+      onEvent: <T>(
+        moduleId: string,
+        event: string,
+        cb: (payload: MachinePayload<T>) => void
+      ) =>
         on(`module:${moduleId}:event:${event}`, cb)
     },
 

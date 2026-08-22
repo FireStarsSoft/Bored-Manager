@@ -16,15 +16,23 @@ import type {
   ModuleSource,
   ModuleStreamHandle
 } from '@shared/modules'
-import { MODULE_MANIFEST_FILE, historyStreamProblem, manifestProblems } from '@shared/modules'
+import {
+  MODULE_MANIFEST_FILE,
+  compareVersions,
+  historyStreamProblem,
+  manifestProblems,
+  moduleCardId
+} from '@shared/modules'
 import type { ModuleSpecsEntry, PageSpec, WidgetSpec } from '@shared/module-ui'
 import { specProblems } from '@shared/module-ui'
 import { connection } from '../connection'
+import type { ConnectionManager } from '../connection'
 import { Poller } from './poller'
 import type { MetricsHistoryService } from './history'
 import { compileModule } from './module-compiler'
 import {
   appRoot,
+  appVersion,
   readModuleConfig,
   readModuleData,
   readModuleRegistry,
@@ -58,6 +66,27 @@ export function moduleTabActive(tabs: Set<string>, moduleId: string): boolean {
   return false
 }
 
+/**
+ * A tab-gated module is also visible through an enabled Overview widget. A
+ * missing widget setting follows the manifest's default, exactly like the
+ * renderer does.
+ */
+export function moduleSurfaceActive(
+  tabs: Set<string>,
+  moduleId: string,
+  manifest: ModuleManifest,
+  settings: AppSettings
+): boolean {
+  if (moduleTabActive(tabs, moduleId)) return true
+  if (!moduleTabActive(tabs, 'overview')) return false
+  return (manifest.widgets ?? []).some(
+    (widget) =>
+      settings.overviewWidgets[moduleCardId(moduleId, widget.id)] ??
+      widget.defaultEnabled ??
+      false
+  )
+}
+
 // ---------- Integrity ----------
 
 /** `.dist/` is build output, not something a module ships or the lock records. */
@@ -82,8 +111,7 @@ export function moduleFolderHash(dir: string): string {
   for (const rel of listFiles(dir).sort()) {
     hash.update(rel)
     hash.update('\0')
-    const buf = readFileSync(join(dir, rel))
-    hash.update(buf.includes(0x0d) ? Buffer.from(buf.filter((b) => b !== 0x0d)) : buf)
+    hash.update(readFileSync(join(dir, rel)))
   }
   return hash.digest('hex')
 }
@@ -174,8 +202,15 @@ function discoverModules(): Map<string, LoadedModule> {
   }
   for (const entry of entries) {
     if (!entry.isDirectory()) continue
-    const loaded = readManifest(entry.name)
-    if (loaded) out.set(entry.name, loaded)
+    try {
+      const loaded = readManifest(entry.name)
+      if (loaded) out.set(entry.name, loaded)
+    } catch (error) {
+      out.set(entry.name, {
+        manifest: { id: entry.name } as ModuleManifest,
+        problem: `module discovery failed: ${message(error)}`
+      })
+    }
   }
   return out
 }
@@ -241,6 +276,19 @@ function carriedHash(
 // ---------- The host ----------
 
 /**
+ * The machine-scoped services a module main instance is allowed to reach.
+ * MachinePool exposes these through the optional resolver callbacks below;
+ * the singleton services remain as a compatibility runtime for old callers.
+ */
+export interface ModuleMachineRuntime {
+  id: string
+  manager: ConnectionManager
+  history: MetricsHistoryService
+}
+
+const LEGACY_MACHINE_ID = 'legacy'
+
+/**
  * One running module, and everything the app has to be able to take back off
  * it. `instance` is what the module returned; the four collections are what
  * the app handed out and therefore what it can revoke without the module's
@@ -248,6 +296,8 @@ function carriedHash(
  * switched off is not necessarily one that behaves.
  */
 interface Live {
+  machineId: string
+  runtime: ModuleMachineRuntime
   instance: ModuleMainInstance
   /** RPC channels registered through `ctx.handle`. */
   handlers: Set<string>
@@ -257,6 +307,20 @@ interface Live {
   streams: Set<ModuleStreamHandle>
   /** Flipped before `dispose()`; every `ctx` member throws once it is set. */
   revoked: boolean
+}
+
+interface RegisteredModuleHandler {
+  live: Live
+  fn: (...args: unknown[]) => unknown
+}
+
+interface PendingActivation {
+  runtime: ModuleMachineRuntime
+  epoch: number
+  generation: number
+  machineEpoch: number
+  compiled: boolean
+  promise: Promise<{ ok: true } | { ok: false; error: string }>
 }
 
 /**
@@ -269,20 +333,49 @@ export class ModulesHost {
   private compiled = discoverModules()
   private states = new Map<string, ModuleRuntimeState>()
   private integrity = new Map<string, ModuleIntegrity>()
-  private live = new Map<string, Live>()
+  private live = new Map<string, Map<string, Live>>()
   private settings: AppSettings | null = null
-  /** Tabs open in any connected browser; see RpcRouter.activeTabs(). */
-  private activeTabs = new Set<string>()
-  /** Which machine ctx.hostDataGet/Set read and write; null while disconnected. */
+  /** Tabs open in connected browsers, partitioned by the machine they show. */
+  private activeTabsByMachine = new Map<string, Set<string>>()
+  /** A Set passed by the old IPC layer applies to each compatibility runtime. */
+  private legacyActiveTabs: Set<string> | null = null
+  /** Which singleton-backed compatibility machine is current. */
   private hostKey: string | null = null
+  private hostKeyWasSet = false
+  private readonly legacyRuntime: ModuleMachineRuntime
+  /** Prevent an in-flight apply/activation from resurrecting modules during teardown. */
+  private suspended = false
+  private suspendedMachines = new Set<string>()
+  private lifecycleEpoch = 0
+  private machineEpochs = new Map<string, number>()
+  /** Invalidates one module without disturbing unrelated activation work. */
+  private generations = new Map<string, number>()
+  /** Activation starts before it becomes live; duplicate apply calls share per-machine work. */
+  private pendingActivations = new Map<string, Map<string, PendingActivation>>()
+  /** Every machine imports the same output, so concurrent builds of one module are coalesced. */
+  private compilePromises = new Map<string, Promise<void>>()
+  /** One public dispatcher fans a declared method out to its machine-local handlers. */
+  private rpcHandlers = new Map<string, Map<string, RegisteredModuleHandler>>()
+  private importVersion = 0
+  /** Lifecycle transitions run in request order, including reload and enable changes. */
+  private lifecycleTail: Promise<void> = Promise.resolve()
 
   constructor(
-    private readonly history: MetricsHistoryService,
+    history: MetricsHistoryService,
     private readonly send: (channel: string, payload: unknown) => void,
     private readonly registerHandler: (channel: string, fn: (...a: unknown[]) => unknown) => void,
     private readonly unregisterHandler: (channel: string) => void,
-    private readonly logger: (message: string) => void
-  ) {}
+    private readonly logger: (message: string) => void,
+    private readonly resolveMachine?: (machineId: string) => ModuleMachineRuntime | undefined,
+    private readonly listMachineIds?: () => string[],
+    private readonly sendToMachine?: (
+      machineId: string,
+      channel: string,
+      payload: unknown
+    ) => void
+  ) {
+    this.legacyRuntime = { id: LEGACY_MACHINE_ID, manager: connection, history }
+  }
 
   /**
    * Read the registry, reconcile it with what is on disk and hash every module.
@@ -382,7 +475,7 @@ export class ModulesHost {
   }
 
   isLive(id: string): boolean {
-    return this.live.has(id)
+    return (this.live.get(id)?.size ?? 0) > 0
   }
 
   enabledIds(): string[] {
@@ -413,10 +506,47 @@ export class ModulesHost {
     return this.states.get(id) ?? null
   }
 
+  /**
+   * Exact registry state before an installer transaction. The installer keeps
+   * this outside the candidate module so an activation that writes config and
+   * then fails can restore both the files and the host's in-memory view.
+   */
+  moduleRegistrySnapshot(): Record<string, ModuleRuntimeState> {
+    return Object.fromEntries(
+      [...this.states].map(([id, state]) => [id, { ...state }])
+    )
+  }
+
+  /** Replace the registry with a transaction snapshot and persist it atomically. */
+  restoreModuleRegistrySnapshot(snapshot: Record<string, ModuleRuntimeState>): void {
+    this.states = new Map(
+      Object.entries(snapshot).map(([id, state]) => [id, { ...state }])
+    )
+    this.persist()
+    this.integrity.clear()
+    for (const [id, state] of this.states) {
+      if (!this.compiled.has(id) || !state.hash) {
+        this.integrity.set(id, 'unknown')
+        continue
+      }
+      try {
+        this.integrity.set(
+          id,
+          moduleFolderHash(moduleDir(id)) === state.hash ? 'ok' : 'modified'
+        )
+      } catch {
+        this.integrity.set(id, 'unknown')
+      }
+    }
+  }
+
   /** What every enabled module's pages and widgets render from, read fresh off disk. */
   specsPayload(): ModuleSpecsEntry[] {
     const out: ModuleSpecsEntry[] = []
-    for (const id of this.enabledIds()) {
+    // An enabled bit is intent, not readiness. Specs become callable UI only
+    // after activation returned a valid runtime and all handlers are installed.
+    for (const [id, instances] of this.live) {
+      if (instances.size === 0) continue
       const loaded = this.compiled.get(id)
       if (!loaded) continue
       const dir = moduleDir(id)
@@ -472,9 +602,21 @@ export class ModulesHost {
 
   // ---------- Lifecycle ----------
 
-  configure(settings: AppSettings, activeTabs: Set<string>): void {
+  configure(
+    settings: AppSettings,
+    activeTabs: Set<string> | Map<string, Set<string>>
+  ): void {
     this.settings = settings
-    this.activeTabs = activeTabs
+    if (activeTabs instanceof Map) {
+      this.legacyActiveTabs = null
+      this.activeTabsByMachine = activeTabs
+      return
+    }
+    this.legacyActiveTabs = activeTabs
+    this.activeTabsByMachine = new Map()
+    for (const machineId of this.listedMachineIds()) {
+      this.activeTabsByMachine.set(machineId, activeTabs)
+    }
   }
 
   /**
@@ -483,7 +625,52 @@ export class ModulesHost {
    * module cannot keep writing to the host it is no longer talking to.
    */
   setHostKey(key: string | null): void {
+    const previous = this.legacyMachineId()
     this.hostKey = key
+    this.hostKeyWasSet = true
+    const next = this.legacyMachineId()
+    if (previous !== next && previous) {
+      this.bumpMachineEpoch(previous)
+      this.deactivateMachine(previous)
+      this.activeTabsByMachine.delete(previous)
+    }
+    this.legacyRuntime.id = next ?? LEGACY_MACHINE_ID
+    if (next && this.legacyActiveTabs) {
+      this.activeTabsByMachine.set(next, this.legacyActiveTabs)
+    }
+  }
+
+  /** Stop modules and invalidate every activation already awaiting I/O/import. */
+  suspend(): void {
+    this.suspended = true
+    this.lifecycleEpoch++
+    for (const id of this.compiled.keys()) this.bumpGeneration(id)
+    this.disposeAll()
+  }
+
+  /** Permit a newly connected host to activate the configured modules. */
+  resume(): void {
+    if (!this.suspended) return
+    this.suspended = false
+    this.lifecycleEpoch++
+  }
+
+  /** Stop only one machine's instances and invalidate activations awaiting it. */
+  suspendMachine(machineId: string): void {
+    if (!this.suspendedMachines.has(machineId)) {
+      this.suspendedMachines.add(machineId)
+      this.bumpMachineEpoch(machineId)
+    }
+    this.deactivateMachine(machineId)
+  }
+
+  /** Permit the next apply to recreate one machine's module instances. */
+  resumeMachine(machineId: string): void {
+    if (!this.suspendedMachines.delete(machineId)) return
+    this.bumpMachineEpoch(machineId)
+    if (this.legacyActiveTabs) {
+      this.activeTabsByMachine.set(machineId, this.legacyActiveTabs)
+    }
   }
 
   /**
@@ -491,38 +678,74 @@ export class ModulesHost {
    * module start or stop its own pollers. Called whenever anything that can
    * influence a poller changed.
    */
-  async apply(): Promise<void> {
+  apply(): Promise<void> {
+    return this.enqueueLifecycle(() => this.applyNow())
+  }
+
+  private async applyNow(): Promise<void> {
+    if (this.suspended) return
+    const epoch = this.lifecycleEpoch
+    const runtimes = this.currentMachineRuntimes()
+    this.deactivateStale(runtimes)
     const activations: Promise<unknown>[] = []
     for (const id of this.compiled.keys()) {
-      const wanted = this.isEnabled(id)
-      const running = this.live.has(id)
-      if (wanted && !running) activations.push(this.activate(id))
-      else if (!wanted && running) this.deactivate(id)
+      if (!this.isEnabled(id)) {
+        this.deactivate(id)
+        continue
+      }
+      const running = this.live.get(id)
+      for (const [machineId, runtime] of runtimes) {
+        if (this.suspendedMachines.has(machineId) || running?.has(machineId)) continue
+        activations.push(
+          this.activate(
+            id,
+            machineId,
+            runtime,
+            epoch,
+            this.generation(id),
+            this.machineEpoch(machineId)
+          )
+        )
+      }
     }
     if (activations.length) await Promise.all(activations)
-    for (const [id, live] of this.live) {
-      try {
-        live.instance.applyPollers?.()
-      } catch (err) {
-        this.logger(`module ${id}: applyPollers failed: ${String(err)}`)
+    if (this.suspended || epoch !== this.lifecycleEpoch) return
+    this.deactivateStale(this.currentMachineRuntimes())
+    for (const [id, instances] of this.live) {
+      for (const [machineId, live] of instances) {
+        try {
+          live.instance.applyPollers?.()
+        } catch (err) {
+          this.logger(`module ${id} on ${machineId}: applyPollers failed: ${String(err)}`)
+        }
       }
     }
   }
 
   /** Switch a module on or off. Takes effect immediately, no rebuild needed. */
-  setEnabled(id: string, enabled: boolean): void {
+  setEnabled(id: string, enabled: boolean): Promise<void> {
     const state = this.states.get(id)
-    if (!state || state.enabled === enabled) return
+    if (!state || state.enabled === enabled) return this.apply()
     state.enabled = enabled
+    this.bumpGeneration(id)
     this.persist()
-    void this.apply()
+    if (!enabled) this.deactivate(id)
+    return this.apply()
   }
 
   /** Re-read one module's manifest from disk after its folder changed underneath the host (install/upgrade). */
   rescan(id: string): void {
-    const loaded = readManifest(id)
-    if (loaded) this.compiled.set(id, loaded)
-    else this.compiled.delete(id)
+    this.bumpGeneration(id)
+    try {
+      const loaded = readManifest(id)
+      if (loaded) this.compiled.set(id, loaded)
+      else this.compiled.delete(id)
+    } catch (error) {
+      this.compiled.set(id, {
+        manifest: { id } as ModuleManifest,
+        problem: `module discovery failed: ${message(error)}`
+      })
+    }
   }
 
   /**
@@ -531,17 +754,22 @@ export class ModulesHost {
    * the RPC table *before* the files go, or a poller tick lands halfway
    * through the removal.
    */
-  stop(id: string): void {
+  stop(id: string): Promise<void> {
+    this.bumpGeneration(id)
     this.deactivate(id)
+    return this.enqueueLifecycle(async () => undefined)
   }
 
   /** Forget a module after its folder was deleted; nothing on disk backs it any more. */
-  forget(id: string): void {
+  forget(id: string): Promise<void> {
+    this.bumpGeneration(id)
     this.deactivate(id)
-    this.states.delete(id)
-    this.integrity.delete(id)
-    this.compiled.delete(id)
-    this.persist()
+    return this.enqueueLifecycle(async () => {
+      this.states.delete(id)
+      this.integrity.delete(id)
+      this.compiled.delete(id)
+      this.persist()
+    })
   }
 
   /** Record a freshly installed or updated module so it is recognised as one from now on. */
@@ -569,19 +797,65 @@ export class ModulesHost {
    * was cached".
    */
   async reload(id: string): Promise<{ ok: true } | { ok: false; error: string }> {
+    const generation = this.bumpGeneration(id)
+    this.deactivate(id)
+    return this.enqueueLifecycle(() => this.reloadNow(id, generation))
+  }
+
+  private async reloadNow(
+    id: string,
+    generation: number
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
     const loaded = this.compiled.get(id)
     if (!loaded) return { ok: false, error: `module "${id}" is not known` }
-    this.deactivate(id)
+    if (generation !== this.generation(id)) {
+      return { ok: false, error: 'module reload was superseded' }
+    }
+    const integrity = this.verify(id)
+    if (integrity !== 'ok' && process.env.BM_DEV !== '1') {
+      const error = `module integrity is ${integrity}; refusing to reload`
+      loaded.problem = error
+      return { ok: false, error }
+    }
     try {
-      await compileModule(id)
+      await this.compileModuleShared(id)
     } catch (err) {
       const error = message(err)
       loaded.problem = `compile failed: ${error}`
       this.logger(`module ${id}: ${loaded.problem}`)
       return { ok: false, error }
     }
+    if (generation !== this.generation(id) || this.suspended) {
+      return { ok: false, error: 'module reload was cancelled' }
+    }
+    if (this.verify(id) !== 'ok' && process.env.BM_DEV !== '1') {
+      const error = 'module files changed while reload was compiling'
+      loaded.problem = error
+      return { ok: false, error }
+    }
     loaded.problem = undefined
-    if (this.isEnabled(id)) return this.activate(id)
+    if (this.states.get(id)?.enabled !== true) return { ok: true }
+    const epoch = this.lifecycleEpoch
+    const activations: Promise<{ ok: true } | { ok: false; error: string }>[] = []
+    for (const [machineId, runtime] of this.currentMachineRuntimes()) {
+      if (this.suspendedMachines.has(machineId)) continue
+      activations.push(
+        this.activate(
+          id,
+          machineId,
+          runtime,
+          epoch,
+          generation,
+          this.machineEpoch(machineId),
+          true
+        )
+      )
+    }
+    const results = await Promise.all(activations)
+    const failure = results.find(
+      (result): result is { ok: false; error: string } => !result.ok
+    )
+    if (failure) return failure
     return { ok: true }
   }
 
@@ -590,13 +864,81 @@ export class ModulesHost {
    * whether a module should be activated at all (`apply()`, `reload()`) - this
    * always tries, whatever the enabled flag says.
    */
-  private async activate(id: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  private activate(
+    id: string,
+    machineId: string,
+    runtime: ModuleMachineRuntime,
+    epoch: number,
+    generation: number,
+    machineEpoch: number,
+    compiled = false
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    let byMachine = this.pendingActivations.get(id)
+    if (!byMachine) {
+      byMachine = new Map()
+      this.pendingActivations.set(id, byMachine)
+    }
+    const existing = byMachine.get(machineId)
+    if (
+      existing &&
+      existing.runtime === runtime &&
+      existing.epoch === epoch &&
+      existing.generation === generation &&
+      existing.machineEpoch === machineEpoch &&
+      existing.compiled === compiled
+    ) {
+      return existing.promise
+    }
+    let pending!: PendingActivation
+    const promise = this.activateOnce(
+      id,
+      machineId,
+      runtime,
+      epoch,
+      generation,
+      machineEpoch,
+      compiled
+    ).finally(() => {
+      const current = this.pendingActivations.get(id)
+      if (current?.get(machineId) !== pending) return
+      current.delete(machineId)
+      if (current.size === 0) this.pendingActivations.delete(id)
+    })
+    pending = { runtime, epoch, generation, machineEpoch, compiled, promise }
+    byMachine.set(machineId, pending)
+    return promise
+  }
+
+  private async activateOnce(
+    id: string,
+    machineId: string,
+    runtime: ModuleMachineRuntime,
+    epoch: number,
+    generation: number,
+    machineEpoch: number,
+    compiled: boolean
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
     const loaded = this.compiled.get(id)
     if (!loaded) return { ok: false, error: `module "${id}" is not known` }
+    if (
+      !this.activationCurrent(
+        id,
+        loaded,
+        machineId,
+        runtime,
+        epoch,
+        generation,
+        machineEpoch
+      )
+    ) {
+      return { ok: false, error: 'module activation was cancelled' }
+    }
     // Built before the module runs, because `activate()` uses `ctx` while it
     // is still being called - a poller it creates has to land in this record,
     // not in one written afterwards.
     const live: Live = {
+      machineId,
+      runtime,
       instance: { dispose: () => {} },
       handlers: new Set(),
       pollers: new Set(),
@@ -604,27 +946,93 @@ export class ModulesHost {
       revoked: false
     }
     try {
-      const integrity = this.integrity.get(id) ?? this.verify(id)
-      if (integrity === 'modified' && process.env.BM_DEV !== '1') {
+      if (
+        loaded.manifest.minAppVersion &&
+        compareVersions(appVersion(), loaded.manifest.minAppVersion) < 0
+      ) {
         throw new Error(
-          'module files were modified after install; refuse to activate (set BM_DEV=1 to override)'
+          `module needs Bored Manager ${loaded.manifest.minAppVersion} or later (this is ${appVersion()})`
+        )
+      }
+      const integrity = this.verify(id)
+      if (integrity !== 'ok' && process.env.BM_DEV !== '1') {
+        throw new Error(
+          `module integrity is ${integrity}; refuse to activate (set BM_DEV=1 to override)`
         )
       }
       // Always compile from source so a planted `.dist/main.mjs` cannot skip
-      // the import sandbox. mtime is not trusted.
-      await compileModule(id)
+      // the import sandbox. All machine activations share this build.
+      if (!compiled) await this.compileModuleShared(id)
+      if (
+        !this.activationCurrent(
+          id,
+          loaded,
+          machineId,
+          runtime,
+          epoch,
+          generation,
+          machineEpoch
+        )
+      ) {
+        return { ok: false, error: 'module activation was cancelled' }
+      }
+      if (this.verify(id) !== 'ok' && process.env.BM_DEV !== '1') {
+        throw new Error('module files changed while activation was compiling')
+      }
       const dist = join(moduleDir(id), '.dist', 'main.mjs')
-      const mod = (await import(`${pathToFileURL(dist).href}?v=${Date.now()}`)) as {
+      const version = `${Date.now()}-${++this.importVersion}`
+      const mod = (await import(
+        `${pathToFileURL(dist).href}?v=${version}&m=${encodeURIComponent(machineId)}`
+      )) as {
         default?: ModuleActivate
       }
+      if (
+        !this.activationCurrent(
+          id,
+          loaded,
+          machineId,
+          runtime,
+          epoch,
+          generation,
+          machineEpoch
+        )
+      ) {
+        return { ok: false, error: 'module activation was cancelled' }
+      }
       if (typeof mod.default !== 'function') throw new Error('main entry has no default export function')
-      live.instance = mod.default(this.contextFor(id, loaded.manifest, live))
-      this.live.set(id, live)
+      const instance = mod.default(
+        this.contextFor(id, loaded.manifest, runtime, machineId, live)
+      )
+      live.instance = this.validatedInstance(instance)
+      if (
+        !this.activationCurrent(
+          id,
+          loaded,
+          machineId,
+          runtime,
+          epoch,
+          generation,
+          machineEpoch
+        )
+      ) {
+        this.disposeCandidate(id, live)
+        return { ok: false, error: 'module activation was cancelled' }
+      }
+      if (this.live.get(id)?.has(machineId)) {
+        this.disposeCandidate(id, live)
+        return { ok: false, error: 'module already has a live instance for this machine' }
+      }
+      let instances = this.live.get(id)
+      if (!instances) {
+        instances = new Map()
+        this.live.set(id, instances)
+      }
+      instances.set(machineId, live)
       loaded.problem = undefined
       try {
         live.instance.applyPollers?.()
       } catch (err) {
-        this.logger(`module ${id}: applyPollers failed: ${String(err)}`)
+        this.logger(`module ${id} on ${machineId}: applyPollers failed: ${String(err)}`)
       }
       return { ok: true }
     } catch (err) {
@@ -634,42 +1042,77 @@ export class ModulesHost {
       live.revoked = true
       this.releaseResources(id, live)
       const error = message(err)
-      loaded.problem = `activate() failed: ${error}`
-      this.logger(`module ${id}: ${loaded.problem}`)
+      const problem = `activate() failed on ${machineId}: ${error}`
+      if (!this.isLive(id)) loaded.problem = problem
+      this.logger(`module ${id}: ${problem}`)
       return { ok: false, error }
     }
   }
 
-  /** Whether `.dist/main.mjs` is missing or older than `module.json`/`main/**`. */
-  private needsCompile(id: string): boolean {
-    const dir = moduleDir(id)
-    const distMtime = this.safeMtime(join(dir, '.dist', 'main.mjs'))
-    if (distMtime === 0) return true
-    if (this.safeMtime(join(dir, MODULE_MANIFEST_FILE)) > distMtime) return true
-    return this.newestMtime(join(dir, 'main')) > distMtime
+  private activationCurrent(
+    id: string,
+    loaded: LoadedModule,
+    machineId: string,
+    runtime: ModuleMachineRuntime,
+    epoch: number,
+    generation: number,
+    machineEpoch: number
+  ): boolean {
+    return (
+      !this.suspended &&
+      !this.suspendedMachines.has(machineId) &&
+      epoch === this.lifecycleEpoch &&
+      machineEpoch === this.machineEpoch(machineId) &&
+      generation === this.generation(id) &&
+      this.compiled.get(id) === loaded &&
+      this.states.get(id)?.enabled === true &&
+      this.runtimeStillCurrent(machineId, runtime)
+    )
   }
 
-  private safeMtime(path: string): number {
-    try {
-      return statSync(path).mtimeMs
-    } catch {
-      return 0
-    }
+  private compileModuleShared(id: string): Promise<void> {
+    const existing = this.compilePromises.get(id)
+    if (existing) return existing
+    let pending!: Promise<void>
+    pending = compileModule(id).finally(() => {
+      if (this.compilePromises.get(id) === pending) this.compilePromises.delete(id)
+    })
+    this.compilePromises.set(id, pending)
+    return pending
   }
 
-  private newestMtime(dir: string): number {
-    let newest = 0
-    let entries: Dirent[]
+  private validatedInstance(value: unknown): ModuleMainInstance {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw new Error('main entry did not return a runtime object')
+    }
+    const instance = value as Record<string, unknown>
+    if (typeof instance['dispose'] !== 'function') {
+      throw new Error('module runtime has no dispose() function')
+    }
+    for (const method of [
+      'applyPollers',
+      'reset',
+      'snapshots',
+      'refreshSlow',
+      'slowTargets'
+    ] as const) {
+      if (instance[method] != null && typeof instance[method] !== 'function') {
+        throw new Error(`module runtime ${method} must be a function`)
+      }
+    }
+    return value as ModuleMainInstance
+  }
+
+  private disposeCandidate(id: string, live: Live): void {
     try {
-      entries = readdirSync(dir, { withFileTypes: true })
-    } catch {
-      return 0
+      live.instance.dispose()
+    } catch (error) {
+      this.logger(
+        `module ${id} on ${live.machineId}: dispose after cancelled activation failed: ${message(error)}`
+      )
     }
-    for (const entry of entries) {
-      const full = join(dir, entry.name)
-      newest = Math.max(newest, entry.isDirectory() ? this.newestMtime(full) : this.safeMtime(full))
-    }
-    return newest
+    live.revoked = true
+    this.releaseResources(id, live)
   }
 
   /**
@@ -679,17 +1122,30 @@ export class ModulesHost {
    * it still holds a working context while it does. Afterwards the context is
    * dead and anything left over is cut off.
    */
-  private deactivate(id: string): void {
-    const live = this.live.get(id)
+  private deactivate(id: string, machineId?: string): void {
+    const instances = this.live.get(id)
+    if (!instances) return
+    if (machineId === undefined) {
+      for (const currentMachineId of [...instances.keys()]) {
+        this.deactivate(id, currentMachineId)
+      }
+      return
+    }
+    const live = instances.get(machineId)
     if (!live) return
-    this.live.delete(id)
+    instances.delete(machineId)
+    if (instances.size === 0) this.live.delete(id)
     try {
       live.instance.dispose()
     } catch (err) {
-      this.logger(`module ${id}: dispose failed: ${String(err)}`)
+      this.logger(`module ${id} on ${machineId}: dispose failed: ${String(err)}`)
     }
     live.revoked = true
     this.releaseResources(id, live)
+  }
+
+  private deactivateMachine(machineId: string): void {
+    for (const id of [...this.live.keys()]) this.deactivate(id, machineId)
   }
 
   /**
@@ -699,7 +1155,16 @@ export class ModulesHost {
    * target machine" is otherwise only true of modules that remember to.
    */
   private releaseResources(id: string, live: Live): void {
-    for (const channel of live.handlers) this.unregisterHandler(channel)
+    for (const channel of live.handlers) {
+      const machineHandlers = this.rpcHandlers.get(channel)
+      const registered = machineHandlers?.get(live.machineId)
+      if (registered?.live !== live || !machineHandlers) continue
+      machineHandlers.delete(live.machineId)
+      if (machineHandlers.size === 0) {
+        this.rpcHandlers.delete(channel)
+        this.unregisterHandler(channel)
+      }
+    }
     live.handlers.clear()
     // Only the ones still ticking are worth a line: the set holds every poller
     // the module ever created, and a module that stopped its own has done
@@ -707,7 +1172,9 @@ export class ModulesHost {
     const leaked = [...live.pollers].filter((p) => p.active)
     live.pollers.clear()
     if (leaked.length > 0) {
-      this.logger(`module ${id}: ${leaked.length} poller(s) still running after dispose() - stopping them`)
+      this.logger(
+        `module ${id} on ${live.machineId}: ${leaked.length} poller(s) still running after dispose() - stopping them`
+      )
       for (const poller of leaked) {
         try {
           poller.stop()
@@ -717,7 +1184,9 @@ export class ModulesHost {
       }
     }
     if (live.streams.size > 0) {
-      this.logger(`module ${id}: ${live.streams.size} command(s) still running after dispose() - killing them`)
+      this.logger(
+        `module ${id} on ${live.machineId}: ${live.streams.size} command(s) still running after dispose() - killing them`
+      )
       for (const stream of live.streams) {
         try {
           stream.kill()
@@ -730,12 +1199,15 @@ export class ModulesHost {
   }
 
   /** Drop the per-session state of every running module. */
-  resetAll(): void {
-    for (const [id, live] of this.live) {
-      try {
-        live.instance.reset?.()
-      } catch (err) {
-        this.logger(`module ${id}: reset failed: ${String(err)}`)
+  resetAll(machineId?: string): void {
+    for (const [id, instances] of this.live) {
+      for (const [currentMachineId, live] of instances) {
+        if (machineId !== undefined && currentMachineId !== machineId) continue
+        try {
+          live.instance.reset?.()
+        } catch (err) {
+          this.logger(`module ${id} on ${currentMachineId}: reset failed: ${String(err)}`)
+        }
       }
     }
   }
@@ -746,9 +1218,13 @@ export class ModulesHost {
   }
 
   /** What each running module has buffered, for a renderer that just connected. */
-  snapshots(): Record<string, Record<string, unknown>> {
+  snapshots(machineId?: string): Record<string, Record<string, unknown>> {
     const out: Record<string, Record<string, unknown>> = {}
-    for (const [id, live] of this.live) {
+    const selectedMachineId = machineId ?? this.defaultMachineId()
+    if (!selectedMachineId) return out
+    for (const [id, instances] of this.live) {
+      const live = instances.get(selectedMachineId)
+      if (!live) continue
       try {
         out[id] = live.instance.snapshots?.() ?? {}
       } catch {
@@ -765,22 +1241,37 @@ export class ModulesHost {
    * logged rather than leaving the user with a refresh button that quietly
    * belongs to somebody else.
    */
-  async refreshSlow(target: SlowRefreshTarget): Promise<void> {
-    const owners: string[] = []
-    for (const [id, live] of this.live) {
-      if ((live.instance.slowTargets?.() ?? []).includes(target)) owners.push(id)
+  async refreshSlow(machineId: string, target: SlowRefreshTarget): Promise<void>
+  async refreshSlow(target: SlowRefreshTarget): Promise<void>
+  async refreshSlow(
+    machineIdOrTarget: string,
+    maybeTarget?: SlowRefreshTarget
+  ): Promise<void> {
+    const machineId =
+      maybeTarget === undefined ? this.defaultMachineId() : machineIdOrTarget
+    const target = maybeTarget ?? (machineIdOrTarget as SlowRefreshTarget)
+    if (!machineId) return
+    const owners: Array<{ id: string; live: Live }> = []
+    for (const [id, instances] of this.live) {
+      const live = instances.get(machineId)
+      if (live && (live.instance.slowTargets?.() ?? []).includes(target)) {
+        owners.push({ id, live })
+      }
     }
     if (owners.length === 0) return
     if (owners.length > 1) {
       this.logger(
-        `slow refresh target "${target}" is claimed by ${owners.join(', ')} - only ${owners[0]} will answer it`
+        `slow refresh target "${target}" on ${machineId} is claimed by ${owners.map(({ id }) => id).join(', ')} - only ${owners[0]?.id} will answer it`
       )
     }
-    const live = this.live.get(owners[0])
+    const owner = owners[0]
+    if (!owner) return
     try {
-      await live?.instance.refreshSlow?.(target)
+      await owner.live.instance.refreshSlow?.(target)
     } catch (err) {
-      this.logger(`module ${owners[0]}: refreshSlow(${target}) failed: ${String(err)}`)
+      this.logger(
+        `module ${owner.id} on ${machineId}: refreshSlow(${target}) failed: ${String(err)}`
+      )
     }
   }
 
@@ -796,7 +1287,13 @@ export class ModulesHost {
    * Without it a module could keep a reference to `ctx` and go on running
    * commands or rewriting the config file that uninstalling just deleted.
    */
-  private contextFor(id: string, manifest: ModuleManifest, live: Live): ModuleContext {
+  private contextFor(
+    id: string,
+    manifest: ModuleManifest,
+    runtime: ModuleMachineRuntime,
+    machineId: string,
+    live: Live
+  ): ModuleContext {
     const host = this
     const declaredMethods = new Set(manifest.methods ?? [])
     /** Every entry point goes through this first; the message names the module. */
@@ -807,50 +1304,64 @@ export class ModulesHost {
       id,
       exec: (command, opts) => {
         active()
-        return connection.exec(command, opts)
+        return runtime.manager.exec(command, opts)
       },
       execSudo: (command, opts) => {
         active()
-        return connection.execSudo(command, opts)
+        return runtime.manager.execSudo(command, opts)
       },
       stream: (command) => {
         active()
-        return host.trackStream(live, connection.stream(command, id))
+        return host.trackStream(live, runtime.manager.stream(command, id))
       },
       streamSudo: (command) => {
         active()
-        return host.trackStream(live, connection.streamSudo(command, id))
+        return host.trackStream(live, runtime.manager.streamSudo(command, id))
       },
       get connected() {
-        return !live.revoked && connection.connected
+        return !live.revoked && runtime.manager.connected
       },
       get hasSudo() {
         if (live.revoked) return false
-        const status = connection.status()
+        const status = runtime.manager.status()
         return status.isRoot === true || status.hasSudo === true
       },
       createPoller: (name, tick) => {
         active()
-        const poller = new Poller(`${id}:${name}`, tick)
+        const poller = new Poller(`${id}:${machineId}:${name}`, tick)
         live.pollers.add(poller)
-        return poller
+        return {
+          start: (intervalMs) => {
+            active()
+            poller.start(intervalMs)
+          },
+          stop: () => poller.stop()
+        }
       },
       fastIntervalMs: (key) => {
+        active()
         const speed = host.requireSettings().refresh[key] as RefreshSpeed | undefined
         return speed ? REFRESH_INTERVAL_MS[speed] : 0
       },
       slowIntervalSec: (key) => {
+        active()
         const value = host.requireSettings().slowRefresh[key]
         return typeof value === 'number' ? value : 60
       },
       detailMode: (key) => {
+        active()
         const mode = host.requireSettings().detailPolling[
           key as keyof AppSettings['detailPolling']
         ] as DetailPollingMode | undefined
         return mode ?? 'always'
       },
       get tabActive() {
-        return !live.revoked && moduleTabActive(host.activeTabs, id)
+        const tabs = host.activeTabsByMachine.get(machineId)
+        return (
+          !live.revoked &&
+          tabs != null &&
+          moduleSurfaceActive(tabs, id, manifest, host.requireSettings())
+        )
       },
       // An event name is not checked against `manifest.streams`: a `log` block
       // deliberately tails an event that is not a declared stream. The channel
@@ -858,7 +1369,10 @@ export class ModulesHost {
       // reach this module's own blocks.
       emit: (event, payload) => {
         active()
-        host.send(`module:${id}:event:${event}`, payload)
+        const channel = `module:${id}:event:${event}`
+        const message = { machineId, data: payload }
+        if (host.sendToMachine) host.sendToMachine(machineId, channel, message)
+        else host.send(channel, message)
       },
       handle: (method, fn) => {
         active()
@@ -868,15 +1382,20 @@ export class ModulesHost {
           )
         }
         const channel = `module:${id}:invoke:${method}`
-        live.handlers.add(channel)
-        host.registerHandler(channel, fn as (...args: unknown[]) => unknown)
+        if (live.handlers.has(channel)) {
+          throw new Error(`method "${method}" was registered more than once`)
+        }
+        host.registerModuleHandler(channel, machineId, live, (...args: unknown[]) => {
+          active()
+          return fn(...(args as never[]))
+        })
       },
       addHistory: (point, stream) => {
         active()
         const name = stream ?? id
         const problem = historyStreamProblem(id, name)
         if (problem) throw new Error(problem)
-        host.history.add(name, point)
+        runtime.history.add(name, point)
       },
       configGet: () => {
         active()
@@ -887,24 +1406,61 @@ export class ModulesHost {
         writeModuleConfig(id, value)
       },
       get hostKey() {
-        return live.revoked ? null : host.hostKey
+        return live.revoked ? null : machineId
       },
       hostDataGet: () => {
         active()
-        return host.hostKey ? readModuleData(id, host.hostKey) : null
+        return readModuleData(id, machineId)
       },
       hostDataSet: (value) => {
         active()
-        // Silently doing nothing while disconnected beats throwing: a module
-        // that tags a container has no say in when the session drops.
-        if (host.hostKey) writeModuleData(id, host.hostKey, value)
+        writeModuleData(id, machineId, value)
       },
       isModuleEnabled: (other) => !live.revoked && host.isEnabled(other),
       log: (message) => {
         active()
-        host.logger(`module ${id}: ${message}`)
+        host.logger(`module ${id} on ${machineId}: ${message}`)
       }
     }
+  }
+
+  private registerModuleHandler(
+    channel: string,
+    machineId: string,
+    live: Live,
+    fn: (...args: unknown[]) => unknown
+  ): void {
+    let machineHandlers = this.rpcHandlers.get(channel)
+    if (machineHandlers?.has(machineId)) {
+      throw new Error(`RPC channel "${channel}" already has a handler for machine "${machineId}"`)
+    }
+    if (!machineHandlers) {
+      machineHandlers = new Map()
+      const dispatcher = (...args: unknown[]): unknown => {
+        const requestedMachineId = args[0]
+        if (typeof requestedMachineId === 'string') {
+          const registered = machineHandlers?.get(requestedMachineId)
+          if (registered) return registered.fn(...args.slice(1))
+        }
+        // A five-argument host predates machine-aware RPC. Keep its one
+        // instance callable without a prepended id until IPC is migrated.
+        if (this.usesLegacyRuntime() && machineHandlers?.size === 1) {
+          const registered = machineHandlers.values().next().value
+          if (registered) return registered.fn(...args)
+        }
+        if (!machineHandlers || machineHandlers.size === 0) {
+          throw new Error('module RPC handler is no longer running')
+        }
+        if (typeof requestedMachineId !== 'string') {
+          throw new Error('module RPC call requires a machine id as its first argument')
+        }
+        throw new Error(`no live module RPC handler for machine "${requestedMachineId}"`)
+      }
+      this.registerHandler(channel, dispatcher)
+      this.rpcHandlers.set(channel, machineHandlers)
+    }
+    machineHandlers.set(machineId, { live, fn })
+    live.handlers.add(channel)
   }
 
   /**
@@ -923,13 +1479,150 @@ export class ModulesHost {
       handle.kill()
       throw new Error('module was stopped before the command started')
     }
-    live.streams.add(handle)
-    handle.onExit(() => live.streams.delete(handle))
-    return handle
+    const wrapped: ModuleStreamHandle = {
+      write: (data) => {
+        if (live.revoked) throw new Error('module stream is no longer running')
+        handle.write(data)
+      },
+      kill: () => handle.kill(),
+      onData: (callback) => {
+        if (live.revoked) throw new Error('module stream is no longer running')
+        handle.onData(callback)
+      },
+      onExit: (callback) => {
+        if (live.revoked) throw new Error('module stream is no longer running')
+        handle.onExit(callback)
+      }
+    }
+    live.streams.add(wrapped)
+    handle.onExit(() => live.streams.delete(wrapped))
+    return wrapped
   }
 
   private requireSettings(): AppSettings {
     if (!this.settings) throw new Error('modules host used before configure()')
     return this.settings
+  }
+
+  private usesLegacyRuntime(): boolean {
+    return !this.resolveMachine || !this.listMachineIds
+  }
+
+  /**
+   * Before setHostKey is ever called, retain one synthetic machine so old
+   * tests and embedders can activate modules exactly as the singleton host did.
+   * An explicit null means the legacy connection has been disconnected.
+   */
+  private legacyMachineId(): string | null {
+    if (!this.usesLegacyRuntime()) return null
+    if (this.hostKey) return this.hostKey
+    return this.hostKeyWasSet ? null : LEGACY_MACHINE_ID
+  }
+
+  private listedMachineIds(): string[] {
+    if (this.usesLegacyRuntime()) {
+      const machineId = this.legacyMachineId()
+      return machineId ? [machineId] : []
+    }
+    try {
+      return [...new Set(this.listMachineIds?.() ?? [])].filter(Boolean)
+    } catch (error) {
+      this.logger(`could not list module machines: ${message(error)}`)
+      return []
+    }
+  }
+
+  private resolvedRuntime(machineId: string): ModuleMachineRuntime | undefined {
+    if (this.usesLegacyRuntime()) {
+      const currentMachineId = this.legacyMachineId()
+      if (currentMachineId !== machineId) return undefined
+      this.legacyRuntime.id = machineId
+      return this.legacyRuntime
+    }
+    try {
+      return this.resolveMachine?.(machineId)
+    } catch (error) {
+      this.logger(`could not resolve module machine ${machineId}: ${message(error)}`)
+      return undefined
+    }
+  }
+
+  private currentMachineRuntimes(): Map<string, ModuleMachineRuntime> {
+    const runtimes = new Map<string, ModuleMachineRuntime>()
+    for (const machineId of this.listedMachineIds()) {
+      const runtime = this.resolvedRuntime(machineId)
+      if (!runtime || runtime.id !== machineId) continue
+      // The old singleton host activated while disconnected in unit tests.
+      // MachinePool runtimes, however, only own module instances while live.
+      if (!this.usesLegacyRuntime() && !runtime.manager.connected) continue
+      runtimes.set(machineId, runtime)
+      if (this.legacyActiveTabs) {
+        this.activeTabsByMachine.set(machineId, this.legacyActiveTabs)
+      }
+    }
+    return runtimes
+  }
+
+  private runtimeStillCurrent(
+    machineId: string,
+    runtime: ModuleMachineRuntime
+  ): boolean {
+    if (runtime.id !== machineId) return false
+    if (!this.listedMachineIds().includes(machineId)) return false
+    if (this.resolvedRuntime(machineId) !== runtime) return false
+    return this.usesLegacyRuntime() || runtime.manager.connected
+  }
+
+  private deactivateStale(runtimes: Map<string, ModuleMachineRuntime>): void {
+    for (const [id, instances] of this.live) {
+      for (const [machineId, live] of instances) {
+        if (
+          !this.isEnabled(id) ||
+          this.suspendedMachines.has(machineId) ||
+          runtimes.get(machineId) !== live.runtime
+        ) {
+          this.deactivate(id, machineId)
+        }
+      }
+    }
+  }
+
+  private defaultMachineId(): string | undefined {
+    const legacyMachineId = this.legacyMachineId()
+    if (legacyMachineId) return legacyMachineId
+    for (const instances of this.live.values()) {
+      const machineId = instances.keys().next().value
+      if (typeof machineId === 'string') return machineId
+    }
+    return this.listedMachineIds()[0]
+  }
+
+  private machineEpoch(machineId: string): number {
+    return this.machineEpochs.get(machineId) ?? 0
+  }
+
+  private bumpMachineEpoch(machineId: string): number {
+    const next = this.machineEpoch(machineId) + 1
+    this.machineEpochs.set(machineId, next)
+    return next
+  }
+
+  private generation(id: string): number {
+    return this.generations.get(id) ?? 0
+  }
+
+  private bumpGeneration(id: string): number {
+    const next = this.generation(id) + 1
+    this.generations.set(id, next)
+    return next
+  }
+
+  private enqueueLifecycle<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.lifecycleTail.then(operation, operation)
+    this.lifecycleTail = result.then(
+      () => undefined,
+      () => undefined
+    )
+    return result
   }
 }

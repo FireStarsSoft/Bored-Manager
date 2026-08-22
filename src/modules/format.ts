@@ -26,7 +26,7 @@ export function formatBlockValue(format: ValueFormat | undefined, value: unknown
   }
 }
 
-/** A block-declared series needs a colour; block specs do not carry one, so every chart draws from this. */
+/** Fallback swatches when a series does not name a `color`. */
 export const BLOCK_PALETTE: ChartColor[] = [
   'primary',
   'cpu',

@@ -165,6 +165,7 @@ The main half is bundled with a resolver that **denies** anything else. The inst
 | `@shared/shell` | `splitSections`, `shQuote`, `PHYSICAL_DISK`. |
 | `@shared/ss` | The `ss` command and its parser. |
 | `@shared/check` | `ModuleCheckReport`, `ModuleCheckFinding` and `createCheckSession()` — what a `checkForm` block talks to. |
+| `@shared/cache` | `createTtlCache()` for coalescing duplicate read-only RPC probes and briefly reusing successful results. Never cache an action. |
 | `@shared/module-ui` | The Block types, `FormFieldOption`, and `FORM_COLOR_SWATCHES` when a method picks a colour on the user's behalf. The main half does not render. |
 | Relative imports inside **this** module | Split `main/` into files. |
 | Relative imports inside `shared/` | Only from a file that already lives in `shared/` (you will not write those). |
@@ -319,6 +320,89 @@ Full (hello's details page wraps a keyValue; disk filesystems adds a slow target
 }
 ```
 
+### `subnav`
+
+An in-page sidebar with one block list per item. All items stay mounted so their local UI state is preserved, but invoke polling is disabled for every hidden item. Below the `md` breakpoint, the sidebar becomes a horizontally scrolling row above the content.
+
+| Prop | Type | Required |
+|---|---|---|
+| `items` | `{ id, label, icon?, blocks }[]` | yes — 1–32 items |
+| `items[].id` | string | yes — `/^[a-z][a-z0-9-]{0,31}$/`, unique within this subnav |
+| `items[].label` | string | yes |
+| `items[].icon` | string | no — a name from the module icon whitelist |
+| `items[].blocks` | Block[] | yes |
+| `initial` | string | no — item id selected on first render; defaults to the first item |
+
+Minimal:
+
+```json
+{
+  "type": "subnav",
+  "items": [
+    {
+      "id": "overview",
+      "label": "Overview",
+      "blocks": [{ "type": "note", "lines": ["Choose an operation from this page."] }]
+    }
+  ]
+}
+```
+
+Full:
+
+```json
+{
+  "type": "subnav",
+  "initial": "jobs",
+  "items": [
+    {
+      "id": "automation",
+      "label": "Automation",
+      "icon": "Zap",
+      "blocks": [
+        { "type": "note", "title": "Before you start", "lines": ["Check the target first."] }
+      ]
+    },
+    {
+      "id": "jobs",
+      "label": "Jobs",
+      "icon": "ListTree",
+      "blocks": [{ "type": "section", "title": "Recent jobs", "blocks": [] }]
+    }
+  ]
+}
+```
+
+### `note`
+
+Static guidance or an operational warning. It has no data source.
+
+| Prop | Type | Required |
+|---|---|---|
+| `title` | string | no |
+| `lines` | string[] | yes — 1–32 non-empty short paragraphs |
+| `tone` | `"info"` \| `"warning"` | no — default `"info"` |
+
+Minimal:
+
+```json
+{ "type": "note", "lines": ["Values are checked before they are applied."] }
+```
+
+Full:
+
+```json
+{
+  "type": "note",
+  "title": "Connectivity warning",
+  "tone": "warning",
+  "lines": [
+    "Stopping this rule can interrupt connected clients.",
+    "Run a fresh check before applying it again."
+  ]
+}
+```
+
 ### `stat`
 
 A labelled value, optionally with a sparkline.
@@ -396,12 +480,15 @@ A line, area or bar chart.
 | `title` | string | no |
 | `kind` | `"line"` \| `"area"` \| `"bar"` | yes |
 | `source` | DataSource | yes — should resolve to an array of `{ t, … }` |
-| `series` | `{ key, label, unit? }[]` | yes, non-empty. `unit` is a literal suffix when there is no `format` (e.g. `"RPM"`). |
+| `series` | `{ key, label, unit?, axis?, format?, color? }[]` | no — omit to take every numeric key on the last point except `t` (for a set of series the machine decides, e.g. sensors). If present it must be non-empty. `unit` on a series is a literal suffix when there is no `format` (e.g. `"RPM"`). `axis` is `"left"` (default) or `"right"` — a right series adds a second Y-axis. `format` on a series overrides the chart-level `format` for that series' axis and tooltip. `color` is a chart token (`gpu`, `warning`, …); omit to take the next palette swatch. `stacked: true` cannot be used with a right axis. |
+| `maxSeries` | number | no — cap when inferring series from keys. Ignored when `series` is declared. |
+| `unit` | string | no — chart-level suffix when series are inferred (there is then no per-series `unit`). Ignored when `format` is set. |
+| `decimals` | number | no — decimal places for the unit suffix or a raw number. Ignored when `format` is set. Default `0`. |
 | `format` | ValueFormat | no |
 | `stacked` | boolean | no |
 | `window` | number (seconds) | no — see widget fallbacks |
 
-Minimal:
+Minimal (declared series):
 
 ```json
 {
@@ -409,6 +496,19 @@ Minimal:
   "kind": "area",
   "source": { "kind": "stream", "event": "series" },
   "series": [{ "key": "uptime", "label": "Uptime", "unit": "h" }]
+}
+```
+
+Inferred series (keys come from the data):
+
+```json
+{
+  "type": "chart",
+  "title": "Temperature",
+  "kind": "area",
+  "source": { "kind": "stream", "event": "temps" },
+  "format": "temp",
+  "maxSeries": 8
 }
 ```
 
@@ -425,7 +525,66 @@ Full:
 }
 ```
 
+Dual-axis (two units on one plot):
+
+```json
+{
+  "type": "chart",
+  "title": "Utilisation & temperature",
+  "kind": "area",
+  "source": { "kind": "stream", "event": "series" },
+  "series": [
+    { "key": "util", "label": "Utilisation", "format": "pct", "axis": "left", "color": "gpu" },
+    { "key": "temp", "label": "Temperature", "format": "temp", "axis": "right", "color": "warning" }
+  ]
+}
+```
+
 A window longer than the live buffer should use `"kind": "history"` so old points come off disk.
+
+### `pie`
+
+A donut (part-of-whole snapshot). Not a `chart` kind: those are time series of `{ t, … }`. The source must resolve to one object; each slice names a numeric key on it. Colours come from `status` (`ok` / `warn` / `bad` / `unknown`) — the same tokens as `statusCards` — so a spec cannot pick a paint colour.
+
+| Prop | Type | Required |
+|---|---|---|
+| `source` | DataSource | yes — an object of numeric fields |
+| `slices` | `{ key, label, status }[]` | yes, non-empty. `status` is `"ok"` \| `"warn"` \| `"bad"` \| `"unknown"`. |
+| `center` | `{ key, label? }` | no — number in the hole. Omit to sum the slices. `label` is the caption under that number. |
+| `emptyText` | string | no — shown when the object is missing or the centre is 0 |
+| `format` | ValueFormat | no — defaults to `number` |
+
+Zero slices still appear in the legend (so a missing colour means "none of these"). A widget draws a compact donut; a page draws a larger one.
+
+Minimal:
+
+```json
+{
+  "type": "pie",
+  "source": { "kind": "stream", "event": "hosts", "path": "counts" },
+  "slices": [
+    { "key": "online", "label": "Normal", "status": "ok" },
+    { "key": "offline", "label": "Error", "status": "bad" }
+  ]
+}
+```
+
+Full (the Services module's Overview card):
+
+```json
+{
+  "type": "pie",
+  "source": { "kind": "stream", "event": "hosts", "path": "counts" },
+  "center": { "key": "total", "label": "Machines" },
+  "emptyText": "No machines watched yet",
+  "slices": [
+    { "key": "online", "label": "Normal", "status": "ok" },
+    { "key": "degraded", "label": "Warning", "status": "warn" },
+    { "key": "offline", "label": "Error", "status": "bad" },
+    { "key": "unknown", "label": "Unknown", "status": "unknown" }
+  ]
+}
+```
 
 ### `keyValue`
 
@@ -748,15 +907,37 @@ Shared by `form` and `checkForm`. Every `key` is required and must be unique wit
 
 | Prop | Meaning |
 |---|---|
-| `input` | `"number"` \| `"text"` \| `"select"` \| `"checkbox"` \| `"password"` \| `"textarea"` \| `"color"` |
+| `input` | `"number"` \| `"text"` \| `"select"` \| `"checkbox"` \| `"password"` \| `"textarea"` \| `"file"` \| `"color"` |
 | `options` | `{ value, label }[]`, `select` only |
 | `optionsFrom` | A DataSource, `select` only — choices asked of the module instead of listed, so a form can offer what actually exists on the target. Must resolve to `{ value, label }[]`. Read **once**, when the block first becomes visible. |
+| `accept` | Browser file-picker filter, `file` only. Defaults to `.txt`. |
+| `maxKb` | Maximum file size in KiB, `file` only. Defaults to `1024`. |
+| `omitOnApply` | `checkForm` only. The full value is sent to the check, then an empty string is sent with the apply token. Use when the check freezes a large or sensitive value in its one-use token payload. |
 | `placeholder` | Placeholder text. |
 | `help` | One line under the field saying what it is for. |
 | `initial` | What the field starts as. |
 | `initialFromScope` | A scope key to start from (a table row's field), which wins over `initial`. |
 
-`number` is sent as a number, `checkbox` as a boolean, everything else as a string. `color` is a hex string with a swatch picker; **empty is meaningful** — a module is free to read it as "pick one for me", which is what the Container module's tags do. `password` only hides the typing; it travels on the same channel as everything else, so do not put one in something you then save to disk.
+`number` is sent as a number, `checkbox` as a boolean, everything else as a string. A `file` field reads the selected file as text in the browser and sends that text as the field value; it does not upload the file or send its filename. The picker shows the filename and size locally and rejects files over `maxKb`. A module using `omitOnApply` must issue its check token against the correspondingly blanked apply values, while retaining the checked content only in the token payload. `color` is a hex string with a swatch picker; **empty is meaningful** — a module is free to read that as "pick one for me", which is what the Container module's tags do. `password` only hides the typing; it travels on the same channel as everything else, so do not put one in something you then save to disk.
+
+File field, minimal:
+
+```json
+{ "key": "contents", "label": "Text file", "input": "file" }
+```
+
+File field, full:
+
+```json
+{
+  "key": "accounts",
+  "label": "Account list",
+  "input": "file",
+  "accept": ".txt,text/plain",
+  "maxKb": 1024,
+  "help": "One account per line; the form sends the file's text content."
+}
+```
 
 Minimal:
 
@@ -914,7 +1095,7 @@ Full (GPU widget):
       ]
     }
   ],
-  "else": [{ "type": "section", "title": "No NVIDIA GPU detected", "blocks": [] }]
+  "else": [{ "type": "section", "title": "No GPU detected", "blocks": [] }]
 }
 ```
 

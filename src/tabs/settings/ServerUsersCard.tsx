@@ -36,6 +36,8 @@ function ServerUsersCard(): React.JSX.Element {
 
   const [portDraft, setPortDraft] = React.useState('')
   const [hostDraft, setHostDraft] = React.useState('')
+  const [allowedHostsDraft, setAllowedHostsDraft] = React.useState('')
+  const [trustProxyDraft, setTrustProxyDraft] = React.useState(false)
   const [restartNeeded, setRestartNeeded] = React.useState(false)
   const [users, setUsers] = React.useState<UserAccount[] | null>(null)
   const [newUser, setNewUser] = React.useState({ username: '', password: '' })
@@ -49,7 +51,9 @@ function ServerUsersCard(): React.JSX.Element {
     if (!server) return
     setPortDraft(String(server.port))
     setHostDraft(server.host)
-  }, [server?.port, server?.host]) // eslint-disable-line react-hooks/exhaustive-deps
+    setAllowedHostsDraft(server.allowedHosts.join(', '))
+    setTrustProxyDraft(server.trustProxy)
+  }, [server?.port, server?.host, server?.allowedHosts, server?.trustProxy]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadUsers = React.useCallback(async () => {
     try {
@@ -83,9 +87,22 @@ function ServerUsersCard(): React.JSX.Element {
       setPortDraft(String(server.port))
       return
     }
-    const saved = await updateSettings({ server: { port, host: hostDraft.trim() } })
+    const allowedHosts = allowedHostsDraft
+      .split(/[\s,]+/)
+      .map((value) => value.trim())
+      .filter(Boolean)
+    const saved = await updateSettings({
+      server: {
+        port,
+        host: hostDraft.trim(),
+        allowedHosts,
+        trustProxy: trustProxyDraft
+      }
+    })
     setPortDraft(String(saved.server.port))
     setHostDraft(saved.server.host)
+    setAllowedHostsDraft(saved.server.allowedHosts.join(', '))
+    setTrustProxyDraft(saved.server.trustProxy)
     if (saved.restartRequired) {
       setRestartNeeded(true)
       showNotice('info', 'Restart the server for the new address to take effect')
@@ -178,7 +195,12 @@ function ServerUsersCard(): React.JSX.Element {
           </div>
           <Button
             onClick={() => void saveServer()}
-            disabled={portDraft === String(server.port) && hostDraft === server.host}
+            disabled={
+              portDraft === String(server.port) &&
+              hostDraft === server.host &&
+              allowedHostsDraft === server.allowedHosts.join(', ') &&
+              trustProxyDraft === server.trustProxy
+            }
           >
             <Save className="size-3.5" /> Save
           </Button>
@@ -186,6 +208,32 @@ function ServerUsersCard(): React.JSX.Element {
         <div className="text-xs text-muted-foreground">
           <span className="mono">0.0.0.0</span> answers on every network interface;{' '}
           <span className="mono">127.0.0.1</span> only on the machine itself.
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="server-allowed-hosts" className="text-xs text-muted-foreground">
+            Additional allowed hostnames
+          </Label>
+          <Input
+            id="server-allowed-hosts"
+            value={allowedHostsDraft}
+            placeholder="manager.example.com, 192.168.1.20"
+            onChange={(e) => setAllowedHostsDraft(e.target.value)}
+          />
+          <div className="text-xs text-muted-foreground">
+            Localhost and this machine&apos;s interface addresses are allowed automatically.
+            Separate extra DNS names or addresses with commas.
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm">Trust a local reverse proxy</div>
+            <div className="text-xs text-muted-foreground">
+              Accept forwarded client IP and HTTPS headers only from a proxy on this machine
+            </div>
+          </div>
+          <Switch checked={trustProxyDraft} onCheckedChange={setTrustProxyDraft} />
         </div>
 
         {!listening.enabled && isOpenBind(server.host) && (

@@ -1,7 +1,7 @@
 {
   "name": "bored-manager",
-  "version": "0.3.2",
-  "description": "Bored Manager - web UI for Linux system processes, network, disk, packages, NVIDIA GPU and containers (Docker/Incus) - local or remote over SSH",
+  "version": "0.3.3",
+  "description": "Bored Manager - web UI for Linux system processes, network, disk, sensors, packages, GPU, containers (Docker/Incus) and systemd services - local or remote over SSH",
   "type": "module",
   "private": true,
   "scripts": {
@@ -14,7 +14,12 @@
     "build:server": "vite build --config vite.config.server.ts",
     "start": "node out/server/index.mjs",
     "pretypecheck": "node scripts/licenses.mjs",
-    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.test.json",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "test:scripts": "tsx scripts/check-protocol-contract.ts",
+    "test": "npm run test:unit && npm run test:integration && npm run test:scripts",
+    "check": "npm run typecheck && npm test",
     "modules:lock": "node scripts/modules-lock.mjs",
     "modules:verify": "node scripts/modules-lock.mjs --check",
     "modules:pack": "node scripts/package-module.mjs",
@@ -51,6 +56,8 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.2",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.2",
     "@types/express": "^5.0.6",
     "@types/express-session": "^1.19.0",
     "@types/multer": "^2.2.0",
@@ -61,9 +68,14 @@
     "@types/ssh2": "^1.15.5",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^5.2.0",
+    "jsdom": "^29.1.1",
     "tailwindcss": "^4.3.2",
     "tsx": "^4.23.12",
     "typescript": "^6.0.3",
-    "vite": "^7.3.6"
+    "vite": "^7.3.6",
+    "vitest": "^4.1.11"
+  },
+  "optionalDependencies": {
+    "node-pty": "^1.1.0"
   }
 }

@@ -10,7 +10,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sh
 import { Switch } from '@/components/ui/switch'
 import { SelectField } from '@/components/select-field'
 import { cn } from '@/lib/utils'
-import { resolvePath, useBlockDataWithRefetch } from '../binding'
+import { BlockData, resolvePath } from '../binding'
 import { ActionButton } from '../action-runner'
 import { BlockList, type BlockCtx } from '../BlockRenderer'
 
@@ -277,7 +277,26 @@ export function StatusCardsBlockView({
   block: StatusCardsBlock
   ctx: BlockCtx
 }): React.JSX.Element {
-  const { value, refetch } = useBlockDataWithRefetch(ctx.moduleId, block.source, ctx)
+  return (
+    <BlockData moduleId={ctx.moduleId} source={block.source} opts={ctx}>
+      {({ value, refetch }) => (
+        <StatusCardsContent block={block} ctx={ctx} value={value} refetch={refetch} />
+      )}
+    </BlockData>
+  )
+}
+
+function StatusCardsContent({
+  block,
+  ctx,
+  value,
+  refetch
+}: {
+  block: StatusCardsBlock
+  ctx: BlockCtx
+  value: unknown
+  refetch: () => void
+}): React.JSX.Element {
   const rows = React.useMemo<Row[]>(() => (Array.isArray(value) ? (value as Row[]) : []), [value])
 
   const minCols = Math.max(1, block.columns?.min ?? 1)

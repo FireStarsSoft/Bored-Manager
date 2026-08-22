@@ -2,10 +2,19 @@
 
 All notable changes to Bored Manager. Each module keeps its own changelog in `modules/<id>/CHANGELOG.md`, because module versions are independent of the app's.
 
+## 0.3.3
+
+- **Many machines.** The server keeps a shared pool of local and SSH targets. Adding or disconnecting a machine changes the pool for every browser; each tab still picks which machine it is viewing.
+- **Module renderer extensions.** Module pages can use a responsive `subnav` block that preserves hidden item state while pausing their invoke polling, static info/warning `note` blocks, a `pie` block, and client-side `file` form fields that send text content with configurable picker filters and size limits. A `checkForm` field can set `omitOnApply` so a large or sensitive value is frozen into the one-use check token and is not sent again on apply.
+- **WebSocket payload budget.** Inbound RPC frames accept up to 2 MiB so a 1 MiB uploaded text list fits the envelope; outbound results and the per-socket queue accept up to 8 MiB so a visibility-gated thousand-row table can return in one reply.
+- **BMC module.** Out-of-band IPMI power, boot-device, sensor and event-log management from a connected management station. Ships disabled.
+- **OpenWRT module.** Monitor one directly connected OpenWRT router, create large PPPoE batches from uploaded or pasted account lists, and automatically bind DHCP clients on one LAN to free WANs on one carrier, one-to-one. Small summaries are pushed live while large tables stay visibility-gated and are answered from memory. Ships disabled.
+- **CI runs the test suite.** Pushes and pull requests run `npm test` after typecheck. `SETTINGS_VERSION` is 7 (`server.allowedHosts`, `server.trustProxy`).
+
 ## 0.3.2
 
 - **Install / update / uninstall.** `./bored-manager update` and `./bored-manager uninstall` are first-class commands. The in-app updater escapes the systemd cgroup so Confirm & install can finish, restarts without a unit via `bored-manager start`, and reports quarantined modules in `update-result.json`. `install.sh` can update an existing folder without wiping the chosen port; `--refresh` reinstalls the app while keeping accounts and settings; `--renew --yes` is a factory reset. `uninstall.sh` stops a pidfile process and accepts `--yes`.
-- **Docs and scripts match the current settings schema.** `SETTINGS_VERSION` is 6 (`docker` → `container`); the installer template, uninstall leftovers and the updater's "Task Manager" comment are gone.
+- **Docs and scripts match the current settings schema.** `SETTINGS_VERSION` was 6 at this release (`docker` → `container`); the installer template, uninstall leftovers and the updater's "Task Manager" comment are gone. 0.3.3 raised it to 7 (`server.allowedHosts`, `server.trustProxy`).
 - **Hardening.** WebSocket upgrades require a same-origin `Origin`; sensitive files under `data/` are `0600` / `0700`; uploads have size limits; history stream names are validated; module and app downloads stay on GitHub hosts; password hashing is async scrypt; lockout is per username and per address. A bind of `0.0.0.0` with login off is warned in the UI and at startup. Releases attach a SHA-256 file; `install.sh` verifies it; `update.sh` keeps `data/module-data/`. Container, GPU and Processes refuse unknown actions, signals and pids before they reach the shell.
 - **CI.** Pushes to `main` run typecheck, build, and the module lock / spec / compile checks. Unused Radix packages and unused shadcn primitives (`accordion`, `popover`, `scroll-area`, `slider`) are gone.
 

@@ -27,7 +27,9 @@ Open the URL Vite prints (typically `http://localhost:5173`). The same `/api` an
 | `npm run dev` | Vite renderer, hot reload |
 | `npm run build` | production bundle: `out/renderer/` + `out/server/index.mjs` (runs `licenses.mjs` first) |
 | `npm run start` | `node out/server/index.mjs` |
-| `npm run typecheck` | `tsc --noEmit` for both halves; **includes module `main/`** |
+| `npm run typecheck` | `tsc --noEmit` for server, renderer, and tests (`tsconfig.test.json`); **includes module `main/`** except BMC/OpenWRT (those stay on `modules:compile`) |
+| `npm test` | Vitest unit + integration, then the RPC protocol contract |
+| `npm run check` | typecheck then `npm test` |
 | `npm run modules:lock` | regenerate `modules/modules.lock.json` |
 | `npm run modules:verify` | fail if the lock is out of date |
 | `npm run modules:pack -- <id-or-path>` | zip one module for distribution |
@@ -95,9 +97,9 @@ Do not execute anything from the spec. Blocks only *declare* data sources and me
 ## Adding a setting
 
 1. Add the field to `AppSettings` and to `DEFAULT_SETTINGS` in `shared/types.ts`.
-2. Add it to `mergeSettings()` in `server/services/store.ts`. **Every field has to be listed there** — the merge builds a fresh object, which is what drops fields the current version does not know.
+2. Add it to `normalizeAppSettings()` in `shared/app-settings.ts`. **Every field has to be listed there** — the merge builds a fresh object, which is what drops fields the current version does not know.
 3. If it is a nested object, add it to the deep merge in `updateSettings()` in `src/state/store.ts`, or a patch will replace it wholesale instead of merging.
-4. If the shape of an existing field changed, bump `SETTINGS_VERSION` and convert it in `mergeSettings()`.
+4. If the shape of an existing field changed, bump `SETTINGS_VERSION` and convert it in `normalizeAppSettings()`.
 5. Add the control to `src/tabs/SettingsTab.tsx`.
 6. If it can influence a poller, make sure `applyPollers()` reacts — it already runs on every settings change.
 7. Changing `server.port` / `server.host` only takes effect after a restart. Changing `auth.sessionIdle` only applies to **new** sessions.
@@ -148,7 +150,10 @@ Keep this in mind before adding a dependency with a native component.
 
 ```bash
 npm run typecheck
+npm test
 npm run build
 ```
+
+CI on `main` and pull requests runs those three, then `modules:verify`, `modules:specs` and `modules:compile`.
 
 If you touched `modules/`, also `npm run modules:lock` and commit the lock file with the change. Then run it against a real target and check the specific thing you changed. [MAINTENANCE.md](MAINTENANCE.md) has the full release checklist.

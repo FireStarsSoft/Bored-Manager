@@ -12,6 +12,7 @@ import { Switch } from '@/components/ui/switch'
 import { copyText, formatBytes } from '@/lib/utils'
 import { timeLabel } from './shared'
 import { errorMessage } from '@/lib/utils'
+import { useDocumentVisible } from '@/lib/visibility'
 import { RETENTION_OPTIONS } from './options'
 
 /**
@@ -23,7 +24,8 @@ function DataStorageCard(): React.JSX.Element {
   const settings = useApp((s) => s.settings)
   const updateSettings = useApp((s) => s.updateSettings)
   const showNotice = useApp((s) => s.showNotice)
-  const connected = useApp((s) => s.status.connected)
+  const machineCount = useApp((s) => s.machines.length)
+  const documentVisible = useDocumentVisible()
   const [stats, setStats] = React.useState<HistoryStats | null>(null)
   const [confirmPurge, setConfirmPurge] = React.useState(false)
   const [capDraft, setCapDraft] = React.useState('')
@@ -37,10 +39,11 @@ function DataStorageCard(): React.JSX.Element {
   }, [showNotice])
 
   React.useEffect(() => {
+    if (!documentVisible) return
     void load()
     const id = setInterval(() => void load(), 15000)
     return () => clearInterval(id)
-  }, [load])
+  }, [load, documentVisible])
 
   const history = settings?.history
   React.useEffect(() => {
@@ -68,13 +71,9 @@ function DataStorageCard(): React.JSX.Element {
     ['Folder', <span className="mono break-all">{stats?.dir ?? '—'}</span>],
     [
       'Writing to',
-      connected ? (
-        <span className="mono break-all">{stats?.currentFile?.split(/[\\/]/).pop() ?? '—'}</span>
-      ) : (
-        'not connected'
-      )
+      <span className="mono break-all">{stats?.dir ?? '—'}</span>
     ],
-    ['Machine', stats?.hostKey ?? '—'],
+    ['Connected machines', String(machineCount)],
     [
       'On disk',
       `${formatBytes(stats?.totalBytes ?? 0)} in ${stats?.fileCount ?? 0} file${

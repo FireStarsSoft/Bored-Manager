@@ -47,9 +47,10 @@ export function CollectionCard(): React.JSX.Element {
         ))}
         <div className="border-t border-border pt-2.5">
           <div className="mb-2 text-xs text-muted-foreground">
-            The detail collectors below are the heaviest ones (they enumerate every socket / every
-            process). "While tab is open" keeps them free when you are not looking; "Always" keeps
-            per-process session totals accurate in the background.
+            These collectors run external tools or enumerate detailed target state. “While
+            page/card is visible” stops that work when neither a module page nor one of its enabled
+            Overview cards is on screen; time-series history will have gaps while it is stopped.
+            “Always” preserves continuous history and per-process session totals.
           </div>
           <div className="flex flex-col gap-2.5">
             {DETAIL_COLLECTORS.map((d) => (

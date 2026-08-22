@@ -96,7 +96,7 @@
                 { "key": "clockMem", "label": "Mem clock (MHz)", "format": "number", "align": "right" }
               ],
               "sortDefault": { "key": "index", "dir": "asc" },
-              "emptyText": "No NVIDIA GPU detected",
+              "emptyText": "No GPU detected",
               "rowDetail": [
                 {
                   "type": "form",

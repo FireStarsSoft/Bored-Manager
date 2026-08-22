@@ -2,6 +2,7 @@
 // archive has to satisfy before the app will install it. Shared between the
 // main process (which enforces the rules) and the renderer (which shows the
 // verdict), so there is exactly one definition of "a valid module".
+import { isRecord } from './validation'
 
 /**
  * Version of the contract between the app and a module's entry points. A
@@ -248,6 +249,11 @@ export interface ModuleInstallState {
   source?: string
   progress?: { receivedBytes: number; totalBytes: number | null }
   validation?: ModuleValidation
+  /** One-use capability for this exact inspected tree; omitted outside ready. */
+  confirmation?: {
+    token: string
+    expiresAt: number
+  }
   /** Tail of the build output while phase is 'building'. */
   log?: string[]
   /** Set once the module is in place; the app has to restart to load it. */
@@ -295,6 +301,10 @@ export interface RegistryFile {
 /** What `modules:catalog` and `modules:catalogRefresh` answer. */
 export interface ModuleCatalog {
   entries: RegistryEntry[]
+  /** Exact configured repository this response was fetched for. */
+  sourceRepo: string
+  /** Exact registry URL derived from sourceRepo. */
+  sourceUrl: string
   /** When this list was fetched; null when a fetch has never succeeded. */
   fetchedAt: number | null
   /** True when a refetch failed and this is a cached (possibly older) copy. */
@@ -484,7 +494,16 @@ export function moduleCardId(moduleId: string, cardId: string): string {
 
 /** A relative path has to stay inside the module folder. */
 function badRelativePath(value: string): boolean {
-  return value.startsWith('/') || value.includes('..') || value.includes('\\')
+  if (
+    value.includes('\0') ||
+    value.startsWith('/') ||
+    value.startsWith('\\') ||
+    /^[A-Za-z]:/.test(value) ||
+    value.includes('\\')
+  ) {
+    return true
+  }
+  return value.split('/').some((segment) => segment === '' || segment === '.' || segment === '..')
 }
 
 function pathProblem(field: string, value: unknown, required: boolean): string | null {
@@ -510,10 +529,10 @@ function subIdProblem(kind: string, id: unknown): string | null {
  */
 export function manifestProblems(raw: unknown): string[] {
   const problems: string[] = []
-  if (typeof raw !== 'object' || raw === null) return ['module.json is not an object']
+  if (!isRecord(raw)) return ['module.json is not an object']
   const m = raw as Partial<ModuleManifest>
 
-  if (typeof m.apiVersion !== 'number') problems.push('apiVersion is missing')
+  if (!Number.isSafeInteger(m.apiVersion)) problems.push('apiVersion is missing or not an integer')
   else if (m.apiVersion !== MODULE_API_VERSION) {
     problems.push(
       `apiVersion ${m.apiVersion} cannot be run by this app (it speaks ${MODULE_API_VERSION})`
@@ -532,12 +551,15 @@ export function manifestProblems(raw: unknown): string[] {
   if (typeof m.version !== 'string' || !MODULE_VERSION_PATTERN.test(m.version)) {
     problems.push('version is not in x.y.z form')
   }
-  if (m.minAppVersion != null && !MODULE_VERSION_PATTERN.test(String(m.minAppVersion))) {
+  if (
+    m.minAppVersion != null &&
+    (typeof m.minAppVersion !== 'string' || !MODULE_VERSION_PATTERN.test(m.minAppVersion))
+  ) {
     problems.push('minAppVersion is not in x.y.z form')
   }
 
   const entries = m.entries
-  if (typeof entries !== 'object' || entries === null) {
+  if (!isRecord(entries)) {
     problems.push('entries is missing')
   } else {
     const mainProblem = pathProblem('entries.main', entries.main, true)
@@ -550,8 +572,10 @@ export function manifestProblems(raw: unknown): string[] {
   }
 
   const seenPages = new Set<string>()
-  for (const page of m.pages ?? []) {
-    if (typeof page !== 'object' || page === null) {
+  if (m.pages != null && !Array.isArray(m.pages)) problems.push('pages is not an array')
+  if (Array.isArray(m.pages) && m.pages.length > 1_000) problems.push('pages contains too many entries')
+  for (const page of Array.isArray(m.pages) ? m.pages : []) {
+    if (!isRecord(page)) {
       problems.push('pages contains something that is not an object')
       continue
     }
@@ -566,11 +590,21 @@ export function manifestProblems(raw: unknown): string[] {
     if (p.order != null && typeof p.order !== 'number') {
       problems.push(`page "${String(p.id)}".order is not a number`)
     }
+    if (typeof p.order === 'number' && !Number.isFinite(p.order)) {
+      problems.push(`page "${String(p.id)}".order is not finite`)
+    }
+    if (p.icon != null && (typeof p.icon !== 'string' || !p.icon.trim())) {
+      problems.push(`page "${String(p.id)}".icon is not a non-empty string`)
+    }
   }
 
   const seenWidgets = new Set<string>()
-  for (const widget of m.widgets ?? []) {
-    if (typeof widget !== 'object' || widget === null) {
+  if (m.widgets != null && !Array.isArray(m.widgets)) problems.push('widgets is not an array')
+  if (Array.isArray(m.widgets) && m.widgets.length > 1_000) {
+    problems.push('widgets contains too many entries')
+  }
+  for (const widget of Array.isArray(m.widgets) ? m.widgets : []) {
+    if (!isRecord(widget)) {
       problems.push('widgets contains something that is not an object')
       continue
     }
@@ -582,30 +616,58 @@ export function manifestProblems(raw: unknown): string[] {
     if (typeof w.label !== 'string' || !w.label.trim()) {
       problems.push(`widget "${String(w.id)}" has no label`)
     }
+    if (w.defaultEnabled != null && typeof w.defaultEnabled !== 'boolean') {
+      problems.push(`widget "${String(w.id)}".defaultEnabled is not a boolean`)
+    }
+    if (w.order != null && (typeof w.order !== 'number' || !Number.isFinite(w.order))) {
+      problems.push(`widget "${String(w.id)}".order is not a finite number`)
+    }
   }
 
-  for (const stream of m.streams ?? []) {
-    if (typeof stream !== 'object' || stream === null) {
+  const seenStreams = new Set<string>()
+  if (m.streams != null && !Array.isArray(m.streams)) problems.push('streams is not an array')
+  if (Array.isArray(m.streams) && m.streams.length > 1_000) {
+    problems.push('streams contains too many entries')
+  }
+  for (const stream of Array.isArray(m.streams) ? m.streams : []) {
+    if (!isRecord(stream)) {
       problems.push('streams contains something that is not an object')
       continue
     }
     const s = stream as Partial<ModuleStreamDecl>
     if (typeof s.event !== 'string' || !s.event.trim()) {
       problems.push('a stream is missing its event name')
+    } else if (seenStreams.has(s.event)) {
+      problems.push(`stream event "${s.event}" is declared twice`)
+    } else {
+      seenStreams.add(s.event)
     }
     if (s.kind !== 'series' && s.kind !== 'latest') {
       problems.push(`stream "${String(s.event)}" has an invalid kind (must be "series" or "latest")`)
     }
   }
 
-  if (m.methods != null && (!Array.isArray(m.methods) || m.methods.some((x) => typeof x !== 'string'))) {
+  if (
+    m.methods != null &&
+    (!Array.isArray(m.methods) ||
+      m.methods.some((value) => typeof value !== 'string' || !value.trim()))
+  ) {
     problems.push('methods is not an array of strings')
   }
-  if (m.fastInterval != null && typeof m.fastInterval !== 'string') {
-    problems.push('fastInterval is not a string')
+  if (Array.isArray(m.methods)) {
+    if (m.methods.length > 10_000) problems.push('methods contains too many entries')
+    const seenMethods = new Set<string>()
+    for (const method of m.methods) {
+      if (typeof method !== 'string') continue
+      if (seenMethods.has(method)) problems.push(`method "${method}" is declared twice`)
+      seenMethods.add(method)
+    }
   }
-  if (m.slowInterval != null && typeof m.slowInterval !== 'string') {
-    problems.push('slowInterval is not a string')
+  if (m.fastInterval != null && (typeof m.fastInterval !== 'string' || !m.fastInterval.trim())) {
+    problems.push('fastInterval is not a non-empty string')
+  }
+  if (m.slowInterval != null && (typeof m.slowInterval !== 'string' || !m.slowInterval.trim())) {
+    problems.push('slowInterval is not a non-empty string')
   }
 
   return problems

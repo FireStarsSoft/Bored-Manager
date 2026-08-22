@@ -1,4 +1,4 @@
-# NVIDIA GPU
+# GPU
 
 Everything `nvidia-smi` reports, as charts instead of a table, plus the controls that need root.
 
@@ -8,7 +8,8 @@ Everything `nvidia-smi` reports, as charts instead of a table, plus the controls
 |---|---|
 | Sidebar | **Dashboard** — utilisation, VRAM, temperature and power charts, and the compute process table with kill |
 | Sidebar | **Auto power cap** — every GPU the machine reports, with its allowed range, plus the watcher below |
-| Overview | **GPU** widget (on by default) — utilisation with VRAM, temperature and power in the subtitle, and the processes holding VRAM |
+| Overview | **GPU utilisation** widget (on by default) — utilisation and temperature on one dual-axis chart |
+| Overview | **GPU power** widget (on by default) — power draw and the current cap, the same series as the Dashboard Power chart |
 | Overview | **GPU processes** widget (off by default) — PID, name and VRAM per compute process |
 | History | writes the `gpu` metrics stream (utilisation, VRAM, temperature, draw, limit) so charts longer than 10 minutes work |
 
@@ -44,12 +45,12 @@ What to watch is saved per machine (`ctx.hostDataSet`, in `data/module-data/gpu/
 | Setting | Effect |
 |---|---|
 | Update intervals → **GPU** (fast) | how often the metrics are polled; `paused` stops the poller |
-| Overview → **GPU**, **GPU processes** | which widgets are shown |
+| Overview → **GPU utilisation**, **GPU power**, **GPU processes** | which widgets are shown |
 | Data & storage | whether the `gpu` history stream is written, and for how long |
 
 ## When it shows nothing
 
-`nvidia-smi` missing or no NVIDIA card: the page says "No NVIDIA GPU detected" and the Overview widget reads `N/A`. AMD and Intel GPUs are not covered — a module of their own could add them.
+`nvidia-smi` missing or no NVIDIA card: the page says "No GPU detected" and the Overview widgets say the same. AMD and Intel GPUs are not covered — a module of their own could add them.
 
 ## Files
 
@@ -59,5 +60,6 @@ main/service.ts        polling, parsing, controls, the auto power cap watcher
 ui/pages/dashboard.json
 ui/pages/power.json    the GPU table and the watcher
 ui/widgets/summary.json
+ui/widgets/power.json
 ui/widgets/processes.json
 ```

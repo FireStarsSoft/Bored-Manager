@@ -1,17 +1,9 @@
-import { once } from 'events'
-import { createWriteStream, existsSync, readdirSync, unlinkSync } from 'fs'
+import { existsSync, readdirSync } from 'fs'
+import { open, rm } from 'fs/promises'
 import { isIP } from 'net'
 import { join } from 'path'
-
-/**
- * Downloading an archive over https. Shared by the app updater and the module
- * installer: both fetch a zip, both have to cap its size, time out and report
- * progress, and neither should reimplement that.
- *
- * Hosts are allowlisted (GitHub and its download CDNs). Redirects are followed
- * only when the next hop is still on that list, so a release URL cannot be
- * turned into a request against an internal address.
- */
+import { Readable, Transform } from 'stream'
+import { pipeline } from 'stream/promises'
 
 export const GITHUB_DOWNLOAD_HOSTS = [
   'github.com',
@@ -27,12 +19,11 @@ export interface DownloadOptions {
   maxBytes: number
   timeoutMs: number
   onProgress?: (receivedBytes: number, totalBytes: number | null) => void
-  /** When set, every hop (including redirects) must be one of these hosts. */
+  /** Every request and redirect hop must have an exact hostname match. */
   allowedHosts?: readonly string[]
 }
 
 export interface DownloadHandle {
-  /** Stop the transfer; the promise rejects with "download was cancelled". */
   abort(): void
   done: Promise<void>
 }
@@ -45,20 +36,22 @@ function isBlockedHost(hostname: string): boolean {
   if (!ip) return false
   if (ip.includes(':')) {
     const compact = ip.toLowerCase()
-    if (compact === '::1') return true
-    if (compact.startsWith('fe80:') || compact.startsWith('fc') || compact.startsWith('fd')) return true
-    return false
+    return (
+      compact === '::1' ||
+      compact.startsWith('fe80:') ||
+      compact.startsWith('fc') ||
+      compact.startsWith('fd')
+    )
   }
-  const [a, b] = ip.split('.').map((n) => Number(n))
+  const [a, b] = ip.split('.').map(Number)
   if (a === 10 || a === 127 || a === 0) return true
   if (a === 169 && b === 254) return true
-  if (a === 172 && b >= 16 && b <= 31) return true
+  if (a === 172 && b! >= 16 && b! <= 31) return true
   if (a === 192 && b === 168) return true
-  if (a === 100 && b >= 64 && b <= 127) return true
-  return false
+  return a === 100 && b! >= 64 && b! <= 127
 }
 
-/** Reject anything that is not a public https URL on an allowed host. */
+/** Reject anything that is not public HTTPS on an exact allowed hostname. */
 export function assertSafeDownloadUrl(raw: string, allowedHosts?: readonly string[]): URL {
   let url: URL
   try {
@@ -69,124 +62,163 @@ export function assertSafeDownloadUrl(raw: string, allowedHosts?: readonly strin
   if (url.protocol !== 'https:') {
     throw new Error(`Only https:// links are accepted (got ${url.protocol}//)`)
   }
-  if (url.username || url.password) {
-    throw new Error('URLs with credentials are not accepted')
-  }
+  if (url.username || url.password) throw new Error('URLs with credentials are not accepted')
+  if (url.port && url.port !== '443') throw new Error('only the standard HTTPS port is accepted')
   const host = url.hostname.toLowerCase()
-  if (isBlockedHost(host)) {
-    throw new Error('that address is not allowed')
-  }
-  if (allowedHosts && !allowedHosts.includes(host)) {
-    throw new Error(`downloads are only accepted from GitHub (got ${url.hostname})`)
+  if (isBlockedHost(host)) throw new Error('that address is not allowed')
+  if (allowedHosts && !allowedHosts.some((candidate) => candidate.toLowerCase() === host)) {
+    throw new Error(`downloads are not accepted from ${url.hostname}`)
   }
   return url
 }
 
+function declaredLength(response: Response): number | null {
+  const raw = response.headers.get('content-length')
+  if (raw === null) return null
+  if (!/^(0|[1-9]\d*)$/.test(raw)) throw new Error('server returned an invalid content length')
+  const value = Number(raw)
+  if (!Number.isSafeInteger(value)) throw new Error('server returned an invalid content length')
+  return value
+}
+
+class DownloadCounter extends Transform {
+  received = 0
+  private lastProgress = 0
+
+  constructor(
+    private readonly maxBytes: number,
+    private readonly totalBytes: number | null,
+    private readonly onProgress?: DownloadOptions['onProgress']
+  ) {
+    super()
+  }
+
+  override _transform(
+    chunk: Buffer,
+    _encoding: BufferEncoding,
+    callback: (error?: Error | null, data?: Buffer) => void
+  ): void {
+    this.received += chunk.length
+    if (this.received > this.maxBytes) {
+      callback(new Error('download exceeded its byte limit'))
+      return
+    }
+    const now = Date.now()
+    if (now - this.lastProgress >= 200) {
+      this.lastProgress = now
+      this.onProgress?.(this.received, this.totalBytes)
+    }
+    callback(null, chunk)
+  }
+}
+
+/**
+ * Download to a newly-created private file. One deadline covers redirects and
+ * body transfer; every failure, timeout, and caller abort removes the partial.
+ */
 export function downloadFile(url: string, dest: string, opts: DownloadOptions): DownloadHandle {
-  const canceller = new AbortController()
-  let cancelled = false
-  const maxMb = Math.round(opts.maxBytes / 1024 / 1024)
-  const tooLarge = (): Error => new Error(`the archive is larger than ${maxMb} MB`)
+  if (!Number.isSafeInteger(opts.maxBytes) || opts.maxBytes <= 0) {
+    throw new Error('download byte limit is invalid')
+  }
+  if (!Number.isSafeInteger(opts.timeoutMs) || opts.timeoutMs <= 0) {
+    throw new Error('download timeout is invalid')
+  }
+  const controller = new AbortController()
+  let callerCancelled = false
+  let timedOut = false
   const allowed = opts.allowedHosts ?? GITHUB_DOWNLOAD_HOSTS
+  const firstUrl = assertSafeDownloadUrl(url, allowed)
 
   const done = (async (): Promise<void> => {
-    let file: ReturnType<typeof createWriteStream> | null = null
+    const destination = await open(dest, 'wx', 0o600)
+    const timer = setTimeout(() => {
+      timedOut = true
+      controller.abort(new Error('download deadline exceeded'))
+    }, opts.timeoutMs)
+    timer.unref?.()
+    let succeeded = false
     try {
-      let current = assertSafeDownloadUrl(url, allowed).toString()
+      let current = firstUrl
       let response: Response | null = null
       for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
         response = await fetch(current, {
           redirect: 'manual',
-          signal: AbortSignal.any([canceller.signal, AbortSignal.timeout(opts.timeoutMs)])
+          signal: controller.signal
         })
-        if (response.status >= 300 && response.status < 400) {
-          const loc = response.headers.get('location')
-          if (!loc) throw new Error('server redirected without a location')
-          current = assertSafeDownloadUrl(new URL(loc, current).toString(), allowed).toString()
-          continue
-        }
-        break
+        if (response.status < 300 || response.status >= 400) break
+        if (hop === MAX_REDIRECTS) throw new Error('too many redirects')
+        const location = response.headers.get('location')
+        await response.body?.cancel().catch(() => undefined)
+        if (!location) throw new Error('server redirected without a location')
+        current = assertSafeDownloadUrl(new URL(location, current).toString(), allowed)
       }
-      if (!response) throw new Error('nothing was written')
-      if (response.status >= 300 && response.status < 400) {
-        throw new Error('too many redirects')
+      if (!response) throw new Error('the server returned no response')
+      if (!response.ok) {
+        const rateRemaining = response.headers.get('x-ratelimit-remaining')
+        const rateReset = response.headers.get('x-ratelimit-reset')
+        const rate =
+          response.status === 403 && rateRemaining === '0'
+            ? `; GitHub rate limit exhausted${rateReset ? ` until ${rateReset}` : ''}`
+            : ''
+        throw new Error(
+          `server replied ${response.status}${response.statusText ? ` ${response.statusText}` : ''}${rate}`
+        )
       }
-      if (response.status >= 400) {
-        throw new Error(`server replied ${response.status} (check the link)`)
+      const totalBytes = declaredLength(response)
+      if (totalBytes !== null && totalBytes > opts.maxBytes) {
+        throw new Error('download exceeds its byte limit')
       }
-      const declared = parseInt(response.headers.get('content-length') ?? '', 10)
-      const totalBytes = Number.isFinite(declared) && declared > 0 ? declared : null
-      if (totalBytes && totalBytes > opts.maxBytes) throw tooLarge()
-      if (!response.body) throw new Error('nothing was written')
+      if (!response.body) throw new Error('the server returned an empty response body')
 
-      file = createWriteStream(dest)
-      const reader = response.body.getReader()
-      let received = 0
-      let lastPush = 0
-      for (;;) {
-        const chunk = await reader.read()
-        if (chunk.done) break
-        received += chunk.value.byteLength
-        if (received > opts.maxBytes) {
-          await reader.cancel()
-          throw tooLarge()
+      const counter = new DownloadCounter(opts.maxBytes, totalBytes, opts.onProgress)
+      const output = destination.createWriteStream({ autoClose: true })
+      const input = Readable.fromWeb(response.body as never)
+      await pipeline(input, counter, output, { signal: controller.signal })
+      opts.onProgress?.(counter.received, totalBytes)
+      succeeded = true
+    } catch (error) {
+      if (callerCancelled) throw new Error('download was cancelled')
+      if (timedOut) throw new Error('the download exceeded its deadline')
+      throw error instanceof Error ? error : new Error(String(error))
+    } finally {
+      clearTimeout(timer)
+      await destination.close().catch(() => undefined)
+      if (!succeeded) {
+        try {
+          await rm(dest, { force: true })
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [cleanupError],
+            'download failed and its partial file could not be removed'
+          )
         }
-        // Writing faster than the disk accepts would buffer the whole archive
-        // in memory, so wait for drain whenever the stream says it is full.
-        if (!file.write(chunk.value)) await once(file, 'drain')
-        const now = Date.now()
-        if (now - lastPush > 200) {
-          lastPush = now
-          opts.onProgress?.(received, totalBytes)
-        }
       }
-      opts.onProgress?.(received, totalBytes)
-      await new Promise<void>((resolve, reject) => {
-        file?.end(() => resolve())
-        file?.on('error', reject)
-      })
-    } catch (err) {
-      file?.destroy()
-      try {
-        if (existsSync(dest)) unlinkSync(dest)
-      } catch {
-        /* best effort */
-      }
-      if (cancelled) throw new Error('download was cancelled')
-      // fetch() reports both a caller abort and the timeout as AbortError.
-      if (err instanceof Error && err.name === 'TimeoutError') {
-        throw new Error('the server took too long to respond')
-      }
-      throw err instanceof Error ? err : new Error(String(err))
     }
   })()
 
   return {
     abort: () => {
-      cancelled = true
-      canceller.abort()
+      callerCancelled = true
+      controller.abort(new Error('download was cancelled'))
     },
     done
   }
 }
 
 /**
- * Where the real content of an extracted archive starts. GitHub wraps source
- * archives in a single folder (`repo-branch/`), release assets and hand-made
- * zips usually do not - both shapes are accepted, identified by a marker file
- * (`package.json` for the app, `module.json` for a module).
+ * Find a marker either at archive root or inside its only non-metadata folder.
  */
 export function findArchiveRoot(dir: string, marker: string): string | null {
   if (existsSync(join(dir, marker))) return dir
   let dirs: string[]
   try {
     dirs = readdirSync(dir, { withFileTypes: true })
-      .filter((e) => e.isDirectory() && e.name !== '__MACOSX')
-      .map((e) => e.name)
+      .filter((entry) => entry.isDirectory() && entry.name !== '__MACOSX')
+      .map((entry) => entry.name)
   } catch {
     return null
   }
   if (dirs.length !== 1) return null
-  const inner = join(dir, dirs[0])
+  const inner = join(dir, dirs[0]!)
   return existsSync(join(inner, marker)) ? inner : null
 }

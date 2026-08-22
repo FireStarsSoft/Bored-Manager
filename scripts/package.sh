@@ -38,7 +38,7 @@ INCLUDE_FILES=(
 )
 # Development leftovers, deliberately left out (listed so the script can tell
 # "known to be excluded" apart from "new file nobody classified yet").
-KNOWN_EXCLUDED=(.git .gitattributes .cursor .cursorignore .github data modules-disabled node_modules out start-app.cmd start-app.vbs Todos.MD)
+KNOWN_EXCLUDED=(.git .gitattributes .cursor .cursorignore .github data modules-disabled node_modules out start-app.cmd start-app.vbs Todos.MD tests vitest.config.ts tsconfig.test.json)
 
 # Same list the in-app updater validates a downloaded archive against, so a
 # package built here can never fail that check - plus the module folders, whose
@@ -52,7 +52,8 @@ REQUIRED_ENTRIES=(
     modules/processes/module.json modules/network/module.json
     modules/disk/module.json modules/sensors/module.json
     modules/gpu/module.json modules/container/module.json
-    modules/service-fleet/module.json
+    modules/service-fleet/module.json modules/bmc/module.json
+    modules/openwrt/module.json
     docs/MODULE-RULESET.md
     assets/icon.png
     run.sh install.sh bored-manager

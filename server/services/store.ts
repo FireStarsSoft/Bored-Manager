@@ -5,23 +5,31 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
-  rmSync,
-  writeFileSync
+  rmSync
 } from 'fs'
 import { dirname, join, resolve } from 'path'
 import {
-  DEFAULT_SETTINGS,
   DEFAULT_USERNAME,
   SETTINGS_VERSION,
   type AppSettings,
-  type SavedConnection,
-  type ServerSettings,
-  type SessionIdle,
-  type SessionIdleUnit,
-  type Theme
+  type ConnectionConfig,
+  type SavedConnection
 } from '@shared/types'
-import type { ModuleRuntimeState } from '@shared/modules'
+import {
+  APP_SETTINGS_LIMITS,
+  normalizeAllowedHostname,
+  normalizeAppSettings
+} from '@shared/app-settings'
+import { isFiniteNumber, isRecord } from '@shared/validation'
+import { MODULE_ID_PATTERN, type ModuleRuntimeState } from '@shared/modules'
 import { decryptString, encryptString, isEncrypted } from './secret'
+import {
+  backupFile,
+  readPrivateJson,
+  writeAtomicPrivateFile,
+  writeAtomicPrivateJson,
+  type JsonParser
+} from './private-file'
 
 /**
  * Everything lives inside the app root folder (portable install):
@@ -32,6 +40,11 @@ import { decryptString, encryptString, isEncrypted } from './secret'
  */
 
 let rootCache: string | null = null
+
+/** Test seam for cases that isolate data with a different BM_APP_ROOT. */
+export function resetStoreCacheForTests(): void {
+  rootCache = null
+}
 
 /**
  * The install folder. There is no Electron app object to ask any more, so it is
@@ -95,17 +108,9 @@ function connectionsFile(): string {
   return join(dataDir(), 'connections.json')
 }
 
-function ensureDirs(): void {
-  mkdirSync(userSettingsDir(), { recursive: true })
-}
-
-function readJson<T>(file: string, fallback: T): T {
-  try {
-    if (!existsSync(file)) return fallback
-    return JSON.parse(readFileSync(file, 'utf8')) as T
-  } catch {
-    return fallback
-  }
+function readJson<T>(file: string, fallback: T, parse: JsonParser<T> = (value) => value as T): T {
+  const result = readPrivateJson(file, parse, 'application data')
+  return result.kind === 'missing' ? fallback : result.value
 }
 
 function chmodQuiet(file: string, mode: number): void {
@@ -124,9 +129,7 @@ export function ensurePrivateDir(dir: string): void {
 
 /** JSON on disk that only this user should read (accounts, settings, lockout). */
 export function writePrivateJson(file: string, value: unknown): void {
-  mkdirSync(dirname(file), { recursive: true })
-  writeFileSync(file, JSON.stringify(value, null, 2), { encoding: 'utf8', mode: 0o600 })
-  chmodQuiet(file, 0o600)
+  writeAtomicPrivateJson(file, value)
 }
 
 function writeJson(file: string, value: unknown): void {
@@ -145,11 +148,13 @@ export function hardenDataPermissions(): void {
     join(root, 'connections.json'),
     join(root, 'auth-lock.json'),
     join(root, 'known-hosts.json'),
+    join(root, 'secret.key'),
     join(root, 'users', 'users.json'),
     settingsFile()
   ]
   for (const file of files) {
     if (existsSync(file)) chmodQuiet(file, 0o600)
+    if (existsSync(backupFile(file))) chmodQuiet(backupFile(file), 0o600)
   }
   const sessions = join(root, 'sessions')
   ensurePrivateDir(sessions)
@@ -176,38 +181,87 @@ export function hardenDataPermissions(): void {
 
 // ---------- Settings ----------
 
-/** Fields written by versions before the current schema. */
-interface LegacySettings {
-  /** v1: one slow interval for everything, before it was split per category. */
-  refreshSlow?: number
-  /** v2: fixed list of extended Overview cards, before cards became keyed. */
-  overviewExtended?: Record<string, boolean>
-  /** v2: a switch per feature, before features became modules. */
-  collectors?: Record<string, boolean>
-  /** v3: the update link, before it moved next to the repo it comes from. */
-  lastUpdateUrl?: string
-}
+export function validateSettingsDocument(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error('settings must be a JSON object')
+  const rawVersion = value['settingsVersion']
+  if (rawVersion === undefined) throw new Error('settingsVersion is required')
+  if (
+    !isFiniteNumber(rawVersion) ||
+      !Number.isInteger(rawVersion) ||
+      rawVersion < 0 ||
+      rawVersion > SETTINGS_VERSION
+  ) {
+    throw new Error(`settingsVersion must be an integer from 0 to ${SETTINGS_VERSION}`)
+  }
 
-/**
- * v2 card names -> current widget ids. The cards that moved into a module
- * carry its id now, so both the enabled flags and the saved grid positions
- * have to be renamed; the cards the app kept keep their name. The Docker
- * entries point straight at the Container module rather than at a name that
- * has since been renamed again - a v2 file is converted once, not twice.
- */
-const V2_CARD_IDS: Record<string, string> = {
-  gpu: 'gpu.summary',
-  docker: 'container.summary',
-  sensors: 'sensors.summary',
-  filesystems: 'disk.filesystems',
-  gpuProcesses: 'gpu.processes',
-  dockerCounts: 'container.resources'
-}
+  // Server and authentication settings were introduced in v4. Once a file
+  // claims that schema, malformed security fields are corruption rather than
+  // "missing values" that may safely inherit the permissive first-run defaults.
+  const version = rawVersion
+  if (version >= 4) {
+    const server = value['server']
+    if (!isRecord(server)) throw new Error('server settings must be an object')
+    if (
+      !isFiniteNumber(server['port']) ||
+      !Number.isInteger(server['port']) ||
+      server['port'] < 1 ||
+      server['port'] > 65_535
+    ) {
+      throw new Error('server.port is invalid')
+    }
+    if (
+      typeof server['host'] !== 'string' ||
+      server['host'].trim().length === 0 ||
+      server['host'].length > 255
+    ) {
+      throw new Error('server.host is invalid')
+    }
+    if (version >= 7) {
+      if (
+        !Array.isArray(server['allowedHosts']) ||
+        server['allowedHosts'].length > APP_SETTINGS_LIMITS.allowedHosts.maxEntries
+      ) {
+        throw new Error('server.allowedHosts is invalid')
+      }
+      for (const entry of server['allowedHosts']) {
+        const hostname = normalizeAllowedHostname(entry)
+        if (!hostname) {
+          throw new Error('server.allowedHosts contains an invalid hostname')
+        }
+      }
+      if (typeof server['trustProxy'] !== 'boolean') {
+        throw new Error('server.trustProxy must be boolean')
+      }
+    }
 
-/** v5 widget ids -> v6: the Docker module became Container when Incus joined it. */
-const V5_CARD_IDS: Record<string, string> = {
-  'docker.summary': 'container.summary',
-  'docker.resources': 'container.resources'
+    const auth = value['auth']
+    if (!isRecord(auth)) throw new Error('auth settings must be an object')
+    if (typeof auth['enabled'] !== 'boolean') throw new Error('auth.enabled must be boolean')
+    const max = auth['maxFailures']
+    if (
+      !isFiniteNumber(max) ||
+      !Number.isInteger(max) ||
+      max < APP_SETTINGS_LIMITS.authMaxFailures.min ||
+      max > APP_SETTINGS_LIMITS.authMaxFailures.max
+    ) {
+      throw new Error('auth.maxFailures is invalid')
+    }
+    const idle = auth['sessionIdle']
+    if (!isRecord(idle)) throw new Error('auth.sessionIdle must be an object')
+    const idleValue = idle['value']
+    if (
+      !isFiniteNumber(idleValue) ||
+      !Number.isInteger(idleValue) ||
+      idleValue < APP_SETTINGS_LIMITS.sessionIdleValue.min ||
+      idleValue > APP_SETTINGS_LIMITS.sessionIdleValue.max
+    ) {
+      throw new Error('auth.sessionIdle.value is invalid')
+    }
+    if (!['minute', 'hour', 'day'].includes(String(idle['unit']))) {
+      throw new Error('auth.sessionIdle.unit is invalid')
+    }
+  }
+  return value
 }
 
 /**
@@ -222,171 +276,19 @@ export const V2_COLLECTOR_MODULES: Record<string, string> = {
 }
 
 /**
- * Merge a nested object but keep only the keys the current version knows. Used
- * for the closed-ended nests (`collectors`, `detailPolling`): a plain spread
- * would carry a removed key like `collectors.gpu` forward forever, and a file
- * still claiming `"gpu": false` next to a GPU module that is running is worse
- * than no entry at all.
- *
- * `refresh` and `slowRefresh` deliberately do NOT go through this - a module
- * may declare an interval key of its own, and that has to survive.
- */
-function pickKnown<T extends object>(defaults: T, partial: unknown): T {
-  const out = { ...defaults }
-  if (typeof partial !== 'object' || partial === null) return out
-  const p = partial as Record<string, unknown>
-  const d = defaults as Record<string, unknown>
-  for (const key of Object.keys(d)) {
-    // Same type as the default, or the file is lying about that field.
-    if (key in p && typeof p[key] === typeof d[key]) {
-      ;(out as Record<string, unknown>)[key] = p[key]
-    }
-  }
-  return out
-}
-
-function migrateWidgets(legacy: LegacySettings): Record<string, boolean> {
-  const out: Record<string, boolean> = {}
-  for (const [key, value] of Object.entries(legacy.overviewExtended ?? {})) {
-    if (typeof value !== 'boolean') continue
-    out[V2_CARD_IDS[key] ?? key] = value
-  }
-  return out
-}
-
-function migrateLayout(
-  layout: AppSettings['overviewLayout'],
-  ids: Record<string, string>
-): AppSettings['overviewLayout'] {
-  const out: AppSettings['overviewLayout'] = {}
-  for (const [breakpoint, items] of Object.entries(layout)) {
-    if (!Array.isArray(items)) continue
-    out[breakpoint as 'lg' | 'md'] = items.map((item) => ({
-      ...item,
-      i: ids[item.i] ?? item.i
-    }))
-  }
-  return out
-}
-
-function renameKeys<T>(source: Record<string, T>, ids: Record<string, string>): Record<string, T> {
-  const out: Record<string, T> = {}
-  for (const [key, value] of Object.entries(source)) out[ids[key] ?? key] = value
-  return out
-}
-
-/**
- * Carry an interval key over to its new name without losing the speed the user
- * chose. Applied to what the FILE said, before the defaults are merged in -
- * against the merged object the new key would always already be there, and the
- * carried-over value would be silently dropped for the default.
- *
- * The old key goes: leaving it behind would show up in nothing and be written
- * back to disk forever, since `refresh` is spread rather than filtered so a
- * module-declared key survives.
- */
-function renameIntervalKey<T>(fromFile: Record<string, T>, from: string, to: string): void {
-  if (!(from in fromFile)) return
-  if (!(to in fromFile)) fromFile[to] = fromFile[from]
-  delete fromFile[from]
-}
-
-/**
- * Bring a settings file of any age into the current shape: fields that no
- * longer exist are dropped, new ones come from the defaults and renamed ones
- * are carried over. An update keeps the user's file, so this is what makes the
- * old file usable instead of throwing it away.
- */
-function mergeSettings(partial: Partial<AppSettings> | null | undefined): AppSettings {
-  const p = partial ?? {}
-  const legacy = p as LegacySettings
-  const fromV2 = (p.settingsVersion ?? 0) < 3
-  // v5 -> v6: the Docker module became Container, taking its interval keys and
-  // its two Overview widgets with it. The interval keys predate modules, so
-  // every older file has them; the widget ids only need the v5 map when the v2
-  // one did not already rewrite them straight to their current names.
-  const fromV5 = (p.settingsVersion ?? 0) < 6
-  const fileRefresh = { ...(p.refresh ?? {}) }
-  const fileSlowRefresh = { ...(p.slowRefresh ?? {}) }
-  if (fromV5) {
-    renameIntervalKey(fileRefresh, 'docker', 'container')
-    renameIntervalKey(fileSlowRefresh, 'docker', 'container')
-  }
-  const refresh = { ...DEFAULT_SETTINGS.refresh, ...fileRefresh }
-  const slowRefresh = { ...DEFAULT_SETTINGS.slowRefresh, ...fileSlowRefresh }
-  if (!p.slowRefresh && typeof legacy.refreshSlow === 'number') {
-    slowRefresh.storage = legacy.refreshSlow
-  }
-  let widgets = { ...(p.overviewWidgets ?? {}) }
-  if (fromV2) Object.assign(widgets, migrateWidgets(legacy))
-  else if (fromV5) widgets = renameKeys(widgets, V5_CARD_IDS)
-  let layout = p.overviewLayout ?? {}
-  if (fromV2) layout = migrateLayout(layout, V2_CARD_IDS)
-  else if (fromV5) layout = migrateLayout(layout, V5_CARD_IDS)
-  // v3 kept the update link at the top level; v4 keeps it next to the repo it
-  // is downloaded from, so the two live and travel together.
-  const fromV3 = (p.settingsVersion ?? 0) < 4
-  const update = pickKnown(DEFAULT_SETTINGS.update, p.update)
-  if (fromV3 && typeof legacy.lastUpdateUrl === 'string') update.lastUrl = legacy.lastUpdateUrl
-  const auth = pickKnown(DEFAULT_SETTINGS.auth, p.auth)
-  auth.sessionIdle = normalizeIdle(p.auth?.sessionIdle)
-  // Before v5 the UI was dark and had no say in it. Defaulting those files to
-  // 'system' would silently turn somebody's dashboard white after an update.
-  const fromV4 = (p.settingsVersion ?? 0) < 5
-  return {
-    settingsVersion: SETTINGS_VERSION,
-    theme: fromV4 ? 'dark' : normalizeTheme(p.theme),
-    density: p.density ?? DEFAULT_SETTINGS.density,
-    densityAutoDetected: p.densityAutoDetected ?? DEFAULT_SETTINGS.densityAutoDetected,
-    historyWindow: p.historyWindow ?? DEFAULT_SETTINGS.historyWindow,
-    refresh,
-    slowRefresh,
-    overviewWidgets: widgets,
-    overviewLayout: layout,
-    collectors: pickKnown(DEFAULT_SETTINGS.collectors, p.collectors),
-    detailPolling: pickKnown(DEFAULT_SETTINGS.detailPolling, p.detailPolling),
-    history: pickKnown(DEFAULT_SETTINGS.history, p.history),
-    server: normalizeServer(p.server),
-    auth,
-    update
-  }
-}
-
-function normalizeTheme(value: unknown): Theme {
-  const themes: Theme[] = ['dark', 'light', 'system']
-  return themes.includes(value as Theme) ? (value as Theme) : DEFAULT_SETTINGS.theme
-}
-
-/** A port or host the settings file cannot be trusted about must not stick. */
-function normalizeServer(partial: unknown): ServerSettings {
-  const merged = pickKnown(DEFAULT_SETTINGS.server, partial)
-  const port = Math.trunc(merged.port)
-  return {
-    port: Number.isInteger(port) && port > 0 && port < 65536 ? port : DEFAULT_SETTINGS.server.port,
-    host: merged.host.trim() || DEFAULT_SETTINGS.server.host
-  }
-}
-
-function normalizeIdle(partial: unknown): SessionIdle {
-  const merged = pickKnown(DEFAULT_SETTINGS.auth.sessionIdle, partial)
-  const units: SessionIdleUnit[] = ['minute', 'hour', 'day']
-  const value = Math.trunc(merged.value)
-  return {
-    value: Number.isFinite(value) && value >= 0 ? value : 0,
-    unit: units.includes(merged.unit) ? merged.unit : 'hour'
-  }
-}
-
-/**
  * Modules a v2 settings file wants switched off, captured while that file is
  * still readable: loadSettings rewrites it in the current format, which drops
  * the per-feature collector flags this is derived from.
  */
 let legacyDisabled: string[] | null = null
 
-function captureLegacyDisabled(raw: (Partial<AppSettings> & LegacySettings) | null): void {
-  if (!raw || (raw.settingsVersion ?? 0) >= 3) return
-  const collectors: Record<string, boolean> = raw.collectors ?? {}
+function captureLegacyDisabled(value: unknown): void {
+  if (!isRecord(value)) return
+  const version = isFiniteNumber(value['settingsVersion'])
+    ? Math.max(0, Math.trunc(value['settingsVersion']))
+    : 0
+  if (version >= 3) return
+  const collectors = isRecord(value['collectors']) ? value['collectors'] : {}
   const off = (key: string): boolean => collectors[key] === false
   const out: string[] = []
   for (const [collector, moduleId] of Object.entries(V2_COLLECTOR_MODULES)) {
@@ -420,10 +322,11 @@ export function takeLegacyDisabledModules(): string[] {
  * after an update.
  */
 export function loadSettings(): AppSettings {
-  const raw = readJson<(Partial<AppSettings> & LegacySettings) | null>(settingsFile(), null)
+  const stored = readPrivateJson(settingsFile(), validateSettingsDocument, 'settings')
+  const raw: unknown = stored.kind === 'missing' ? null : stored.value
   captureLegacyDisabled(raw)
-  const merged = mergeSettings(raw)
-  if (raw && raw.settingsVersion !== SETTINGS_VERSION) {
+  const merged = normalizeAppSettings(raw)
+  if (raw !== null && (!isRecord(raw) || raw['settingsVersion'] !== SETTINGS_VERSION)) {
     try {
       writeJson(settingsFile(), merged)
     } catch {
@@ -435,7 +338,7 @@ export function loadSettings(): AppSettings {
 
 /** Writes the normalised settings and returns exactly what landed on disk. */
 export function saveSettings(settings: Partial<AppSettings>): AppSettings {
-  const merged = mergeSettings(settings)
+  const merged = normalizeAppSettings(validateSettingsDocument(settings))
   writeJson(settingsFile(), merged)
   return merged
 }
@@ -449,9 +352,8 @@ export function saveSettings(settings: Partial<AppSettings>): AppSettings {
  * off on that machine" actually switches the GPU module off here.
  */
 export function readSettingsFile(sourcePath: string): Partial<AppSettings> {
-  const raw = JSON.parse(readFileSync(sourcePath, 'utf8'))
-  if (typeof raw !== 'object' || raw == null) throw new Error('Invalid settings file')
-  captureLegacyDisabled(raw as Partial<AppSettings> & LegacySettings)
+  const raw = validateSettingsDocument(JSON.parse(readFileSync(sourcePath, 'utf8')) as unknown)
+  captureLegacyDisabled(raw)
   return raw as Partial<AppSettings>
 }
 
@@ -473,31 +375,44 @@ interface ModuleRegistryFile {
   modules: Record<string, ModuleRuntimeState>
 }
 
-export function readModuleRegistry(): Record<string, ModuleRuntimeState> {
-  const raw = readJson<Partial<ModuleRegistryFile> | null>(modulesFile(), null)
-  const out: Record<string, ModuleRuntimeState> = {}
-  for (const [id, entry] of Object.entries(raw?.modules ?? {})) {
-    if (typeof entry !== 'object' || entry === null) continue
-    const e = entry as Partial<ModuleRuntimeState>
-    out[id] = {
+function moduleRegistryDocument(value: unknown): ModuleRegistryFile {
+  if (!isRecord(value) || value['version'] !== 1 || !isRecord(value['modules'])) {
+    throw new Error('module registry must contain version 1 and a modules object')
+  }
+  const modules: Record<string, ModuleRuntimeState> = {}
+  for (const [id, raw] of Object.entries(value['modules'])) {
+    if (!MODULE_ID_PATTERN.test(id) || !isRecord(raw) || raw['id'] !== id) {
+      throw new Error(`module registry entry "${id}" is invalid`)
+    }
+    if (
+      typeof raw['enabled'] !== 'boolean' ||
+      typeof raw['version'] !== 'string' ||
+      typeof raw['hash'] !== 'string' ||
+      !['default', 'zip', 'url'].includes(String(raw['source'])) ||
+      !isFiniteNumber(raw['installedAt']) ||
+      !isFiniteNumber(raw['updatedAt'])
+    ) {
+      throw new Error(`module registry entry "${id}" has invalid fields`)
+    }
+    modules[id] = {
       id,
-      enabled: e.enabled !== false,
-      version: typeof e.version === 'string' ? e.version : '0.0.0',
-      hash: typeof e.hash === 'string' ? e.hash : '',
-      source: e.source === 'default' || e.source === 'url' ? e.source : 'zip',
-      installedAt: typeof e.installedAt === 'number' ? e.installedAt : Date.now(),
-      updatedAt: typeof e.updatedAt === 'number' ? e.updatedAt : Date.now()
+      enabled: raw['enabled'],
+      version: raw['version'],
+      hash: raw['hash'],
+      source: raw['source'] as ModuleRuntimeState['source'],
+      installedAt: raw['installedAt'],
+      updatedAt: raw['updatedAt']
     }
   }
-  return out
+  return { version: 1, modules }
+}
+
+export function readModuleRegistry(): Record<string, ModuleRuntimeState> {
+  return readJson(modulesFile(), { version: 1, modules: {} }, moduleRegistryDocument).modules
 }
 
 export function writeModuleRegistry(modules: Record<string, ModuleRuntimeState>): void {
-  try {
-    writeJson(modulesFile(), { version: 1, modules } satisfies ModuleRegistryFile)
-  } catch {
-    // A read-only app folder must not stop modules from running this session.
-  }
+  writeJson(modulesFile(), { version: 1, modules } satisfies ModuleRegistryFile)
 }
 
 // ---------- Module config and per-host module data ----------
@@ -521,8 +436,7 @@ function writeCappedJson(file: string, value: unknown): void {
   if (Buffer.byteLength(text, 'utf8') > MODULE_JSON_MAX_BYTES) {
     throw new Error(`payload is larger than ${MODULE_JSON_MAX_BYTES / 1024} KB`)
   }
-  mkdirSync(dirname(file), { recursive: true })
-  writeFileSync(file, text, 'utf8')
+  writeAtomicPrivateFile(file, text)
 }
 
 /**
@@ -531,20 +445,22 @@ function writeCappedJson(file: string, value: unknown): void {
  * update carries over, so a rule the user changed survives reinstalling the
  * module, and a module cannot ship a new version of its own overrides.
  */
-function moduleConfigFile(id: string): string {
-  return join(userSettingsDir(), 'module-config', `${id}.json`)
+export function moduleConfigPath(id: string): string {
+  const safe = safeSegment(id)
+  if (!safe) throw new Error(`invalid module id "${id}"`)
+  return join(userSettingsDir(), 'module-config', `${safe}.json`)
 }
 
 export function readModuleConfig(id: string): unknown {
   const safe = safeSegment(id)
   if (!safe) return null
-  return readJson<unknown>(moduleConfigFile(safe), null)
+  return readJson<unknown>(moduleConfigPath(safe), null)
 }
 
 export function writeModuleConfig(id: string, value: unknown): void {
   const safe = safeSegment(id)
   if (!safe) throw new Error(`invalid module id "${id}"`)
-  writeCappedJson(moduleConfigFile(safe), value)
+  writeCappedJson(moduleConfigPath(safe), value)
 }
 
 /**
@@ -559,7 +475,9 @@ export function writeModuleConfig(id: string, value: unknown): void {
 export function deleteModuleConfig(id: string): void {
   const safe = safeSegment(id)
   if (!safe) return
-  rmSync(moduleConfigFile(safe), { force: true })
+  const file = moduleConfigPath(safe)
+  rmSync(file, { force: true })
+  rmSync(backupFile(file), { force: true })
 }
 
 /**
@@ -568,8 +486,14 @@ export function deleteModuleConfig(id: string): void {
  * two machines never see each other's data, and nothing has to be written on
  * the target itself (which would need sudo and a writable filesystem there).
  */
+export function moduleDataPath(moduleId: string): string {
+  const safe = safeSegment(moduleId)
+  if (!safe) throw new Error(`invalid module id "${moduleId}"`)
+  return join(dataDir(), 'module-data', safe)
+}
+
 function moduleDataFile(moduleId: string, hostKey: string): string {
-  return join(dataDir(), 'module-data', moduleId, `${hostKey}.json`)
+  return join(moduleDataPath(moduleId), `${hostKey}.json`)
 }
 
 export function readModuleData(moduleId: string, hostKey: string): unknown {
@@ -590,7 +514,7 @@ export function writeModuleData(moduleId: string, hostKey: string, value: unknow
 export function deleteModuleData(moduleId: string): void {
   const id = safeSegment(moduleId)
   if (!id) return
-  rmSync(join(dataDir(), 'module-data', id), { recursive: true, force: true })
+  rmSync(moduleDataPath(id), { recursive: true, force: true })
 }
 
 // ---------- Saved connections ----------
@@ -637,13 +561,14 @@ function decrypt(enc: string | undefined): string | undefined {
 
 export function listConnections(username: string): SavedConnection[] {
   return readConnections(username).map(
-    ({ id, label, host, port, username: user, encryptedPassword }) => ({
+    ({ id, label, host, port, username: user, encryptedPassword, encryptedSudoPassword }) => ({
       id,
       label,
       host,
       port,
       username: user,
-      hasSavedPassword: isEncrypted(encryptedPassword)
+      hasSavedPassword:
+        isEncrypted(encryptedPassword) || isEncrypted(encryptedSudoPassword)
     })
   )
 }
@@ -657,6 +582,8 @@ export function rememberConnection(
     label?: string
     password?: string
     sudoPassword?: string
+    /** Remove a previously saved sudo credential after the target rejected it. */
+    clearSudoPassword?: boolean
     rememberPassword?: boolean
   }
 ): void {
@@ -671,14 +598,17 @@ export function rememberConnection(
     username: cfg.username,
     hasSavedPassword: false
   }
-  if (cfg.rememberPassword && cfg.password) {
-    entry.encryptedPassword = encrypt(cfg.password)
-    if (cfg.sudoPassword) entry.encryptedSudoPassword = encrypt(cfg.sudoPassword)
-  } else if (existing >= 0) {
-    // Keep previously saved credentials when re-connecting without "remember".
+  if (existing >= 0) {
+    // Keep previously saved credentials unless this successful attempt
+    // explicitly supplies a verified replacement or rejects the sudo value.
     entry.encryptedPassword = list[existing].encryptedPassword
     entry.encryptedSudoPassword = list[existing].encryptedSudoPassword
   }
+  if (cfg.rememberPassword) {
+    if (cfg.password) entry.encryptedPassword = encrypt(cfg.password)
+    if (cfg.sudoPassword) entry.encryptedSudoPassword = encrypt(cfg.sudoPassword)
+  }
+  if (cfg.clearSudoPassword) delete entry.encryptedSudoPassword
   if (existing >= 0) list.splice(existing, 1)
   list.unshift(entry)
   writeConnections(owner, list.slice(0, 15))
@@ -693,6 +623,28 @@ export function getSavedCredentials(
   return {
     password: decrypt(found.encryptedPassword),
     sudoPassword: decrypt(found.encryptedSudoPassword)
+  }
+}
+
+/** Rebuild a connect request without exposing saved secrets to the browser. */
+export function getSavedConnectionConfig(
+  username: string,
+  id: string
+): ConnectionConfig | null {
+  const found = readConnections(username).find((connection) => connection.id === id)
+  if (!found) return null
+  const password = decrypt(found.encryptedPassword)
+  const sudoPassword = decrypt(found.encryptedSudoPassword)
+  if (!password) return null
+  return {
+    mode: 'ssh',
+    label: found.label,
+    host: found.host,
+    port: found.port,
+    username: found.username,
+    password,
+    sudoPassword,
+    rememberPassword: true
   }
 }
 

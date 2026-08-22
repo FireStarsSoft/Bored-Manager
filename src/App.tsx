@@ -16,7 +16,9 @@ export default function App(): React.JSX.Element {
   const settings = useApp((s) => s.settings)
   const server = useApp((s) => s.server)
   const auth = useApp((s) => s.auth)
-  const connected = useApp((s) => s.status.connected)
+  const connected = useApp(
+    (s) => s.activeMachineId != null && s.status.connected
+  )
 
   React.useEffect(() => {
     void init()

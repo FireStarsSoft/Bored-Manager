@@ -1,18 +1,39 @@
 import * as React from 'react'
 import { Gauge } from 'lucide-react'
-import type { DataSource, StatBlock } from '@shared/module-ui'
+import type { StatBlock } from '@shared/module-ui'
 import type { ChartPoint } from '@/components/charts'
 import { StatCard } from '@/components/StatCard'
-import { useBlockData } from '../binding'
+import { BlockData } from '../binding'
 import { formatBlockValue } from '../format'
 import type { BlockCtx } from '../BlockRenderer'
 
-/** Used when the block has no `spark`, so the hook is still called every render (rules of hooks). */
-const NO_SOURCE: DataSource = { kind: 'core', stream: 'system' }
-
 export function StatBlockView({ block, ctx }: { block: StatBlock; ctx: BlockCtx }): React.JSX.Element {
-  const value = useBlockData(ctx.moduleId, block.source, ctx)
-  const sparkValue = useBlockData(ctx.moduleId, block.spark?.source ?? NO_SOURCE, ctx)
+  return (
+    <BlockData moduleId={ctx.moduleId} source={block.source} opts={ctx}>
+      {({ value }) =>
+        block.spark && ctx.visible ? (
+          <BlockData moduleId={ctx.moduleId} source={block.spark.source} opts={ctx}>
+            {({ value: sparkValue }) => (
+              <StatContent block={block} value={value} sparkValue={sparkValue} />
+            )}
+          </BlockData>
+        ) : (
+          <StatContent block={block} value={value} />
+        )
+      }
+    </BlockData>
+  )
+}
+
+function StatContent({
+  block,
+  value,
+  sparkValue
+}: {
+  block: StatBlock
+  value: unknown
+  sparkValue?: unknown
+}): React.JSX.Element {
   const sparkKey = block.spark?.key
 
   const sparkPoints = React.useMemo<ChartPoint[]>(() => {

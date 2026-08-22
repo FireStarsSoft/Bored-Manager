@@ -68,7 +68,7 @@ export function useModuleManifest(moduleId: string): ModuleManifest | undefined 
  * subscriptions, kept in sync with `useModuleSpecs` so a module installed,
  * enabled or reloaded after boot is picked up without a page refresh.
  */
-export function subscribeModuleStreams(): () => void {
+export function subscribeModuleStreams(activeMachine: () => string | null = () => null): () => void {
   const active = new Map<string, () => void>()
 
   const wantedStreams = (): Array<{ id: string; event: string; kind: 'series' | 'latest' }> => {
@@ -92,9 +92,11 @@ export function subscribeModuleStreams(): () => void {
       active.set(
         key,
         api.modules.onEvent(w.id, w.event, (payload) => {
-          if (w.kind === 'latest') pushLatest(w.id, w.event, payload)
-          else if (payload && typeof (payload as { t?: number }).t === 'number') {
-            pushSeries(w.id, w.event, payload as { t: number })
+          if (payload.machineId !== activeMachine()) return
+          const value = payload.data
+          if (w.kind === 'latest') pushLatest(w.id, w.event, value)
+          else if (value && typeof (value as { t?: number }).t === 'number') {
+            pushSeries(w.id, w.event, value as { t: number })
           }
         })
       )

@@ -1,19 +1,28 @@
 import { spawn, spawnSync } from 'child_process'
-import { createHash } from 'crypto'
+import { createHash, randomBytes } from 'crypto'
 import {
+  chmodSync,
   closeSync,
   copyFileSync,
+  createReadStream,
   existsSync,
-  mkdirSync,
+  lstatSync,
+  mkdtempSync,
   openSync,
   readFileSync,
   rmSync,
-  statSync,
   unlinkSync
 } from 'fs'
+import { constants as fsConstants } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { extractZip } from './zip'
+import type {
+  OkResult,
+  UpdateRepoInfo,
+  UpdateResult,
+  UpdateState
+} from '@shared/types'
+import { DEFAULT_UPDATE_REPO } from '@shared/types'
 import {
   assertSafeDownloadUrl,
   downloadFile,
@@ -21,161 +30,114 @@ import {
   GITHUB_DOWNLOAD_HOSTS,
   type DownloadHandle
 } from './download'
-import { defaultBranchZipUrl, isGithubRepoName, latestReleaseZip, looksLikeZipUrl } from './github'
-import type {
-  OkResult,
-  UpdateCheckItem,
-  UpdateRepoInfo,
-  UpdateResult,
-  UpdateState,
-  UpdateValidation
-} from '@shared/types'
-import { DEFAULT_UPDATE_REPO } from '@shared/types'
-import { compareVersions } from '@shared/modules'
+import {
+  defaultBranchZipUrl,
+  isGithubRepoName,
+  latestReleaseZip,
+  looksLikeZipUrl
+} from './github'
 import { appRoot, appVersion, dataDir } from './store'
-
-/**
- * In-app updater for the portable install.
- *
- * The app is distributed as a source folder, so an update is "replace every
- * file except the saved connections, then reinstall dependencies and rebuild".
- * That cannot happen from inside the running app (it would delete its own
- * code), so this service only downloads and inspects the archive; the actual
- * swap is done by scripts/update.sh after the server has quit.
- *
- * Everything is staged in the system temp folder, never inside the app folder,
- * because the app folder is about to be moved away wholesale.
- */
-
-/** Hosts a GitHub release/source zip is served from (incl. redirect targets). */
-const ALLOWED_HOSTS = GITHUB_DOWNLOAD_HOSTS
+import {
+  digestUpdateTree,
+  validateUpdateTree
+} from './update-archive'
+import { extractZip } from './zip'
 
 const MAX_ARCHIVE_BYTES = 300 * 1024 * 1024
 const DOWNLOAD_TIMEOUT_MS = 15 * 60 * 1000
 
-/**
- * Files and folders a usable Bored Manager source tree cannot be missing. Kept
- * in step with REQUIRED_ENTRIES in scripts/package.sh, so an archive built by
- * that always passes this check.
- */
-const REQUIRED_ENTRIES: Array<{ path: string; dir?: boolean }> = [
-  { path: 'package.json' },
-  { path: 'package-lock.json' },
-  { path: 'vite.config.ts' },
-  { path: 'vite.config.server.ts' },
-  { path: 'server/index.ts' },
-  { path: 'server/ipc.ts' },
-  { path: 'shared/types.ts' },
-  { path: 'shared/modules.ts' },
-  { path: 'src', dir: true },
-  { path: 'src/index.html' },
-  { path: 'modules', dir: true },
-  { path: 'assets/icon.png' },
-  { path: 'run.sh' },
-  { path: 'install.sh' },
-  { path: 'bored-manager' }
-]
-
-interface PackageManifest {
-  name?: string
-  version?: string
-  scripts?: Record<string, string>
-  devDependencies?: Record<string, string>
+interface ActiveOperation {
+  generation: number
+  controller: AbortController
+  transfer: DownloadHandle | null
+  promise: Promise<UpdateState>
 }
 
 export class UpdaterService {
-  private state: UpdateState = { phase: 'idle', currentVersion: currentVersion() }
-  private transfer: DownloadHandle | null = null
-  /** root of the extracted tree (the folder holding package.json) */
+  private state: UpdateState = { phase: 'idle', currentVersion: appVersion() }
+  private operation: ActiveOperation | null = null
+  private generation = 0
+  private workspace: string | null = null
   private stagedRoot: string | null = null
-  /** bumped by cancel(), so an aborted check stops reporting into the state */
-  private runId = 0
-  /** Outcome of the optional sibling `.sha256` check for the last archive. */
+  private stagedDigest: string | null = null
   private checksum: 'ok' | 'skipped' = 'skipped'
 
-  constructor(private readonly onState: (s: UpdateState) => void) {}
+  constructor(private readonly onState: (state: UpdateState) => void) {}
 
   getState(): UpdateState {
     return this.state
   }
 
   private setState(patch: Partial<UpdateState>): UpdateState {
-    this.state = { ...this.state, ...patch, currentVersion: currentVersion() }
+    this.state = { ...this.state, ...patch, currentVersion: appVersion() }
     this.onState(this.state)
     return this.state
   }
 
-  private workDir(): string {
-    return join(tmpdir(), 'bored-manager-update')
-  }
-
-  /** Download the archive, unpack it and report what it contains. */
   async check(rawUrl: string): Promise<UpdateState> {
+    if (this.operation) return this.setState({ error: 'An update check is already running' })
     if (this.state.phase === 'applying') return this.state
-    if (this.state.phase === 'downloading' || this.state.phase === 'extracting') {
-      return this.setState({ error: 'A download is already running' })
+    const normalized = normalizeUrl(rawUrl)
+    if ('error' in normalized) {
+      return this.setState({ phase: 'error', error: normalized.error, validation: undefined })
     }
-
-    const url = normalizeUrl(rawUrl)
-    if ('error' in url) {
-      return this.setState({ phase: 'error', error: url.error, validation: undefined })
+    let work: string
+    try {
+      work = this.createWorkspace()
+    } catch (error) {
+      return this.setState({
+        phase: 'error',
+        error: safeMessage(error, 'Could not create private update staging')
+      })
     }
-
-    this.cleanWorkDir()
-    this.stagedRoot = null
-    this.checksum = 'skipped'
-    const runId = ++this.runId
-    const work = this.workDir()
-    const zipPath = join(work, 'update.zip')
+    const operation = this.beginOperation()
     this.setState({
       phase: 'downloading',
-      url: url.value,
+      url: normalized.value,
       error: undefined,
       validation: undefined,
       progress: { receivedBytes: 0, totalBytes: null }
     })
-
-    try {
-      mkdirSync(work, { recursive: true })
-      await this.download(url.value, zipPath)
-      if (runId !== this.runId) return this.state
-      await this.maybeVerifyChecksum(url.value, zipPath)
-    } catch (err) {
-      if (runId !== this.runId) return this.state // cancelled while downloading
-      this.cleanWorkDir()
-      return this.setState({ phase: 'error', error: `Download failed: ${message(err)}` })
-    }
-    if (runId !== this.runId) return this.state
-
-    this.setState({ phase: 'extracting' })
-    return this.inspectArchive(zipPath, url.value, runId)
+    operation.promise = this.checkUrlOperation(operation, work, normalized.value).finally(() => {
+      if (this.operation === operation) this.operation = null
+    })
+    return operation.promise
   }
 
-  /**
-   * Grade a zip the browser uploaded. Same checks as `check()`, without the
-   * download — the file is already on disk.
-   */
-  async checkFile(zipPath: string): Promise<UpdateState> {
+  async checkFile(uploadPath: string): Promise<UpdateState> {
+    if (this.operation) return this.setState({ error: 'An update check is already running' })
     if (this.state.phase === 'applying') return this.state
-    if (this.state.phase === 'downloading' || this.state.phase === 'extracting') {
-      return this.setState({ error: 'A download is already running' })
-    }
-    if (!existsSync(zipPath)) {
-      return this.setState({ phase: 'error', error: 'The uploaded file was not saved' })
-    }
-
-    this.cleanWorkDir()
-    this.stagedRoot = null
-    this.checksum = 'skipped'
-    const runId = ++this.runId
-    const work = this.workDir()
-    const copied = join(work, 'update.zip')
-    mkdirSync(work, { recursive: true })
     try {
-      copyFileSync(zipPath, copied)
-    } catch (err) {
-      return this.setState({ phase: 'error', error: `Could not keep the upload: ${message(err)}` })
+      const stat = lstatSync(uploadPath)
+      if (!stat.isFile()) throw new Error('upload is not a regular file')
+      if (stat.size > MAX_ARCHIVE_BYTES) throw new Error('upload exceeds the archive byte limit')
+    } catch (error) {
+      return this.setState({
+        phase: 'error',
+        error: safeMessage(error, 'The uploaded archive is unavailable')
+      })
     }
+    let work: string
+    try {
+      work = this.createWorkspace()
+    } catch (error) {
+      return this.setState({
+        phase: 'error',
+        error: safeMessage(error, 'Could not create private update staging')
+      })
+    }
+    const copied = join(work, 'update.zip')
+    try {
+      copyFileSync(uploadPath, copied, fsConstants.COPYFILE_EXCL)
+      chmodPrivate(copied, 0o600)
+    } catch (error) {
+      this.discardWorkspaceQuietly()
+      return this.setState({
+        phase: 'error',
+        error: safeMessage(error, 'Could not copy the uploaded archive into private staging')
+      })
+    }
+    const operation = this.beginOperation()
     this.setState({
       phase: 'extracting',
       url: 'upload',
@@ -183,67 +145,58 @@ export class UpdaterService {
       validation: undefined,
       progress: undefined
     })
-    return this.inspectArchive(copied, 'upload', runId)
+    operation.promise = this.inspectArchive(operation, copied, 'upload').finally(() => {
+      if (this.operation === operation) this.operation = null
+    })
+    return operation.promise
   }
 
-  /**
-   * Look up the latest GitHub release for `settings.update.repo`. A missing
-   * release is not an error: the UI can fall back to the default branch zip.
-   */
   async checkRepo(repo = DEFAULT_UPDATE_REPO): Promise<UpdateRepoInfo> {
-    const current = currentVersion()
     const name = repo.trim() || DEFAULT_UPDATE_REPO
     if (!isGithubRepoName(name)) throw new Error(`"${name}" is not a GitHub owner/repo`)
-    const fallbackUrl = await defaultBranchZipUrl(name)
     const release = await latestReleaseZip(name, (assetName) =>
-      /^bored-manager-.*\.zip$/i.test(assetName)
+      /^bored-manager-[0-9]+\.[0-9]+\.[0-9]+\.zip$/i.test(assetName)
     )
     if (!release || !release.matched) {
-      return { currentVersion: current, latestVersion: null, fallbackUrl, notes: release?.notes }
+      return {
+        currentVersion: appVersion(),
+        latestVersion: null,
+        fallbackUrl: release?.url ?? (await defaultBranchZipUrl(name)),
+        notes: release?.notes
+      }
     }
     return {
-      currentVersion: current,
+      currentVersion: appVersion(),
       latestVersion: release.version || null,
       assetUrl: release.url,
-      fallbackUrl,
+      fallbackUrl: await defaultBranchZipUrl(name),
       notes: release.notes
     }
   }
 
-  private async inspectArchive(zipPath: string, sourceLabel: string, runId: number): Promise<UpdateState> {
-    const stagingDir = join(this.workDir(), 'staging')
-    let root: string | null = null
+  /** Abort, await pipeline stabilization, then remove only this operation's workspace. */
+  async cancel(): Promise<UpdateState> {
+    if (this.state.phase === 'applying') return this.state
+    this.generation += 1
+    const operation = this.operation
+    if (operation) {
+      operation.controller.abort(new Error('update check cancelled'))
+      operation.transfer?.abort()
+      await operation.promise.catch(() => undefined)
+      if (this.operation === operation) this.operation = null
+    }
+    this.stagedRoot = null
+    this.stagedDigest = null
     try {
-      await extractZip(zipPath, stagingDir)
-      root = findArchiveRoot(stagingDir, 'package.json')
-    } catch (err) {
-      if (runId !== this.runId) return this.state
+      this.discardWorkspace()
+    } catch (error) {
       return this.setState({
         phase: 'error',
-        url: sourceLabel,
-        error: `The file is not a readable zip archive: ${message(err)}`
+        progress: undefined,
+        validation: undefined,
+        error: safeMessage(error, 'Cancelled, but private update staging could not be removed')
       })
     }
-    if (runId !== this.runId) return this.state
-
-    this.setState({ phase: 'validating', url: sourceLabel })
-    const validation = this.validate(root)
-    this.stagedRoot = validation.status === 'pass' ? root : null
-    return this.setState({
-      phase: validation.status === 'pass' ? 'ready' : 'error',
-      validation,
-      error: validation.status === 'pass' ? undefined : 'The archive did not pass every check'
-    })
-  }
-
-  /** Throw away whatever was downloaded and go back to the starting point. */
-  cancel(): UpdateState {
-    if (this.state.phase === 'applying') return this.state
-    this.runId++
-    this.transfer?.abort()
-    this.transfer = null
-    this.cleanWorkDir()
-    this.stagedRoot = null
     return this.setState({
       phase: 'idle',
       url: undefined,
@@ -254,33 +207,58 @@ export class UpdaterService {
   }
 
   /**
-   * Hand over to the external update script and quit. From here on the app is
-   * no longer in control: the script waits for this process to disappear,
-   * swaps the folder and reinstalls. There is no window to show it in any more,
-   * so it always runs headless with its output in the staging folder's log.
+   * Revalidate the exact staged tree, then require a confirmed helper outside
+   * the current service cgroup before reporting that handoff succeeded.
    */
-  apply(): OkResult {
-    if (this.state.phase !== 'ready' || !this.stagedRoot) {
-      return { ok: false, error: 'No verified update is ready to install' }
+  async apply(): Promise<OkResult> {
+    if (
+      this.state.phase !== 'ready' ||
+      !this.stagedRoot ||
+      !this.stagedDigest ||
+      !this.workspace
+    ) {
+      return { ok: false, error: 'No structurally validated update is ready to install' }
     }
+    if (this.operation) return { ok: false, error: 'The update check is still finishing' }
     if (process.env['BM_DEV'] === '1') {
       return { ok: false, error: 'Updates cannot be installed while running in dev mode' }
     }
 
-    const work = this.workDir()
-    const scriptName = 'update.sh'
-    const source = join(appRoot(), 'scripts', scriptName)
-    if (!existsSync(source)) {
-      return { ok: false, error: `Update script is missing: ${source}` }
-    }
-    // Run the script from temp: the app folder it operates on is about to move.
-    const script = join(work, scriptName)
     try {
-      copyFileSync(source, script)
-    } catch (err) {
-      return { ok: false, error: `Could not stage the update script: ${message(err)}` }
+      const revalidation = validateUpdateTree(this.stagedRoot, {
+        currentVersion: appVersion(),
+        checksumVerified: this.checksum === 'ok'
+      }).validation
+      if (
+        revalidation.status !== 'pass' ||
+        revalidation.newVersion !== this.state.validation?.newVersion
+      ) {
+        return { ok: false, error: 'The staged update changed; check the archive again' }
+      }
+      const digest = await digestUpdateTree(this.stagedRoot)
+      if (digest !== this.stagedDigest) {
+        return { ok: false, error: 'The staged update changed; check the archive again' }
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        error: safeMessage(error, 'The staged update could not be revalidated')
+      }
     }
 
+    const source = join(appRoot(), 'scripts', 'update.sh')
+    try {
+      if (!lstatSync(source).isFile()) throw new Error('not a regular file')
+    } catch {
+      return { ok: false, error: 'The installed update helper is missing or invalid' }
+    }
+    const script = join(this.workspace, 'update.sh')
+    try {
+      copyFileSync(source, script, fsConstants.COPYFILE_EXCL)
+      chmodPrivate(script, 0o700)
+    } catch (error) {
+      return { ok: false, error: safeMessage(error, 'Could not stage the update helper') }
+    }
     const args = [
       '-AppDir',
       appRoot(),
@@ -291,229 +269,282 @@ export class UpdaterService {
       '-NewVersion',
       this.state.validation?.newVersion ?? ''
     ]
-
     try {
-      launchUpdateScript(script, args, work)
-    } catch (err) {
-      return { ok: false, error: `Could not start the update script: ${message(err)}` }
+      await launchUpdateScript(script, args, this.workspace)
+    } catch (error) {
+      try {
+        unlinkSync(script)
+      } catch {
+        /* a failed helper may already have removed its staged copy */
+      }
+      return {
+        ok: false,
+        error: safeMessage(error, 'Could not start an independent update helper')
+      }
     }
 
     this.setState({ phase: 'applying', error: undefined })
-    // Give the RPC reply time to reach the browser, then go through the
-    // SIGTERM path so terminals, SSH and the metrics buffer are flushed.
-    // Exit 0: Restart=on-failure must not start the old tree mid-swap.
     setTimeout(() => process.kill(process.pid, 'SIGTERM'), 500)
     return { ok: true }
   }
 
-  /** Result the update script left behind, read (and cleared) once on start. */
   consumeResult(): UpdateResult | null {
     const file = join(dataDir(), 'update-result.json')
     if (!existsSync(file)) return null
     try {
       const result = JSON.parse(readFileSync(file, 'utf8')) as UpdateResult
       unlinkSync(file)
-      return typeof result?.ok === 'boolean' ? result : null
+      if (typeof result?.ok !== 'boolean') return null
+      return {
+        ...result,
+        error:
+          typeof result.error === 'string'
+            ? redactKnownPaths(result.error, [appRoot(), dataDir()])
+            : undefined
+      }
     } catch {
       try {
         unlinkSync(file)
       } catch {
-        /* a leftover corrupt result would otherwise repeat on every boot */
+        /* do not repeatedly parse a corrupt result */
       }
       return null
     }
   }
 
-  private async download(url: string, dest: string): Promise<void> {
-    const transfer = downloadFile(url, dest, {
-      maxBytes: MAX_ARCHIVE_BYTES,
-      timeoutMs: DOWNLOAD_TIMEOUT_MS,
-      allowedHosts: ALLOWED_HOSTS,
-      onProgress: (receivedBytes, totalBytes) =>
-        this.setState({ progress: { receivedBytes, totalBytes } })
-    })
-    this.transfer = transfer
+  private beginOperation(): ActiveOperation {
+    const operation: ActiveOperation = {
+      generation: ++this.generation,
+      controller: new AbortController(),
+      transfer: null,
+      promise: Promise.resolve(this.state)
+    }
+    this.operation = operation
+    this.checksum = 'skipped'
+    this.stagedRoot = null
+    this.stagedDigest = null
+    return operation
+  }
+
+  private current(operation: ActiveOperation): boolean {
+    return (
+      this.operation === operation &&
+      operation.generation === this.generation &&
+      !operation.controller.signal.aborted
+    )
+  }
+
+  private async checkUrlOperation(
+    operation: ActiveOperation,
+    work: string,
+    url: string
+  ): Promise<UpdateState> {
+    const zipPath = join(work, 'update.zip')
     try {
-      await transfer.done
-    } finally {
-      this.transfer = null
+      await this.download(operation, url, zipPath)
+      if (!this.current(operation)) return this.state
+      await this.maybeVerifyChecksum(operation, url, zipPath)
+      if (!this.current(operation)) return this.state
+      this.setState({ phase: 'extracting' })
+      return await this.inspectArchive(operation, zipPath, url)
+    } catch (error) {
+      if (!this.current(operation)) return this.state
+      const cleanupFailed = !this.discardWorkspaceQuietly()
+      return this.setState({
+        phase: 'error',
+        progress: undefined,
+        validation: undefined,
+        error: cleanupFailed
+          ? 'The update failed and private staging could not be removed'
+          : safeMessage(error, 'The update archive could not be downloaded')
+      })
     }
   }
 
-  /**
-   * When a sibling `<url>.sha256` exists, require it to match. A missing
-   * sidecar is not an error — bootstrap `install.sh` does the same.
-   */
-  private async maybeVerifyChecksum(url: string, zipPath: string): Promise<void> {
-    this.checksum = 'skipped'
-    const dest = `${zipPath}.sha256`
+  private async inspectArchive(
+    operation: ActiveOperation,
+    zipPath: string,
+    sourceLabel: string
+  ): Promise<UpdateState> {
+    const stagingDir = join(this.workspace!, 'staging')
+    let root: string | null = null
     try {
-      const transfer = downloadFile(`${url}.sha256`, dest, {
-        maxBytes: 8192,
-        timeoutMs: 30_000,
-        allowedHosts: ALLOWED_HOSTS
+      await extractZip(zipPath, stagingDir, {
+        signal: operation.controller.signal,
+        limits: {
+          maxTotalCompressedBytes: MAX_ARCHIVE_BYTES,
+          maxCompressedBytesPerEntry: MAX_ARCHIVE_BYTES
+        }
       })
-      this.transfer = transfer
+      root = findArchiveRoot(stagingDir, 'package.json')
+    } catch (error) {
+      if (!this.current(operation)) return this.state
+      const cleanupFailed = !this.discardWorkspaceQuietly()
+      return this.setState({
+        phase: 'error',
+        url: sourceLabel,
+        error: cleanupFailed
+          ? 'Archive extraction failed and partial staging could not be removed'
+          : safeMessage(error, 'The file is not a safe readable ZIP archive')
+      })
+    }
+    if (!this.current(operation)) return this.state
+
+    this.setState({ phase: 'validating', url: sourceLabel })
+    const result = validateUpdateTree(root, {
+      currentVersion: appVersion(),
+      checksumVerified: this.checksum === 'ok'
+    })
+    if (result.validation.status === 'pass' && root) {
+      try {
+        this.stagedDigest = await digestUpdateTree(root)
+      } catch (error) {
+        if (!this.current(operation)) return this.state
+        this.stagedRoot = null
+        const cleanupFailed = !this.discardWorkspaceQuietly()
+        return this.setState({
+          phase: 'error',
+          validation: result.validation,
+          error: cleanupFailed
+            ? 'The staged update could not be digested or removed'
+            : safeMessage(error, 'The staged update tree could not be digested')
+        })
+      }
+    }
+    if (!this.current(operation)) return this.state
+    this.stagedRoot = result.validation.status === 'pass' ? root : null
+    if (result.validation.status !== 'pass' && !this.discardWorkspaceQuietly()) {
+      return this.setState({
+        phase: 'error',
+        validation: result.validation,
+        error: 'The rejected update and its private staging could not be removed'
+      })
+    }
+    return this.setState({
+      phase: result.validation.status === 'pass' ? 'ready' : 'error',
+      validation: result.validation,
+      error:
+        result.validation.status === 'pass'
+          ? undefined
+          : 'The archive did not pass structural validation'
+    })
+  }
+
+  private async download(
+    operation: ActiveOperation,
+    url: string,
+    destination: string
+  ): Promise<void> {
+    const transfer = downloadFile(url, destination, {
+      maxBytes: MAX_ARCHIVE_BYTES,
+      timeoutMs: DOWNLOAD_TIMEOUT_MS,
+      allowedHosts: GITHUB_DOWNLOAD_HOSTS,
+      onProgress: (receivedBytes, totalBytes) => {
+        if (this.current(operation)) {
+          this.setState({ progress: { receivedBytes, totalBytes } })
+        }
+      }
+    })
+    operation.transfer = transfer
+    try {
+      await transfer.done
+    } finally {
+      if (operation.transfer === transfer) operation.transfer = null
+    }
+  }
+
+  private async maybeVerifyChecksum(
+    operation: ActiveOperation,
+    url: string,
+    zipPath: string
+  ): Promise<void> {
+    this.checksum = 'skipped'
+    const sidecar = new URL(url)
+    sidecar.pathname = `${sidecar.pathname}.sha256`
+    const destination = `${zipPath}.sha256`
+    const transfer = downloadFile(sidecar.toString(), destination, {
+      maxBytes: 8192,
+      timeoutMs: 30_000,
+      allowedHosts: GITHUB_DOWNLOAD_HOSTS
+    })
+    operation.transfer = transfer
+    try {
       await transfer.done
     } catch {
       this.checksum = 'skipped'
       return
     } finally {
-      this.transfer = null
+      if (operation.transfer === transfer) operation.transfer = null
     }
-    const expected = readFileSync(dest, 'utf8').trim().split(/\s+/)[0]?.toLowerCase()
-    if (!expected || !/^[0-9a-f]{64}$/.test(expected)) {
-      this.checksum = 'skipped'
-      return
-    }
-    const actual = createHash('sha256').update(readFileSync(zipPath)).digest('hex')
-    if (actual !== expected) {
-      throw new Error(`SHA-256 mismatch (expected ${expected}, got ${actual})`)
-    }
+    if (!this.current(operation)) return
+    const expected = readFileSync(destination, 'utf8').trim().split(/\s+/)[0]?.toLowerCase()
+    if (!expected || !/^[0-9a-f]{64}$/.test(expected)) return
+    const actual = await hashFile(zipPath)
+    if (actual !== expected) throw new Error('The archive SHA-256 does not match its sidecar')
     this.checksum = 'ok'
   }
 
-  /**
-   * Everything that can be verified without building: is this really a Bored
-   * Manager source tree, and is it complete enough to install?
-   */
-  private validate(root: string | null): UpdateValidation {
-    const current = currentVersion()
-    const checks: UpdateCheckItem[] = []
-    const warnings: string[] = []
-
-    if (!root) {
-      checks.push({
-        id: 'archive',
-        label: 'Archive contains an app folder',
-        ok: false,
-        detail: 'No package.json was found in the archive or in its single top-level folder'
-      })
-      return { status: 'error', currentVersion: current, checks, warnings }
-    }
-    checks.push({
-      id: 'archive',
-      label: 'Archive contains an app folder',
-      ok: true,
-      detail: root.split(/[\\/]/).pop()
-    })
-
-    let manifest: PackageManifest | null = null
-    try {
-      manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as PackageManifest
-      checks.push({ id: 'manifest', label: 'package.json is readable', ok: true })
-    } catch (err) {
-      checks.push({
-        id: 'manifest',
-        label: 'package.json is readable',
-        ok: false,
-        detail: message(err)
-      })
-    }
-
-    const name = manifest?.name
-    checks.push({
-      id: 'identity',
-      label: 'Archive is a Bored Manager release',
-      ok: name === 'bored-manager',
-      detail:
-        name === 'bored-manager'
-          ? undefined
-          : `package.json name is "${name ?? 'missing'}", expected "bored-manager"`
-    })
-
-    const newVersion = typeof manifest?.version === 'string' ? manifest.version : undefined
-    const versionOk = !!newVersion && /^\d+\.\d+\.\d+/.test(newVersion)
-    checks.push({
-      id: 'version',
-      label: 'Version number is valid',
-      ok: versionOk,
-      detail: versionOk ? `${current} -> ${newVersion}` : `found "${newVersion ?? 'nothing'}"`
-    })
-    if (versionOk && compareVersions(newVersion, current) <= 0) {
-      warnings.push(
-        compareVersions(newVersion, current) === 0
-          ? `The archive has the same version as the installed app (${current})`
-          : `The archive is older than the installed app (${newVersion} < ${current})`
-      )
-    }
-
-    const missing = REQUIRED_ENTRIES.filter((entry) => {
-      const full = join(root, entry.path)
-      try {
-        return !existsSync(full) || statSync(full).isDirectory() !== !!entry.dir
-      } catch {
-        return true
-      }
-    }).map((e) => e.path)
-    checks.push({
-      id: 'files',
-      label: `Core files are present (${REQUIRED_ENTRIES.length} checked)`,
-      ok: missing.length === 0,
-      detail: missing.length ? `missing: ${missing.join(', ')}` : undefined
-    })
-
-    const dev = manifest?.devDependencies ?? {}
-    const hasVite = typeof dev['vite'] === 'string'
-    const hasBuild = !!manifest?.scripts?.['build']
-    const toolchainOk = hasVite && hasBuild
-    checks.push({
-      id: 'toolchain',
-      label: 'Build toolchain is declared',
-      ok: toolchainOk,
-      detail: toolchainOk
-        ? `vite ${dev['vite']}`
-        : [hasVite ? '' : 'missing devDependency: vite', hasBuild ? '' : 'no "build" script']
-            .filter(Boolean)
-            .join('; ')
-    })
-
-    if (this.checksum === 'ok') {
-      checks.push({
-        id: 'checksum',
-        label: 'SHA-256 matches the sidecar file',
-        ok: true
-      })
-    } else {
-      warnings.push('No SHA-256 sidecar was found next to the archive; checksum verification was skipped')
-    }
-
-    if (!existsSync(join(root, 'scripts', 'update.sh'))) {
-      warnings.push(
-        'The new version has no scripts/update.sh, so it will not be able to update itself again'
-      )
-    }
-
-    return {
-      status: checks.every((c) => c.ok) ? 'pass' : 'error',
-      currentVersion: current,
-      newVersion,
-      checks,
-      warnings
-    }
+  private createWorkspace(): string {
+    this.discardWorkspace()
+    const workspace = mkdtempSync(join(tmpdir(), 'bored-manager-update-'))
+    chmodPrivate(workspace, 0o700)
+    this.workspace = workspace
+    return workspace
   }
 
-  private cleanWorkDir(): void {
+  private discardWorkspace(): void {
+    const workspace = this.workspace
+    if (!workspace) return
+    rmSync(workspace, { recursive: true, force: true })
+    this.workspace = null
+    this.stagedRoot = null
+    this.stagedDigest = null
+  }
+
+  private discardWorkspaceQuietly(): boolean {
     try {
-      rmSync(this.workDir(), { recursive: true, force: true })
+      this.discardWorkspace()
+      return true
     } catch {
-      /* a leftover temp folder is harmless */
+      return false
     }
   }
 }
 
-/**
- * Under a systemd unit the detached child would share the service cgroup
- * and die with `systemctl stop`. `systemd-run --user` puts it in its own
- * transient scope. Anywhere else, a detached bash is enough.
- */
-function launchUpdateScript(script: string, args: string[], work: string): void {
-  if (canSystemdRun()) {
-    const launched = spawnSync(
+async function hashFile(path: string): Promise<string> {
+  const hash = createHash('sha256')
+  for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer)
+  return hash.digest('hex')
+}
+
+function chmodPrivate(path: string, mode: number): void {
+  try {
+    chmodSync(path, mode)
+  } catch (error) {
+    if (process.platform !== 'win32') throw error
+  }
+}
+
+export interface UpdateLauncher {
+  spawn: typeof spawn
+  spawnSync: typeof spawnSync
+}
+
+export async function launchUpdateScript(
+  script: string,
+  args: string[],
+  work: string,
+  launcher: UpdateLauncher = { spawn, spawnSync }
+): Promise<void> {
+  if (process.env['INVOCATION_ID']) {
+    const unit = `bored-manager-update-${process.pid}-${randomBytes(6).toString('hex')}`
+    const launched = launcher.spawnSync(
       'systemd-run',
       [
         '--user',
         '--collect',
+        `--unit=${unit}`,
+        '--service-type=exec',
         `--setenv=PATH=${process.env['PATH'] ?? ''}`,
         `--working-directory=${work}`,
         'bash',
@@ -522,49 +553,72 @@ function launchUpdateScript(script: string, args: string[], work: string): void 
       ],
       { cwd: work, encoding: 'utf8' }
     )
-    if (launched.error) throw launched.error
-    if (launched.status === 0) return
-    // Fall through: some environments have the binary but reject --user.
+    if (launched.error || launched.status !== 0) {
+      throw new Error('systemd-run did not create an independent transient service')
+    }
+    const confirmation = launcher.spawnSync(
+      'systemctl',
+      ['--user', 'show', unit, '--property=ActiveState', '--value'],
+      { cwd: work, encoding: 'utf8' }
+    )
+    const active = confirmation.stdout?.trim()
+    if (
+      confirmation.error ||
+      confirmation.status !== 0 ||
+      (active !== 'active' && active !== 'activating')
+    ) {
+      throw new Error('the transient update service could not be confirmed active')
+    }
+    return
   }
 
-  const logFd = openSync(join(work, 'update.log'), 'a')
+  const logFd = openSync(join(work, 'update.log'), 'ax', 0o600)
   try {
-    const child = spawn('bash', [script, ...args], {
-      cwd: work,
-      detached: true,
-      stdio: ['ignore', logFd, logFd]
+    await new Promise<void>((resolve, reject) => {
+      const child = launcher.spawn('bash', [script, ...args], {
+        cwd: work,
+        detached: true,
+        stdio: ['ignore', logFd, logFd]
+      })
+      child.once('error', reject)
+      child.once('spawn', () => {
+        child.unref()
+        resolve()
+      })
     })
-    child.unref()
   } finally {
     closeSync(logFd)
   }
 }
 
-function canSystemdRun(): boolean {
-  if (!process.env['INVOCATION_ID']) return false
-  const probe = spawnSync('systemd-run', ['--help'], { encoding: 'utf8' })
-  return !probe.error
+function redactKnownPaths(text: string, paths: readonly string[]): string {
+  let safe = text
+  for (const path of paths) {
+    if (!path) continue
+    safe = safe.split(path).join('[path]')
+    safe = safe.split(path.replace(/\\/g, '/')).join('[path]')
+  }
+  return safe
 }
 
-function currentVersion(): string {
-  return appVersion()
-}
-
-function message(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
+function safeMessage(error: unknown, fallback: string): string {
+  const raw = error instanceof Error ? error.message : String(error)
+  const redacted = redactKnownPaths(raw, [appRoot(), dataDir(), tmpdir()])
+  return redacted && !/[A-Za-z]:[\\/]|\/(?:home|tmp|var|opt)\//.test(redacted)
+    ? redacted
+    : fallback
 }
 
 function normalizeUrl(raw: string): { value: string } | { error: string } {
   const trimmed = raw.trim()
   if (!trimmed) return { error: 'Paste the URL of a release .zip first' }
-  let url: URL
   try {
-    url = assertSafeDownloadUrl(trimmed, ALLOWED_HOSTS)
-  } catch (err) {
-    return { error: message(err) }
+    const url = assertSafeDownloadUrl(trimmed, GITHUB_DOWNLOAD_HOSTS)
+    if (!looksLikeZipUrl(url)) {
+      return { error: 'The link must point directly at a .zip archive' }
+    }
+    return { value: url.toString() }
+  } catch (error) {
+    return { error: safeMessage(error, 'The update URL is not allowed') }
   }
-  if (!looksLikeZipUrl(url)) {
-    return { error: 'The link must point directly at a .zip archive' }
-  }
-  return { value: url.toString() }
 }

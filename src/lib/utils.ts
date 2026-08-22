@@ -42,10 +42,6 @@ export function formatTemp(v: number): string {
   return `${v.toFixed(0)}°C`
 }
 
-export function formatWatts(v: number): string {
-  return `${v.toFixed(0)} W`
-}
-
 /** Compact count for chart axes: 1200 -> "1.2k". */
 export function formatCount(v: number): string {
   if (!Number.isFinite(v)) return '0'
@@ -74,18 +70,6 @@ export function formatUptime(sec: number): string {
 /** "5m" / "2h 3m" - elapsed time since an absolute ms timestamp (a `startedAt`-style field). */
 export function formatDuration(startedAtMs: number): string {
   return formatUptime(Math.max(0, (Date.now() - startedAtMs) / 1000))
-}
-
-/**
- * Colour a temperature against the chip's own critical point when it reports
- * one - 70 °C is normal for a CPU and alarming for an NVMe controller.
- */
-export function tempKind(value: number, crit?: number): 'default' | 'warn' | 'bad' {
-  const hot = crit && crit > 0 ? crit * 0.9 : 85
-  const warm = crit && crit > 0 ? crit * 0.75 : 70
-  if (value >= hot) return 'bad'
-  if (value >= warm) return 'warn'
-  return 'default'
 }
 
 /**

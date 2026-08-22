@@ -10,8 +10,10 @@ import type {
   UpgradablePackage
 } from '@shared/types'
 import { shQuote, splitSections } from '@shared/shell'
-import { connection } from '../connection'
+import { connection, type ConnectionManager } from '../connection'
+import { internalErrorDetail } from '../errors'
 import type { StreamHandle } from '../executors/types'
+import { log } from '../log'
 import { registry } from '../session-registry'
 
 /** Conservative allow-list for package names passed to shell commands. */
@@ -152,7 +154,9 @@ export class PackagesService {
 
   constructor(
     private emitLog: (data: string) => void,
-    private emitState: (state: PkgActionState) => void
+    private emitState: (state: PkgActionState) => void,
+    private readonly target: ConnectionManager = connection,
+    private readonly owner = 'core'
   ) {}
 
   reset(): void {
@@ -168,8 +172,8 @@ export class PackagesService {
   /** Detect the target's package manager once per connection. */
   private async detect(): Promise<PackageManager> {
     if (this.manager) return this.manager
-    if (!connection.connected) return 'none'
-    const res = await connection.exec(
+    if (!this.target.connected) return 'none'
+    const res = await this.target.exec(
       `command -v apt-get >/dev/null 2>&1 && echo apt; ` +
         `command -v dnf >/dev/null 2>&1 && echo dnf; ` +
         `command -v pacman >/dev/null 2>&1 && echo pacman; true`,
@@ -188,7 +192,7 @@ export class PackagesService {
 
   async overview(): Promise<PackagesOverview> {
     const manager = await this.detect()
-    if (manager === 'none' || !connection.connected) return { ...EMPTY_OVERVIEW, manager }
+    if (manager === 'none' || !this.target.connected) return { ...EMPTY_OVERVIEW, manager }
 
     if (manager === 'apt') {
       const cmd = [
@@ -199,7 +203,7 @@ export class PackagesService {
         `echo '===STAMP==='; stat -c %Y /var/lib/apt/periodic/update-success-stamp 2>/dev/null || stat -c %Y /var/lib/apt/lists 2>/dev/null`,
         `echo '===HISTORY==='; tail -n 600 /var/log/apt/history.log 2>/dev/null`
       ].join('; ')
-      const res = await connection.exec(cmd, { timeoutMs: 60000 })
+      const res = await this.target.exec(cmd, { timeoutMs: 60000 })
       const sec = splitSections(res.stdout)
       const { list, sizeKb } = parseAptInstalled(sec.get('INSTALLED') ?? '')
       const upgradable = parseAptUpgradable(sec.get('UPGRADABLE') ?? '')
@@ -221,7 +225,7 @@ export class PackagesService {
         `echo '===INSTALLED==='; rpm -qa --qf '%{NAME}\\t%{VERSION}-%{RELEASE}\\t%{ARCH}\\t%{SIZE}\\n' 2>/dev/null`,
         `echo '===UPGRADABLE==='; dnf -q check-update 2>/dev/null || true`
       ].join('; ')
-      const res = await connection.exec(cmd, { timeoutMs: 120000 })
+      const res = await this.target.exec(cmd, { timeoutMs: 120000 })
       const sec = splitSections(res.stdout)
       const { list, sizeKb } = parseRpmInstalled(sec.get('INSTALLED') ?? '')
       const upgradable = parseDnfUpgradable(sec.get('UPGRADABLE') ?? '')
@@ -243,7 +247,7 @@ export class PackagesService {
       `echo '===UPGRADABLE==='; pacman -Qu 2>/dev/null || true`,
       `echo '===HISTORY==='; tail -n 400 /var/log/pacman.log 2>/dev/null`
     ].join('; ')
-    const res = await connection.exec(cmd, { timeoutMs: 60000 })
+    const res = await this.target.exec(cmd, { timeoutMs: 60000 })
     const sec = splitSections(res.stdout)
     const installed = parsePacmanInstalled(sec.get('INSTALLED') ?? '')
     const upgradable = parsePacmanUpgradable(sec.get('UPGRADABLE') ?? '')
@@ -266,7 +270,7 @@ export class PackagesService {
     const quoted = shQuote(q)
 
     if (manager === 'apt') {
-      const res = await connection.exec(`apt-cache search -- ${quoted} 2>/dev/null | head -n 60`, {
+      const res = await this.target.exec(`apt-cache search -- ${quoted} 2>/dev/null | head -n 60`, {
         timeoutMs: 30000
       })
       return res.stdout
@@ -277,7 +281,7 @@ export class PackagesService {
     }
 
     if (manager === 'dnf') {
-      const res = await connection.exec(`dnf -q search -- ${quoted} 2>/dev/null | head -n 60`, {
+      const res = await this.target.exec(`dnf -q search -- ${quoted} 2>/dev/null | head -n 60`, {
         timeoutMs: 60000
       })
       return res.stdout
@@ -287,7 +291,7 @@ export class PackagesService {
         .map((m) => ({ name: m[1], summary: m[2] }))
     }
 
-    const res = await connection.exec(`pacman -Ss -- ${quoted} 2>/dev/null | head -n 120`, {
+    const res = await this.target.exec(`pacman -Ss -- ${quoted} 2>/dev/null | head -n 120`, {
       timeoutMs: 30000
     })
     const out: PackageSearchResult[] = []
@@ -364,7 +368,7 @@ export class PackagesService {
    */
   async runAction(action: PkgAction, pkg?: string): Promise<OkResult> {
     if (this.state.running) return { ok: false, error: 'another package operation is running' }
-    if (!connection.connected) return { ok: false, error: 'not connected' }
+    if (!this.target.connected) return { ok: false, error: 'not connected' }
     if (pkg != null && !PKG_NAME_RE.test(pkg)) return { ok: false, error: 'invalid package name' }
     const manager = await this.detect()
     if (manager === 'none') return { ok: false, error: 'no supported package manager found' }
@@ -372,14 +376,16 @@ export class PackagesService {
     if (!cmd) return { ok: false, error: 'invalid action' }
 
     try {
-      const handle = await connection.streamSudo(`${cmd} 2>&1`)
-      const registryId = registry.register(`packages:${action}`, () => handle.kill())
-      this.action = { handle, registryId }
+      const handle = await this.target.streamSudo(`${cmd} 2>&1`, this.owner)
+      const registryId = registry.register(`packages:${this.owner}:${action}`, () => handle.kill())
+      const tracked = { handle, registryId }
+      this.action = tracked
       this.state = { running: true, action, target: pkg }
       this.emitState(this.state)
       this.emitLog(`$ ${cmd}\n`)
       handle.onData((d) => this.emitLog(d))
       handle.onExit((code) => {
+        if (this.action !== tracked) return
         registry.unregister(registryId)
         this.action = null
         this.state = { running: false, action, target: pkg, exitCode: code }
@@ -388,8 +394,9 @@ export class PackagesService {
       })
       return { ok: true }
     } catch (err) {
+      log(`package operation failed to start: ${internalErrorDetail(err)}`)
       this.state = { running: false, action, target: pkg, exitCode: null }
-      return { ok: false, error: String(err) }
+      return { ok: false, error: 'Package operation could not be started' }
     }
   }
 

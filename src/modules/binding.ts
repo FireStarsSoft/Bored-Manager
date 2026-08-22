@@ -7,19 +7,39 @@
  */
 import * as React from 'react'
 import type { ActionSpec, DataSource } from '@shared/module-ui'
-import { REFRESH_INTERVAL_MS, SYSTEM_HISTORY_STREAM, type HistoryPoint, type RefreshSpeed } from '@shared/types'
+import { REFRESH_INTERVAL_MS, SYSTEM_HISTORY_STREAM, type HistoryPoint } from '@shared/types'
 import { useApp } from '@/state/store'
 import { useModuleLatest, useModuleSeries } from '@/lib/module-bus'
 import { useWindowedSeries } from '@/lib/history'
 import { moduleCall, useAppSettings } from '@/lib/modules'
 import { useModuleManifest } from '@/lib/module-registry'
 import { errorMessage } from '@/lib/utils'
+import { useDocumentVisible } from '@/lib/visibility'
 
 /** Default chart window when a block does not say otherwise (matches the live buffer). */
 export const DEFAULT_BLOCK_WINDOW_SEC = 60
 
 /** Marks a string as "read from the current scope" instead of a literal value or a path into the source. */
 const SCOPE_PREFIX = '$row.'
+const NOOP = (): void => undefined
+const EMPTY_HISTORY: HistoryPoint[] = []
+
+type StreamSource = Extract<DataSource, { kind: 'stream' }>
+type InvokeSource = Extract<DataSource, { kind: 'invoke' }>
+type HistorySource = Extract<DataSource, { kind: 'history' }>
+type CoreSource = Extract<DataSource, { kind: 'core' }>
+
+export interface ResolvedBlockData {
+  value: unknown
+  refetch: () => void
+}
+
+interface BlockDataProps {
+  moduleId: string
+  source: DataSource
+  opts: { visible: boolean; windowSec?: number; scope?: unknown }
+  children: (data: ResolvedBlockData) => React.ReactNode
+}
 
 function isScopeRef(value: unknown): value is string {
   return typeof value === 'string' && value.startsWith(SCOPE_PREFIX)
@@ -71,154 +91,182 @@ export function resolveActionArgs(action: ActionSpec, scope: unknown, extra: unk
   return [...fromRow, ...substituteScopeArgs(action.args, scope), ...extra]
 }
 
-function useStreamValue(moduleId: string, source: DataSource, scope: unknown): unknown {
-  const isStream = source.kind === 'stream'
-  const event = isStream ? source.event : ''
-  const path = isStream ? source.path : undefined
+function useStreamValue(moduleId: string, source: StreamSource, scope: unknown): unknown {
+  const event = source.event
   const manifest = useModuleManifest(moduleId)
   const streamKind = manifest?.streams?.find((s) => s.event === event)?.kind
   const latest = useModuleLatest(moduleId, event)
   const series = useModuleSeries(moduleId, event)
-  if (!isStream) return undefined
   const raw = streamKind === 'series' ? series : latest
-  return applyPath(raw, path, scope)
+  return applyPath(raw, source.path, scope)
 }
 
 /** Invoke's value plus a manual `refetch` - a table's row actions call this after a change (kill, renice, ...). */
 function useInvokeValue(
   moduleId: string,
-  source: DataSource,
+  source: InvokeSource,
   visible: boolean,
   scope: unknown
 ): [unknown, () => void] {
-  const isInvoke = source.kind === 'invoke'
-  const method = isInvoke ? source.method : ''
-  const path = isInvoke ? source.path : undefined
-  const intervalKey = isInvoke ? source.intervalKey : undefined
+  const method = source.method
+  const intervalKey = source.intervalKey
+  const machineId = useApp((state) => state.activeMachineId)
+  const machineRevision = useApp(
+    (state) =>
+      state.machines.find((machine) => machine.machineId === state.activeMachineId)?.revision ?? 0
+  )
   const args = React.useMemo(
-    () => (isInvoke ? substituteScopeArgs(source.args, scope) : []),
+    () => substituteScopeArgs(source.args, scope),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [isInvoke, isInvoke ? JSON.stringify(source.args) : '', scope]
+    [JSON.stringify(source.args), scope]
   )
   const speed = useAppSettings()?.refresh[intervalKey ?? '']
+  const documentVisible = useDocumentVisible()
   const [value, setValue] = React.useState<unknown>(undefined)
   const [reloadTick, setReloadTick] = React.useState(0)
   const argsKey = JSON.stringify(args)
   const refetch = React.useCallback(() => setReloadTick((t) => t + 1), [])
+  const inFlightRef = React.useRef<Promise<void> | null>(null)
+  const pendingRunRef = React.useRef<(() => void) | null>(null)
 
   React.useEffect(() => {
-    if (!isInvoke || !visible) return
+    if (!visible || !documentVisible || !machineId) return
     let cancelled = false
+    setValue(undefined)
     const run = (): void => {
-      void moduleCall(moduleId, method, ...args).then(
-        (v) => {
-          if (!cancelled) setValue(v)
-        },
-        (err: unknown) => {
+      if (inFlightRef.current) {
+        pendingRunRef.current = run
+        return
+      }
+      const work = (async (): Promise<void> => {
+        try {
+          const next = await moduleCall(moduleId, method, ...args)
+          if (!cancelled) setValue(next)
+        } catch (err) {
           if (!cancelled) {
             useApp.getState().showNotice('error', `${moduleId}.${method}: ${errorMessage(err)}`)
           }
         }
-      )
+      })()
+      inFlightRef.current = work
+      void work.finally(() => {
+        if (inFlightRef.current === work) inFlightRef.current = null
+        const pending = pendingRunRef.current
+        pendingRunRef.current = null
+        pending?.()
+      })
     }
     run()
-    if (!intervalKey) return () => (cancelled = true)
+    if (!intervalKey) {
+      return () => {
+        cancelled = true
+        if (pendingRunRef.current === run) pendingRunRef.current = null
+      }
+    }
     const ms = REFRESH_INTERVAL_MS[speed ?? 'normal']
-    if (ms <= 0) return () => (cancelled = true)
+    if (ms <= 0) {
+      return () => {
+        cancelled = true
+        if (pendingRunRef.current === run) pendingRunRef.current = null
+      }
+    }
     const id = setInterval(run, ms)
     return () => {
       cancelled = true
+      if (pendingRunRef.current === run) pendingRunRef.current = null
       clearInterval(id)
     }
     // args is already content-stable via argsKey below; re-running for every new array
     // identity would restart polling on every render for no reason.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isInvoke, visible, moduleId, method, argsKey, intervalKey, speed, reloadTick])
+  }, [
+    visible,
+    documentVisible,
+    machineId,
+    machineRevision,
+    moduleId,
+    method,
+    argsKey,
+    intervalKey,
+    speed,
+    reloadTick
+  ])
 
-  if (!isInvoke) return [undefined, refetch]
-  return [applyPath(value, path, scope), refetch]
+  return [applyPath(value, source.path, scope), refetch]
 }
 
 function identityPoint(p: HistoryPoint): HistoryPoint {
   return p
 }
 
-function useHistoryValue(moduleId: string, source: DataSource, windowSec: number): unknown {
-  const isHistory = source.kind === 'history'
-  const stream = isHistory ? source.stream : ''
-  const coreSystem = useApp((s) => s.system)
+function useHistoryValue(moduleId: string, source: HistorySource, windowSec: number): unknown {
+  const stream = source.stream
+  const coreSystem = useApp((s) =>
+    stream === SYSTEM_HISTORY_STREAM
+      ? (s.system as unknown as HistoryPoint[])
+      : EMPTY_HISTORY
+  )
   const moduleSeries = useModuleSeries<HistoryPoint>(moduleId, stream)
   const live = stream === SYSTEM_HISTORY_STREAM ? coreSystem : moduleSeries
-  const points = useWindowedSeries(stream, windowSec, live as HistoryPoint[], identityPoint)
-  return isHistory ? points : undefined
+  return useWindowedSeries(stream, windowSec, live, identityPoint)
 }
 
-function useCoreValue(source: DataSource, scope: unknown): unknown {
-  const isCore = source.kind === 'core'
-  const stream = isCore ? source.stream : undefined
-  const path = isCore ? source.path : undefined
-  const system = useApp((s) => s.system)
-  const top = useApp((s) => s.topNow)
-  const services = useApp((s) => s.servicesNow)
-  if (!isCore) return undefined
-  if (stream === 'system') return applyPath(system.at(-1), path, scope)
-  if (stream === 'top') return applyPath(top, path, scope)
-  if (stream === 'services') return applyPath(services, path, scope)
+function useCoreValue(source: CoreSource, scope: unknown): unknown {
+  const system = useApp((s) => (source.stream === 'system' ? s.system : EMPTY_HISTORY))
+  const top = useApp((s) => (source.stream === 'top' ? s.topNow : null))
+  const services = useApp((s) => (source.stream === 'services' ? s.servicesNow : null))
+  if (source.stream === 'system') return applyPath(system.at(-1), source.path, scope)
+  if (source.stream === 'top') return applyPath(top, source.path, scope)
+  if (source.stream === 'services') return applyPath(services, source.path, scope)
   return undefined
 }
 
-function useResolvedBlockData(
-  moduleId: string,
-  source: DataSource,
-  opts: { visible: boolean; windowSec?: number; scope?: unknown }
-): { value: unknown; refetch: () => void } {
-  const streamValue = useStreamValue(moduleId, source, opts.scope)
-  const [invokeValue, invokeRefetch] = useInvokeValue(moduleId, source, opts.visible, opts.scope)
-  const historyValue = useHistoryValue(moduleId, source, opts.windowSec ?? DEFAULT_BLOCK_WINDOW_SEC)
-  const coreValue = useCoreValue(source, opts.scope)
-  let value: unknown
-  switch (source.kind) {
-    case 'stream':
-      value = streamValue
-      break
-    case 'invoke':
-      value = invokeValue
-      break
-    case 'history':
-      value = historyValue
-      break
-    case 'core':
-      value = coreValue
-      break
-    default:
-      value = undefined
-  }
-  return { value, refetch: source.kind === 'invoke' ? invokeRefetch : () => undefined }
+function StreamData({ moduleId, source, opts, children }: Omit<BlockDataProps, 'source'> & {
+  source: StreamSource
+}): React.JSX.Element {
+  const value = useStreamValue(moduleId, source, opts.scope)
+  return React.createElement(React.Fragment, null, children({ value, refetch: NOOP }))
+}
+
+function InvokeData({ moduleId, source, opts, children }: Omit<BlockDataProps, 'source'> & {
+  source: InvokeSource
+}): React.JSX.Element {
+  const [value, refetch] = useInvokeValue(moduleId, source, opts.visible, opts.scope)
+  return React.createElement(React.Fragment, null, children({ value, refetch }))
+}
+
+function HistoryData({ moduleId, source, opts, children }: Omit<BlockDataProps, 'source'> & {
+  source: HistorySource
+}): React.JSX.Element {
+  const value = useHistoryValue(
+    moduleId,
+    source,
+    opts.windowSec ?? DEFAULT_BLOCK_WINDOW_SEC
+  )
+  return React.createElement(React.Fragment, null, children({ value, refetch: NOOP }))
+}
+
+function CoreData({ source, opts, children }: Omit<BlockDataProps, 'source' | 'moduleId'> & {
+  source: CoreSource
+}): React.JSX.Element {
+  const value = useCoreValue(source, opts.scope)
+  return React.createElement(React.Fragment, null, children({ value, refetch: NOOP }))
 }
 
 /**
- * Resolve one block's data source. Always call with the block's own
- * `moduleId`/`source`. `scope` is the open row when this block lives inside a
- * table's `rowDetail` drawer - `undefined` everywhere else.
+ * A component boundary, rather than a conditional hook. Changing source kind
+ * remounts the matching resolver, so a stream block never subscribes to core
+ * metrics and an invoke block never keeps an archive query alive.
  */
-export function useBlockData(
-  moduleId: string,
-  source: DataSource,
-  opts: { visible: boolean; windowSec?: number; scope?: unknown }
-): unknown {
-  return useResolvedBlockData(moduleId, source, opts).value
-}
-
-/** Same as `useBlockData`, plus a manual `refetch` - for a block that needs to force an `invoke` source to re-read (a table's row actions). */
-export function useBlockDataWithRefetch(
-  moduleId: string,
-  source: DataSource,
-  opts: { visible: boolean; windowSec?: number; scope?: unknown }
-): { value: unknown; refetch: () => void } {
-  return useResolvedBlockData(moduleId, source, opts)
-}
-
-/** The configured speed of a fast interval key, resolved to idle/ms - for blocks that show it. */
-export function useIntervalSpeed(key: string | undefined): RefreshSpeed | undefined {
-  return useAppSettings()?.refresh[key ?? '']
+export function BlockData(props: BlockDataProps): React.JSX.Element {
+  switch (props.source.kind) {
+    case 'stream':
+      return React.createElement(StreamData, { ...props, key: 'stream', source: props.source })
+    case 'invoke':
+      return React.createElement(InvokeData, { ...props, key: 'invoke', source: props.source })
+    case 'history':
+      return React.createElement(HistoryData, { ...props, key: 'history', source: props.source })
+    case 'core':
+      return React.createElement(CoreData, { ...props, key: 'core', source: props.source })
+  }
 }

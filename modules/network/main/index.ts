@@ -1,6 +1,7 @@
 import type { ModuleActivate } from '@shared/modules'
+import { createTtlCache } from '@shared/cache'
 import { NetworkService } from './service'
-import { NetTunablesService } from './tunables'
+import { NetTunablesService, type NetTunables } from './tunables'
 
 /**
  * Main-process half of the Network module. One poller, but two speeds inside
@@ -15,6 +16,9 @@ import { NetTunablesService } from './tunables'
 const activate: ModuleActivate = (ctx) => {
   const service = new NetworkService(ctx)
   const tunables = new NetTunablesService(ctx)
+  const tunablesReads = createTtlCache<NetTunables>(() =>
+    Math.max(1_000, ctx.fastIntervalMs('network') / 2)
+  )
 
   // Killing the owner of a connection is done here rather than through the
   // Processes module, so this page works whether that one is installed.
@@ -29,11 +33,19 @@ const activate: ModuleActivate = (ctx) => {
 
   // The Host tuning page. Read on demand rather than polled: these values only
   // move when something changes them, and reading them costs a shell round trip.
-  ctx.handle('netTunables', () => tunables.read())
+  ctx.handle('netTunables', () => tunablesReads.get('host', () => tunables.read()))
   ctx.handle('planCheck', (values: unknown) => tunables.planCheck(values))
-  ctx.handle('planApply', (payload: unknown) => tunables.planApply(payload))
+  ctx.handle('planApply', async (payload: unknown) => {
+    const result = await tunables.planApply(payload)
+    if (result.ok) tunablesReads.clear()
+    return result
+  })
   ctx.handle('tunablesCheck', (values: unknown) => tunables.tunablesCheck(values))
-  ctx.handle('tunablesApply', (payload: unknown) => tunables.tunablesApply(payload))
+  ctx.handle('tunablesApply', async (payload: unknown) => {
+    const result = await tunables.tunablesApply(payload)
+    if (result.ok) tunablesReads.clear()
+    return result
+  })
   ctx.handle('rulesEffective', () => tunables.rulesEffective())
   ctx.handle('rulesCheck', (values: unknown) => tunables.rulesCheck(values))
   ctx.handle('rulesApply', (payload: unknown) => tunables.rulesApply(payload))

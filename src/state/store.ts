@@ -5,9 +5,10 @@ import type {
   AuthSettings,
   AuthStatus,
   ConnectionConfig,
+  ConnectionResult,
   ConnectionStatus,
-  OkResult,
   Density,
+  MachineStatus,
   ServerSettings,
   ServicesSnapshot,
   SystemSnapshot,
@@ -21,6 +22,10 @@ import { api, type SavedSettings } from '@/lib/api'
 import { clearModule, clearModuleBus } from '@/lib/module-bus'
 import { seedModuleSnapshots, subscribeModuleStreams, useModuleSpecs } from '@/lib/module-registry'
 import { errorMessage, pruneByAge } from '@/lib/utils'
+import {
+  reportActiveTab,
+  startDocumentVisibilityTracking
+} from '@/lib/visibility'
 import { wsClient, type WsState } from '@/lib/ws-client'
 
 const HISTORY_MS = 5 * 60 * 1000
@@ -32,6 +37,88 @@ const HISTORY_MS = 5 * 60 * 1000
  * knows, so it must not report its own action as somebody else's.
  */
 let selfChanging = 0
+let machineSeedGeneration = 0
+
+const ACTIVE_MACHINE_KEY = 'bm.activeMachine'
+const SESSION_MACHINES_KEY = 'bm.sessionMachines'
+
+export interface SessionMachine {
+  machineId: string
+  mode: ConnectionConfig['mode']
+  label?: string
+  host?: string
+  port?: number
+  username?: string
+  savedId?: string
+}
+
+function readSessionMachines(): SessionMachine[] {
+  try {
+    const value = JSON.parse(sessionStorage.getItem(SESSION_MACHINES_KEY) ?? '[]') as unknown
+    return Array.isArray(value)
+      ? value.filter(
+          (item): item is SessionMachine =>
+            !!item &&
+            typeof item === 'object' &&
+            typeof (item as SessionMachine).machineId === 'string' &&
+            ((item as SessionMachine).mode === 'local' || (item as SessionMachine).mode === 'ssh')
+        )
+      : []
+  } catch {
+    return []
+  }
+}
+
+function writeSessionMachines(machines: SessionMachine[]): void {
+  try {
+    sessionStorage.setItem(SESSION_MACHINES_KEY, JSON.stringify(machines))
+  } catch {
+    /* storage can be unavailable in a hardened browser */
+  }
+}
+
+function storedActiveMachine(): string | null {
+  try {
+    return sessionStorage.getItem(ACTIVE_MACHINE_KEY)
+  } catch {
+    return null
+  }
+}
+
+function persistActiveMachine(machineId: string | null): void {
+  try {
+    if (machineId) sessionStorage.setItem(ACTIVE_MACHINE_KEY, machineId)
+    else sessionStorage.removeItem(ACTIVE_MACHINE_KEY)
+  } catch {
+    /* storage can be unavailable in a hardened browser */
+  }
+}
+
+function sessionMachineFromStatus(machine: MachineStatus): SessionMachine {
+  return {
+    machineId: machine.machineId,
+    mode: machine.mode ?? 'ssh',
+    label: machine.label,
+    host: machine.host,
+    port: machine.port,
+    username: machine.username,
+    savedId:
+      machine.mode === 'ssh' && machine.username && machine.host
+        ? `${machine.username}@${machine.host}:${machine.port || 22}`
+        : undefined
+  }
+}
+
+function mergeSessionMachines(
+  current: SessionMachine[],
+  connected: MachineStatus[]
+): SessionMachine[] {
+  const byId = new Map(current.map((machine) => [machine.machineId, machine]))
+  for (const machine of connected) byId.set(machine.machineId, sessionMachineFromStatus(machine))
+  const result = [...byId.values()]
+  writeSessionMachines(result)
+  return result
+}
 
 /**
  * A page id. Either one of the app's own (`overview`, `packages`, `terminals`,
@@ -74,6 +161,13 @@ interface AppState {
   server: WsState
   /** null until the server has been asked whether a login is required. */
   auth: AuthStatus | null
+  /** Every target currently connected to the shared server pool. */
+  machines: MachineStatus[]
+  /** The target this browser is rendering. */
+  activeMachineId: string | null
+  /** Targets seen by this browser tab, including disconnected ones. */
+  sessionMachines: SessionMachine[]
+  /** Compatibility view of the active machine for existing core components. */
   status: ConnectionStatus
   settings: AppSettings | null
   /** The theme after resolving 'system'; see applyTheme. */
@@ -112,8 +206,10 @@ interface AppState {
   logout(): Promise<void>
   /** Pull the current server-side state again, after (re)connecting to it. */
   reseed(): Promise<void>
-  connect(cfg: ConnectionConfig): Promise<OkResult>
-  disconnect(): Promise<void>
+  connect(cfg: ConnectionConfig): Promise<ConnectionResult>
+  reconnect(savedId: string, confirmation?: ConnectionConfig['hostKeyConfirmation']): Promise<ConnectionResult>
+  disconnect(machineId?: string): Promise<void>
+  setActiveMachine(machineId: string | null): Promise<void>
   setActiveTab(tab: TabId): void
   setOverviewWindow(sec: number): void
   updateSettings(patch: SettingsPatch): Promise<SavedSettings>
@@ -130,6 +226,9 @@ export const useApp = create<AppState>((set, get) => ({
   initError: null,
   server: 'closed',
   auth: null,
+  machines: [],
+  activeMachineId: storedActiveMachine(),
+  sessionMachines: readSessionMachines(),
   status: { connected: false },
   settings: null,
   dark: document.documentElement.classList.contains('dark'),
@@ -159,35 +258,79 @@ export const useApp = create<AppState>((set, get) => ({
 
     // Subscriptions live on the client, not on the socket, so they are set up
     // once and survive both a reconnect and a new login.
-    api.metrics.onSystem((s) => set((st) => ({ system: prune([...st.system, s]) })))
-    api.metrics.onTop((s) => set({ topNow: s }))
+    api.metrics.onSystem(({ machineId, data }) => {
+      if (machineId === get().activeMachineId) {
+        set((st) => ({ system: prune([...st.system, data]) }))
+      }
+    })
+    api.metrics.onTop(({ machineId, data }) => {
+      if (machineId === get().activeMachineId) set({ topNow: data })
+    })
     api.metrics.onServices((s) => set({ servicesNow: s }))
     // Every module's declared streams land in the module bus, not here.
-    subscribeModuleStreams()
+    subscribeModuleStreams(() => get().activeMachineId)
     api.modules.onListChanged((list) => get().setModules(list))
-    api.connection.onLost(() => {
-      set({ status: { connected: false }, ...emptySession() })
-      get().showNotice('error', 'Connection to the target machine was lost')
+    api.connection.onLost(({ machineId }) => {
+      const machine = get().machines.find((entry) => entry.machineId === machineId)
+      get().showNotice(
+        'error',
+        `Connection to ${machine?.label ?? machine?.host ?? machineId} was lost`
+      )
     })
-    api.connection.onStatus((status) => {
-      if (selfChanging > 0) {
-        set({ status })
-        return
+    api.connection.onStatus((machines) => {
+      const before = get().machines
+      const beforeIds = new Set(before.map((machine) => machine.machineId))
+      const nextIds = new Set(machines.map((machine) => machine.machineId))
+      const sessionMachines = mergeSessionMachines(get().sessionMachines, machines)
+      const current = get().activeMachineId
+      const preferred =
+        (current && nextIds.has(current) ? current : null) ??
+        (storedActiveMachine() && nextIds.has(storedActiveMachine()!) ? storedActiveMachine() : null) ??
+        machines[0]?.machineId ??
+        null
+      const activeRevisionChanged =
+        preferred != null &&
+        preferred === current &&
+        before.find((machine) => machine.machineId === preferred)?.revision !==
+          machines.find((machine) => machine.machineId === preferred)?.revision
+
+      set({ machines, sessionMachines })
+      if (preferred !== current || activeRevisionChanged) {
+        void get()
+          .setActiveMachine(preferred)
+          .catch((err) => get().showNotice('error', errorMessage(err)))
+      } else {
+        set({ status: machines.find((machine) => machine.machineId === preferred) ?? { connected: false } })
       }
-      const was = get().status.connected
-      if (status.connected && !was) {
-        void get().reseed().catch((err) => get().showNotice('error', errorMessage(err)))
-        get().showNotice('info', `Another client connected to ${status.label ?? 'a machine'}`)
-        return
+
+      if (selfChanging === 0) {
+        if (activeRevisionChanged && preferred) {
+          const machine = machines.find((entry) => entry.machineId === preferred)
+          get().showNotice(
+            'info',
+            `Another client reconnected ${machine?.label ?? machine?.host ?? preferred}`
+          )
+        }
+        for (const machine of machines) {
+          if (!beforeIds.has(machine.machineId)) {
+            get().showNotice(
+              'info',
+              `Another client connected to ${machine.label ?? machine.host ?? machine.machineId}`
+            )
+          }
+        }
+        for (const machine of before) {
+          if (!nextIds.has(machine.machineId)) {
+            get().showNotice(
+              'info',
+              `Another client disconnected ${machine.label ?? machine.host ?? machine.machineId}`
+            )
+          }
+        }
       }
-      if (!status.connected && was) {
-        set({ status, ...emptySession() })
-        get().showNotice('info', 'Another client disconnected the target machine')
-        return
-      }
-      set({ status })
     })
     api.terminals.onExit(() => void get().refreshTerminals())
+    startDocumentVisibilityTracking(() => get().activeTab)
 
     await get().startSession()
   },
@@ -260,11 +403,16 @@ export const useApp = create<AppState>((set, get) => ({
     set({
       auth: { authEnabled: true, authenticated: false, username: null, locked: false },
       settings: null,
+      machines: [],
+      activeMachineId: null,
+      sessionMachines: [],
       status: { connected: false },
       modules: [],
       enabledModules: [],
       ...emptySession()
     })
+    persistActiveMachine(null)
+    writeSessionMachines([])
     if (reason) get().showNotice('error', reason)
   },
 
@@ -279,22 +427,27 @@ export const useApp = create<AppState>((set, get) => ({
    * back instead of starting from an empty page.
    */
   async reseed() {
-    const [status, modules] = await Promise.all([api.connection.status(), api.modules.list()])
+    const [machines, modules] = await Promise.all([api.connection.status(), api.modules.list()])
     get().setModules(modules)
     // setModules already kicks this off, but does not wait for it - seeding
     // right after needs the specs (a module's `streams`) to already be there.
     await useModuleSpecs.getState().refresh()
-    if (!status.connected) {
-      set({ status, ...emptySession() })
+    const sessionMachines = mergeSessionMachines(get().sessionMachines, machines)
+    set({ machines, sessionMachines })
+    const current = get().activeMachineId
+    const stored = storedActiveMachine()
+    const active =
+      (current && machines.some((machine) => machine.machineId === current) ? current : null) ??
+      (stored && machines.some((machine) => machine.machineId === stored) ? stored : null) ??
+      machines[0]?.machineId ??
+      null
+    if (!active) {
+      persistActiveMachine(null)
+      api.ui.setActiveMachine(null)
+      set({ activeMachineId: null, status: { connected: false }, ...emptySession() })
       return
     }
-    const history = await api.metrics.history()
-    set({ ...emptySession(), status })
-    seedModuleSnapshots(history.modules)
-    set({ system: history.system, topNow: history.top, servicesNow: history.services })
-    await get().refreshTerminals()
-    // A fresh socket has no active tab on the server side yet.
-    api.ui.setActiveTab(get().activeTab)
+    await get().setActiveMachine(active)
   },
 
   async connect(cfg) {
@@ -310,17 +463,11 @@ export const useApp = create<AppState>((set, get) => ({
         // Connected, but with a warning (e.g. sudo password rejected).
         get().showNotice('error', res.error)
       }
-      const [status, history] = await Promise.all([
-        api.connection.status(),
-        api.metrics.history()
-      ])
-      // Drop the previous session before seeding: a stream the new machine has
-      // not produced yet would otherwise still be showing the old one's data.
-      set({ ...emptySession(), status, activeTab: 'overview' })
-      seedModuleSnapshots(history.modules)
-      set({ system: history.system, topNow: history.top, servicesNow: history.services })
-      await get().refreshTerminals()
-      api.ui.setActiveTab('overview')
+      const machines = await api.connection.status()
+      const sessionMachines = mergeSessionMachines(get().sessionMachines, machines)
+      set({ machines, sessionMachines, activeTab: 'overview' })
+      if (res.machineId) await get().setActiveMachine(res.machineId)
+      reportActiveTab('overview')
       return res
     } finally {
       selfChanging--
@@ -328,20 +475,72 @@ export const useApp = create<AppState>((set, get) => ({
     }
   },
 
-  async disconnect() {
+  async reconnect(savedId, confirmation) {
+    set({ connecting: true })
     selfChanging++
     try {
-      await api.connection.disconnect()
+      const res = await api.connection.reconnect(savedId, confirmation)
+      if (!res.ok) {
+        if (!res.hostKey && !res.needsCredentials) {
+          get().showNotice('error', res.error || 'Reconnect failed')
+        }
+        return res
+      }
+      if (res.error) get().showNotice('error', res.error)
+      const machines = await api.connection.status()
+      const sessionMachines = mergeSessionMachines(get().sessionMachines, machines)
+      set({ machines, sessionMachines })
+      if (res.machineId) await get().setActiveMachine(res.machineId)
+      return res
+    } finally {
+      selfChanging--
+      set({ connecting: false })
+    }
+  },
+
+  async disconnect(machineId) {
+    const id = machineId ?? get().activeMachineId
+    if (!id) return
+    selfChanging++
+    try {
+      await api.connection.disconnect(id)
     } finally {
       selfChanging--
     }
-    set({ status: { connected: false }, ...emptySession() })
+    await get().reseed()
+  },
+
+  async setActiveMachine(machineId) {
+    const generation = ++machineSeedGeneration
+    const machine = machineId
+      ? get().machines.find((entry) => entry.machineId === machineId)
+      : undefined
+    if (!machine) {
+      persistActiveMachine(null)
+      api.ui.setActiveMachine(null)
+      set({ activeMachineId: null, status: { connected: false }, ...emptySession() })
+      return
+    }
+
+    persistActiveMachine(machine.machineId)
+    api.ui.setActiveMachine(machine.machineId)
+    set({
+      ...emptySession(),
+      activeMachineId: machine.machineId,
+      status: machine
+    })
+    const history = await api.metrics.history(machine.machineId)
+    if (generation !== machineSeedGeneration || get().activeMachineId !== machine.machineId) return
+    seedModuleSnapshots(history.modules)
+    set({ system: history.system, topNow: history.top, servicesNow: history.services })
+    await get().refreshTerminals()
+    reportActiveTab(get().activeTab)
   },
 
   setActiveTab(tab) {
     set({ activeTab: tab })
     // Main process starts/stops the tab-scoped detail collectors on this.
-    api.ui.setActiveTab(tab)
+    reportActiveTab(tab)
   },
 
   setOverviewWindow(sec) {
@@ -398,7 +597,10 @@ export const useApp = create<AppState>((set, get) => ({
 
   async refreshTerminals() {
     try {
-      const terminals = await api.terminals.list()
+      const machineId = get().activeMachineId
+      const terminals = (await api.terminals.list()).filter(
+        (terminal) => terminal.machineId === machineId
+      )
       set({ terminals })
     } catch (err) {
       get().showNotice('error', errorMessage(err))
@@ -408,10 +610,12 @@ export const useApp = create<AppState>((set, get) => ({
   // The owning module pushes the fresh snapshot itself, so this only has to
   // keep the button spinning until the reading is in.
   async refreshSlow(target) {
+    const machineId = get().activeMachineId
+    if (!machineId) return
     if (get().slowRefreshing[target]) return
     set((st) => ({ slowRefreshing: { ...st.slowRefreshing, [target]: true } }))
     try {
-      await api.metrics.refreshSlow(target)
+      await api.metrics.refreshSlow(machineId, target)
     } catch (err) {
       get().showNotice('error', errorMessage(err))
     } finally {

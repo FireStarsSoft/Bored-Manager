@@ -1,33 +1,41 @@
 {
   "version": 1,
   "modules": {
+    "bmc": {
+      "version": "1.0.1",
+      "hash": "25e8b85beefb1146400e8b1aba0192d2b4948847e86d005eb08284598fdf559e"
+    },
     "container": {
-      "version": "3.1.1",
-      "hash": "e121f1ef16368e38fdeaace8876331bed6e34eb8bb7cf0d3853aee593fd99311"
+      "version": "3.1.3",
+      "hash": "df5b2f4aca40f4739b3fe9a9d0849abf5fb5d22585059ac0a3225e65fb795695"
     },
     "disk": {
       "version": "2.0.0",
       "hash": "b51e93a3ff77fc814593c239018bbe17f8b823a798167bc3aff81fa4fcb3c2d3"
     },
     "gpu": {
-      "version": "2.1.1",
-      "hash": "fd38992a154ae6f9948a54645b7d984eae27eeb4b3f769bdf273f52fafaa4142"
+      "version": "2.3.1",
+      "hash": "757c6985bf4f28922685ddae339398464527fed7728348b800af243051786136"
     },
     "network": {
-      "version": "3.0.0",
-      "hash": "091265f60d8ffc04f0f8ed6a56b39992a1d58c2f04b8551d651876a15d75f3c8"
+      "version": "3.0.1",
+      "hash": "cce37af2821c2d0f0290b7cd793d7581d0404cb78044e12b80604b425d5e2ae0"
+    },
+    "openwrt": {
+      "version": "1.0.0",
+      "hash": "dedb59dab939ecad17d4abdb78944f98917dce4c4614909466a7445ec7475026"
     },
     "processes": {
       "version": "2.0.1",
-      "hash": "eb65c1f6c097196def9329d56279ef3e8137c4fc597ddf1e4dd76144e21ac918"
+      "hash": "a6587c65c9f27b331d8035d0a502b83f616cb4e19ee0ef4e2eba047bee3a1e8e"
     },
     "sensors": {
-      "version": "2.0.0",
-      "hash": "e7616f213d773cf6b733461698a7b598e468566dd413f171792edb642623a164"
+      "version": "2.1.1",
+      "hash": "abfbc89c554dc9da51606cdcd7ebc1519a7f046e74bce41a75d9400d3c1775c9"
     },
     "service-fleet": {
-      "version": "1.0.0",
-      "hash": "1cc7ceda0df03400c00e6cf6eab01b1758cc3242bc9e762353c803b1f1c70244"
+      "version": "1.1.0",
+      "hash": "27b4bfb1a95b2e462e7a65fe067b087b6ad08ef2eb57d27cb150bbb3988d71ba"
     }
   }
 }

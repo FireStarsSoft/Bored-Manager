@@ -3,6 +3,7 @@ import type { HistoryPoint, HistoryStream } from '@shared/types'
 import { api } from '@/lib/api'
 import { useApp } from '@/state/store'
 import { errorMessage } from '@/lib/utils'
+import { useDocumentVisible } from '@/lib/visibility'
 
 /** Windows up to this length are served from the live buffer in the store. */
 export const LIVE_WINDOW_SEC = 600
@@ -25,8 +26,13 @@ export function thin<T extends { t: number }>(points: T[], maxPoints: number): T
     const avg: Record<string, number> = { t: last.t }
     for (const key of Object.keys(last)) {
       if (key === 't') continue
+      const sample = (last as Record<string, unknown>)[key]
+      if (typeof sample !== 'number' || !Number.isFinite(sample)) continue
       let sum = 0
-      for (const p of bucket) sum += (p as unknown as Record<string, number>)[key] ?? 0
+      for (const p of bucket) {
+        const value = (p as Record<string, unknown>)[key]
+        sum += typeof value === 'number' && Number.isFinite(value) ? value : 0
+      }
       avg[key] = sum / bucket.length
     }
     out.push(avg as unknown as T)
@@ -58,23 +64,35 @@ export function useWindowedSeries<T extends { t: number }>(
   toPoint: (p: HistoryPoint) => T,
   maxPoints = 600
 ): T[] {
+  const machineId = useApp((s) => s.activeMachineId)
+  const machineRevision = useApp(
+    (s) => s.machines.find((machine) => machine.machineId === s.activeMachineId)?.revision ?? 0
+  )
   const connected = useApp((s) => s.status.connected)
   const historyEnabled = useApp((s) => s.settings?.history.enabled ?? true)
+  const documentVisible = useDocumentVisible()
   const useArchive = connected && historyEnabled && windowSec > LIVE_WINDOW_SEC
   const [archive, setArchive] = React.useState<T[]>([])
   const toPointRef = React.useRef(toPoint)
   toPointRef.current = toPoint
 
   React.useEffect(() => {
-    if (!useArchive) {
-      setArchive([])
+    if (!useArchive || !documentVisible) {
+      if (!useArchive) setArchive([])
       return
     }
     let cancelled = false
     const load = async (): Promise<void> => {
       try {
         const now = Date.now()
-        const points = await api.history.query(stream, now - windowSec * 1000, now, maxPoints)
+        if (!machineId) return
+        const points = await api.history.query(
+          machineId,
+          stream,
+          now - windowSec * 1000,
+          now,
+          maxPoints
+        )
         if (!cancelled) setArchive(points.map(toPointRef.current))
       } catch (err) {
         if (!cancelled) useApp.getState().showNotice('error', errorMessage(err))
@@ -89,7 +107,15 @@ export function useWindowedSeries<T extends { t: number }>(
       cancelled = true
       clearInterval(id)
     }
-  }, [stream, windowSec, maxPoints, useArchive])
+  }, [
+    machineId,
+    machineRevision,
+    stream,
+    windowSec,
+    maxPoints,
+    useArchive,
+    documentVisible
+  ])
 
   return React.useMemo(() => {
     const cutoff = Date.now() - windowSec * 1000

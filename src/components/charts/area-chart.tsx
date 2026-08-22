@@ -35,6 +35,8 @@ export interface AreaChartSeries {
   category: string
   label?: string
   color?: ChartColor
+  /** Omit or `left` for the only / left axis. `right` adds a second Y-axis. */
+  axis?: 'left' | 'right'
 }
 
 interface TooltipEntry {
@@ -53,7 +55,7 @@ function ChartTooltip({
   active: boolean | undefined
   label: string
   entries: TooltipEntry[]
-  valueFormatter: (value: number) => string
+  valueFormatter: (value: number, category: string) => string
 }): React.JSX.Element | null {
   if (!active || entries.length === 0) return null
   return (
@@ -70,7 +72,7 @@ function ChartTooltip({
               <span className="whitespace-nowrap text-muted-foreground">{entry.label}</span>
             </div>
             <span className="whitespace-nowrap font-medium tabular-nums">
-              {valueFormatter(entry.value)}
+              {valueFormatter(entry.value, entry.category)}
             </span>
           </div>
         ))}
@@ -117,7 +119,7 @@ export interface AreaChartProps extends React.HTMLAttributes<HTMLDivElement> {
   /** Key holding the x value of each datum. */
   index: string
   series: AreaChartSeries[]
-  valueFormatter?: (value: number) => string
+  valueFormatter?: (value: number, category?: string) => string
   /** Treat `index` as epoch milliseconds and lay the axis out in real time. */
   timeAxis?: boolean
   /** Interpolated x tick positions; pass with `timeAxis` to stop label jitter. */
@@ -127,6 +129,11 @@ export interface AreaChartProps extends React.HTMLAttributes<HTMLDivElement> {
   yTicks?: number[]
   minValue?: number
   maxValue?: number
+  /** Right-axis ticks when any series uses `axis: 'right'`. */
+  rightYTicks?: number[]
+  rightMinValue?: number
+  rightMaxValue?: number
+  rightValueFormatter?: (value: number) => string
   autoMinValue?: boolean
   yAxisWidth?: number
   xAxisHeight?: number
@@ -151,6 +158,10 @@ export function AreaChart({
   yTicks,
   minValue,
   maxValue,
+  rightYTicks,
+  rightMinValue,
+  rightMaxValue,
+  rightValueFormatter,
   autoMinValue = false,
   yAxisWidth = 54,
   xAxisHeight = 20,
@@ -181,6 +192,18 @@ export function AreaChart({
   const stacked = type === 'stacked'
   const areaId = React.useId()
   const yAxisDomain = [autoMinValue ? 'auto' : (minValue ?? 0), maxValue ?? 'auto']
+  // Dual-axis only when both sides have a series. A lone `right` falls back
+  // to the single left axis so the plot is never left without a scale.
+  const hasRight =
+    series.some((s) => s.axis === 'right') && series.some((s) => (s.axis ?? 'left') !== 'right')
+  const rightDomain = [autoMinValue ? 'auto' : (rightMinValue ?? 0), rightMaxValue ?? 'auto']
+  const axisTick = {
+    tickSize: 0,
+    tickMargin: 8,
+    tickLine: false,
+    axisLine: false,
+    className: 'text-[10px] fill-muted-foreground'
+  } as const
 
   return (
     <div className={cn('h-full w-full', className)} {...other}>
@@ -188,8 +211,9 @@ export function AreaChart({
         <RechartsAreaChart
           data={data}
           // Room for the topmost value label, which is centred on the top
-          // gridline and would otherwise be clipped.
-          margin={{ top: 10, right: 14, bottom: 0, left: 4 }}
+          // gridline and would otherwise be clipped. Dual-axis: the right
+          // YAxis width itself reserves the strip, so the margin stays thin.
+          margin={{ top: 10, right: hasRight ? 4 : 14, bottom: 0, left: 4 }}
         >
           {showGridLines && (
             <CartesianGrid
@@ -213,25 +237,31 @@ export function AreaChart({
             interval="preserveStartEnd"
             // tickSize still offsets labels when the tick lines are hidden,
             // which pushes them out of the strip reserved for the axis.
-            tickSize={0}
-            tickMargin={8}
-            tickLine={false}
-            axisLine={false}
-            className="text-[10px] fill-muted-foreground"
+            {...axisTick}
           />
           <YAxis
             hide={!showYAxis}
+            {...(hasRight ? { yAxisId: 'left' } : {})}
             width={yAxisWidth}
             type="number"
             domain={yAxisDomain as AxisDomain}
             ticks={yTicks}
-            tickFormatter={valueFormatter}
-            tickSize={0}
-            tickMargin={8}
-            tickLine={false}
-            axisLine={false}
-            className="text-[10px] fill-muted-foreground"
+            tickFormatter={(v) => valueFormatter(v)}
+            {...axisTick}
           />
+          {hasRight && (
+            <YAxis
+              yAxisId="right"
+              orientation="right"
+              hide={!showYAxis}
+              width={yAxisWidth}
+              type="number"
+              domain={rightDomain as AxisDomain}
+              ticks={rightYTicks}
+              tickFormatter={rightValueFormatter ?? ((v) => valueFormatter(v))}
+              {...axisTick}
+            />
+          )}
           {showTooltip && (
             <Tooltip
               wrapperStyle={{ outline: 'none' }}
@@ -253,7 +283,7 @@ export function AreaChart({
                     value: Number(item.value),
                     color: categoryColors.get(String(item.dataKey)) ?? 'primary'
                   }))}
-                  valueFormatter={valueFormatter}
+                  valueFormatter={(v, category) => valueFormatter(v, category)}
                 />
               )}
             />
@@ -291,6 +321,7 @@ export function AreaChart({
                   name={s.label ?? s.category}
                   type="monotone"
                   dataKey={s.category}
+                  {...(hasRight ? { yAxisId: s.axis === 'right' ? 'right' : 'left' } : {})}
                   stroke=""
                   strokeWidth={1.5}
                   strokeLinejoin="round"

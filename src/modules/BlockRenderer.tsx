@@ -4,9 +4,12 @@ import { useApp } from '@/state/store'
 import { DragHandle } from '@/components/SectionCard'
 import { useHistoryWindow } from '@/components/WindowPicker'
 import { SectionBlockView } from './blocks/SectionBlock'
+import { SubnavBlockView } from './blocks/SubnavBlock'
+import { NoteBlockView } from './blocks/NoteBlock'
 import { StatBlockView } from './blocks/StatBlock'
 import { MeterBlockView } from './blocks/MeterBlock'
 import { ChartBlockView } from './blocks/ChartBlock'
+import { PieBlockView } from './blocks/PieBlock'
 import { KeyValueBlockView } from './blocks/KeyValueBlock'
 import { ListBlockView } from './blocks/ListBlock'
 import { ConditionalBlockView } from './blocks/ConditionalBlock'
@@ -39,12 +42,18 @@ function BlockView({ block, ctx }: { block: Block; ctx: BlockCtx }): React.JSX.E
   switch (block.type) {
     case 'section':
       return <SectionBlockView block={block} ctx={ctx} />
+    case 'subnav':
+      return <SubnavBlockView block={block} ctx={ctx} />
+    case 'note':
+      return <NoteBlockView block={block} ctx={ctx} />
     case 'stat':
       return <StatBlockView block={block} ctx={ctx} />
     case 'meter':
       return <MeterBlockView block={block} ctx={ctx} />
     case 'chart':
       return <ChartBlockView block={block} ctx={ctx} />
+    case 'pie':
+      return <PieBlockView block={block} ctx={ctx} />
     case 'keyValue':
       return <KeyValueBlockView block={block} ctx={ctx} />
     case 'list':

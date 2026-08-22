@@ -4,8 +4,9 @@
  * laptop that was asleep, a Wi-Fi hiccup or a server restart must not mean the
  * user has to reload the page.
  *
- * The frame shapes are defined in server/rpc.ts.
+ * The frame shapes and runtime validators are defined in shared/rpc.ts.
  */
+import { parseRpcServerFrame } from '@shared/rpc'
 
 export type WsState = 'connecting' | 'open' | 'closed'
 
@@ -21,6 +22,16 @@ interface Pending {
 }
 
 type Listener = (payload: unknown) => void
+
+export class RpcClientError extends Error {
+  constructor(
+    message: string,
+    readonly code?: string
+  ) {
+    super(message)
+    this.name = 'RpcClientError'
+  }
+}
 
 function socketUrl(): string {
   const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -180,30 +191,26 @@ export class WsClient {
     } catch {
       return
     }
-    if (typeof frame !== 'object' || frame === null) return
-    const f = frame as {
-      kind?: string
-      id?: number
-      value?: unknown
-      message?: string
-      channel?: string
-      payload?: unknown
-    }
+    const parsed = parseRpcServerFrame(frame)
+    if (!parsed.ok) return
+    const received = parsed.frame
 
-    if (f.kind === 'result' && typeof f.id === 'number') {
-      this.pending.get(f.id)?.resolve(f.value)
-      this.pending.delete(f.id)
+    if (received.kind === 'result') {
+      this.pending.get(received.id)?.resolve(received.value)
+      this.pending.delete(received.id)
       return
     }
-    if (f.kind === 'error' && typeof f.id === 'number') {
-      this.pending.get(f.id)?.reject(new Error(f.message ?? 'the server reported an error'))
-      this.pending.delete(f.id)
+    if (received.kind === 'error') {
+      this.pending
+        .get(received.id)
+        ?.reject(new RpcClientError(received.message, received.code))
+      this.pending.delete(received.id)
       return
     }
-    if (f.kind === 'event' && typeof f.channel === 'string') {
-      const set = this.listeners.get(f.channel)
+    if (received.kind === 'event') {
+      const set = this.listeners.get(received.channel)
       if (!set) return
-      for (const cb of [...set]) cb(f.payload)
+      for (const cb of [...set]) cb(received.payload)
     }
   }
 }

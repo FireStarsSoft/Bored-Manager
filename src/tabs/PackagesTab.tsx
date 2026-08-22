@@ -37,6 +37,10 @@ const MAX_LOG_CHARS = 200_000
 
 export function PackagesTab({ active }: { active: boolean }): React.JSX.Element {
   const status = useApp((s) => s.status)
+  const machineId = useApp((s) => s.activeMachineId)
+  const machineRevision = useApp(
+    (s) => s.machines.find((machine) => machine.machineId === s.activeMachineId)?.revision ?? 0
+  )
   const showNotice = useApp((s) => s.showNotice)
 
   const [overview, setOverview] = React.useState<PackagesOverview | null>(null)
@@ -52,16 +56,24 @@ export function PackagesTab({ active }: { active: boolean }): React.JSX.Element 
   const logRef = React.useRef<HTMLPreElement | null>(null)
 
   const load = React.useCallback(async (): Promise<void> => {
-    if (!status.connected) return
+    if (!status.connected || !machineId) return
     setLoading(true)
     try {
-      setOverview(await api.packages.overview())
+      setOverview(await api.packages.overview(machineId))
     } catch (err) {
       showNotice('error', errorMessage(err))
     } finally {
       setLoading(false)
     }
-  }, [status.connected, showNotice])
+  }, [machineId, status.connected, showNotice])
+
+  React.useEffect(() => {
+    loadedRef.current = false
+    setOverview(null)
+    setLog('')
+    setSearchResults(null)
+    setOpState({ running: false })
+  }, [machineId, machineRevision])
 
   // Load once when the tab is first opened (data is on-demand, no polling).
   React.useEffect(() => {
@@ -75,17 +87,19 @@ export function PackagesTab({ active }: { active: boolean }): React.JSX.Element 
       setLog('')
       setSearchResults(null)
     }
-  }, [active, status.connected, load])
+  }, [active, machineRevision, status.connected, load])
 
   // Live output + state of package operations.
   React.useEffect(() => {
-    const offLog = api.packages.onLog((data) =>
+    const offLog = api.packages.onLog(({ machineId: source, data }) => {
+      if (source !== machineId) return
       setLog((prev) => {
         const next = prev + data
         return next.length > MAX_LOG_CHARS ? next.slice(next.length - MAX_LOG_CHARS) : next
       })
-    )
-    const offState = api.packages.onState((s) => {
+    })
+    const offState = api.packages.onState(({ machineId: source, data: s }) => {
+      if (source !== machineId) return
       setOpState(s)
       if (!s.running && s.exitCode != null) {
         if (s.exitCode === 0) showNotice('info', `Package operation finished: ${s.action}`)
@@ -93,12 +107,17 @@ export function PackagesTab({ active }: { active: boolean }): React.JSX.Element 
         void load()
       }
     })
-    void api.packages.state().then(setOpState).catch((err) => showNotice('error', errorMessage(err)))
+    if (machineId) {
+      void api.packages
+        .state(machineId)
+        .then(setOpState)
+        .catch((err) => showNotice('error', errorMessage(err)))
+    }
     return () => {
       offLog()
       offState()
     }
-  }, [load, showNotice])
+  }, [load, machineId, showNotice])
 
   React.useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight })
@@ -106,7 +125,8 @@ export function PackagesTab({ active }: { active: boolean }): React.JSX.Element 
 
   const runAction = async (action: PkgAction, pkg?: string): Promise<void> => {
     setLog('')
-    const res = await api.packages.action(action, pkg)
+    if (!machineId) return
+    const res = await api.packages.action(machineId, action, pkg)
     if (!res.ok) showNotice('error', res.error || 'Could not start the operation')
   }
 
@@ -115,7 +135,8 @@ export function PackagesTab({ active }: { active: boolean }): React.JSX.Element 
     if (!q) return
     setSearching(true)
     try {
-      setSearchResults(await api.packages.search(q))
+      if (!machineId) return
+      setSearchResults(await api.packages.search(machineId, q))
     } catch (err) {
       showNotice('error', errorMessage(err))
     } finally {
@@ -261,7 +282,11 @@ export function PackagesTab({ active }: { active: boolean }): React.JSX.Element 
             </div>
             <div className="flex gap-1.5">
               {busy && (
-                <Button variant="secondary" size="sm" onClick={() => void api.packages.cancel()}>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => machineId && void api.packages.cancel(machineId)}
+                >
                   <X className="size-3" /> Cancel
                 </Button>
               )}
@@ -361,6 +386,7 @@ export function PackagesTab({ active }: { active: boolean }): React.JSX.Element 
             getRowId={(p) => `${p.name}-${p.arch}`}
             initialSorting={[{ id: 'name', desc: false }]}
             pageSize={MAX_INSTALLED_ROWS}
+            virtualRowHeight={26}
             emptyText={
               loading ? 'Loading…' : overview ? 'No packages match the filter' : 'Not loaded yet'
             }

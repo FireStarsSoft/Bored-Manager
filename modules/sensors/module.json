@@ -2,16 +2,23 @@
   "apiVersion": 2,
   "id": "sensors",
   "name": "Sensors",
-  "version": "2.0.0",
+  "version": "2.1.1",
   "description": "Temperatures, fan speeds, voltages, power and current from every chip the machine exposes, via lm-sensors or /sys/class/hwmon.",
   "author": "Bored Manager",
-  "minAppVersion": "0.0.1",
+  "minAppVersion": "0.3.2",
   "entries": {
     "main": "main/index.ts"
   },
   "pages": [{ "id": "main", "label": "Sensors", "icon": "Thermometer", "order": 40 }],
   "widgets": [{ "id": "summary", "label": "Sensors", "order": 30 }],
-  "streams": [{ "event": "snapshot", "kind": "latest" }],
+  "streams": [
+    { "event": "snapshot", "kind": "latest" },
+    { "event": "temps", "kind": "series" },
+    { "event": "fans", "kind": "series" },
+    { "event": "voltages", "kind": "series" },
+    { "event": "power", "kind": "series" },
+    { "event": "current", "kind": "series" }
+  ],
   "methods": [],
   "fastInterval": "sensors"
 }

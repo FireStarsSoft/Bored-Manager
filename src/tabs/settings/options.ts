@@ -55,6 +55,21 @@ export const INTERVAL_GROUPS: Array<{
     fast: { key: 'gpu', desc: 'nvidia-smi: utilisation, VRAM, temperature, power' }
   },
   {
+    label: 'BMC',
+    moduleId: 'bmc',
+    fast: { key: 'bmc', desc: 'Visible management tables and drawer probes' },
+    slow: {
+      key: 'bmc',
+      desc: 'Power-state sweep across configured BMCs (Manual = only on request)'
+    }
+  },
+  {
+    label: 'OpenWRT',
+    moduleId: 'openwrt',
+    fast: { key: 'openwrt', desc: 'Router status and the always-on WAN binding engine' },
+    slow: { key: 'openwrt', desc: 'PPPoE log scan, UCI map verification and self-heal' }
+  },
+  {
     label: 'Container',
     moduleId: 'container',
     fast: { key: 'container', desc: 'Docker and Incus containers and their CPU/memory stats' },
@@ -105,7 +120,7 @@ export const COLLECTOR_LIST: Array<{ key: keyof CollectorSettings; label: string
 ]
 
 export const DETAIL_OPTIONS: Array<{ value: DetailPollingMode; label: string }> = [
-  { value: 'tab', label: 'While tab is open' },
+  { value: 'tab', label: 'While page/card is visible' },
   { value: 'always', label: 'Always (background)' },
   { value: 'off', label: 'Off' }
 ]
@@ -127,6 +142,21 @@ export const DETAIL_COLLECTORS: Array<{
     desc: 'Connections, per-process bandwidth'
   },
   { key: 'disk', label: 'Disk detail collector', desc: 'Per-device stats, per-process I/O' },
+  {
+    key: 'gpu',
+    label: 'GPU metrics',
+    desc: 'nvidia-smi metrics; tab mode leaves gaps in history while no GPU page/card is visible'
+  },
+  {
+    key: 'sensors',
+    label: 'Hardware sensors',
+    desc: 'Temperatures, fans and power; tab mode leaves gaps in history while hidden'
+  },
+  {
+    key: 'container',
+    label: 'Container metrics',
+    desc: 'Docker/Incus stats; tab mode leaves gaps in history while no page/card is visible'
+  },
   {
     key: 'overviewTop',
     label: 'Overview top consumers',

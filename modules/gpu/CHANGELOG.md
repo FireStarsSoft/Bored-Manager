@@ -1,6 +1,30 @@
 # Changelog
 
-All notable changes to the NVIDIA GPU module. Versions are independent of the app's.
+All notable changes to the GPU module. Versions are independent of the app's.
+
+## 2.3.1
+
+- Persistence, clock lock and clock reset refuse an index that has no GPU reading, the same way a power-limit change already did — they no longer call `nvidia-smi` with a made-up card number.
+
+## 2.3.0
+
+- Keeps the main GPU metrics query alive with `nvidia-smi -lms` instead of starting it on every tick. Compute-process data remains current through one bounded query per streamed sample.
+- A stream that fails uses 1s/2s retry backoff, then falls back to the previous per-tick query for the rest of that connection after three consecutive failures. Changing interval, hiding a tab-gated collector, disconnecting, or disabling the module always kills the stream.
+- Auto power cap now treats a failed Docker/NVIDIA busy probe as unknown and leaves caps untouched. Stopping or reconfiguring the watcher invalidates an in-flight probe before it can apply stale results.
+
+## 2.2.2
+
+- Adds an opt-in “while page/card is visible” mode for the metrics poller. The default remains Always, preserving continuous history; the automatic power-cap watcher is never visibility-gated.
+
+## 2.2.1
+
+- Caches the stable GPU UUID-to-index map, removing one `nvidia-smi` process from normal metric ticks. A previously unseen process UUID automatically schedules a map refresh on the next tick.
+
+## 2.2.0
+
+- Display name is **GPU** (was NVIDIA GPU). Sidebar, Settings and Overview group labels follow `manifest.name`.
+- Overview **GPU** card is now **GPU utilisation**: a dual-axis chart of utilisation (%) and temperature (°C). The short process list moved off this card — use **GPU processes**.
+- New Overview widget **GPU power** (on by default): draw and the current cap, the same series as the Dashboard Power chart. Each GPU card can be switched off in Settings → Overview.
 
 ## 2.1.1
 

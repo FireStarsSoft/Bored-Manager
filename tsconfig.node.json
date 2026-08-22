@@ -8,6 +8,8 @@
     // by Vite too, and that is how it discovers the module folders.
     "types": ["node", "vite/client"],
     "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "noEmit": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
@@ -17,5 +19,6 @@
       "@shared/*": ["./shared/*"]
     }
   },
-  "include": ["server/**/*.ts", "shared/**/*.ts", "modules/*/main/**/*.ts"]
+  "include": ["server/**/*.ts", "shared/**/*.ts", "modules/*/main/**/*.ts"],
+  "exclude": ["modules/bmc/**", "modules/openwrt/**"]
 }

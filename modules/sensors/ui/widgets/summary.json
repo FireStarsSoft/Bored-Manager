@@ -1,15 +1,101 @@
 {
   "blocks": [
     {
-      "type": "section",
-      "title": "Sensors",
+      "type": "conditional",
+      "when": { "source": { "kind": "stream", "event": "snapshot", "path": "sensors.0" }, "op": "exists" },
       "blocks": [
         {
-          "type": "list",
-          "source": { "kind": "stream", "event": "snapshot", "path": "sensors" },
-          "columns": [{ "key": "label" }, { "key": "value", "align": "right" }],
-          "limit": 8,
-          "emptyText": "No sensors exposed by this machine"
+          "type": "section",
+          "title": "Sensors",
+          "blocks": [
+            {
+              "type": "conditional",
+              "when": { "source": { "kind": "stream", "event": "temps", "path": "0" }, "op": "exists" },
+              "blocks": [
+                {
+                  "type": "chart",
+                  "title": "Temperature",
+                  "kind": "area",
+                  "source": { "kind": "stream", "event": "temps" },
+                  "format": "temp",
+                  "maxSeries": 8
+                }
+              ]
+            },
+            {
+              "type": "conditional",
+              "when": { "source": { "kind": "stream", "event": "fans", "path": "0" }, "op": "exists" },
+              "blocks": [
+                {
+                  "type": "chart",
+                  "title": "Fans",
+                  "kind": "area",
+                  "source": { "kind": "stream", "event": "fans" },
+                  "unit": "RPM",
+                  "maxSeries": 8
+                }
+              ]
+            },
+            {
+              "type": "conditional",
+              "when": { "source": { "kind": "stream", "event": "voltages", "path": "0" }, "op": "exists" },
+              "blocks": [
+                {
+                  "type": "chart",
+                  "title": "Voltage",
+                  "kind": "area",
+                  "source": { "kind": "stream", "event": "voltages" },
+                  "unit": "V",
+                  "decimals": 2,
+                  "maxSeries": 8
+                }
+              ]
+            },
+            {
+              "type": "conditional",
+              "when": { "source": { "kind": "stream", "event": "power", "path": "0" }, "op": "exists" },
+              "blocks": [
+                {
+                  "type": "chart",
+                  "title": "Power",
+                  "kind": "area",
+                  "source": { "kind": "stream", "event": "power" },
+                  "unit": "W",
+                  "decimals": 1,
+                  "maxSeries": 8
+                }
+              ]
+            },
+            {
+              "type": "conditional",
+              "when": { "source": { "kind": "stream", "event": "current", "path": "0" }, "op": "exists" },
+              "blocks": [
+                {
+                  "type": "chart",
+                  "title": "Current",
+                  "kind": "area",
+                  "source": { "kind": "stream", "event": "current" },
+                  "unit": "A",
+                  "decimals": 2,
+                  "maxSeries": 8
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "else": [
+        {
+          "type": "section",
+          "title": "Sensors",
+          "blocks": [
+            {
+              "type": "list",
+              "source": { "kind": "stream", "event": "snapshot", "path": "sensors" },
+              "columns": [{ "key": "label" }, { "key": "value", "align": "right" }],
+              "emptyText": "No sensors exposed by this machine"
+            }
+          ]
         }
       ]
     }

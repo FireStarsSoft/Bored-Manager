@@ -246,6 +246,10 @@ const AppServicesCard = React.memo(function AppServicesCard(): React.JSX.Element
 })
 
 export function OverviewTab({ active }: { active: boolean }): React.JSX.Element {
+  return active ? <OverviewBody /> : <></>
+}
+
+function OverviewBody(): React.JSX.Element {
   const system = useApp((s) => s.system)
   const top = useApp((s) => s.topNow)
   const settings = useApp((s) => s.settings)
@@ -430,7 +434,7 @@ export function OverviewTab({ active }: { active: boolean }): React.JSX.Element 
   if (on('loadUptime')) pushCore('loadUptime', 40, <LoadUptimeCard />)
   if (on('topProcesses')) pushCore('topProcesses', 50, <TopProcessesCard />)
 
-  const moduleCards = collectOverviewWidgets(enabledIds, widgets, specsList, active)
+  const moduleCards = collectOverviewWidgets(enabledIds, widgets, specsList, true)
   const cards: OverviewCard[] = [...coreCards, ...moduleCards]
     .sort((a, b) => a.order - b.order)
     .map(({ id, node }) => ({ id, node }))

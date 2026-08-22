@@ -52,7 +52,7 @@ const HEADLINE: Record<ModuleCheckLevel, { text: string; tone: string }> = {
 
 interface Checked {
   report: ModuleCheckReport
-  /** Exactly what was checked, sent back with the token so the module can prove they match. */
+  /** Token-bound apply values; large fields may be blank after the check froze them. */
   values: FormValues
 }
 
@@ -81,7 +81,11 @@ export function CheckFormBlockView({
     const sent = coerceFormValues(block.fields, values)
     try {
       const raw = await moduleCall<unknown>(ctx.moduleId, block.checkMethod, ...scopeArgs, sent)
-      setChecked({ report: toReport(raw), values: sent })
+      const applyValues = { ...sent }
+      for (const field of block.fields) {
+        if (field.omitOnApply) applyValues[field.key] = ''
+      }
+      setChecked({ report: toReport(raw), values: applyValues })
     } catch (err) {
       setError(errorMessage(err))
     } finally {

@@ -1,5 +1,14 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'crypto'
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import {
+  chmodSync,
+  closeSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from 'fs'
 import { join } from 'path'
 import { dataDir } from './store'
 
@@ -25,30 +34,121 @@ function keyFile(): string {
   return join(dataDir(), 'secret.key')
 }
 
+function fsyncDataDirectoryQuiet(): void {
+  let fd: number | null = null
+  try {
+    fd = openSync(dataDir(), 'r')
+    fsyncSync(fd)
+  } catch {
+    // Directory handles cannot be fsynced on Windows.
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd)
+      } catch {
+        // The key file itself is already durable.
+      }
+    }
+  }
+}
+
+function codeOf(error: unknown): string | undefined {
+  return typeof error === 'object' && error !== null && 'code' in error
+    ? String((error as { code?: unknown }).code ?? '')
+    : undefined
+}
+
+function readExistingKey(file: string): Buffer {
+  let lastProblem = ''
+  // Another process may have won the exclusive create but not finished its
+  // 32-byte write yet. Brief retries avoid treating that valid race as
+  // corruption; a persistently short or unreadable key still fails closed.
+  for (let attempt = 0; attempt < 25; attempt++) {
+    try {
+      const key = readFileSync(file)
+      if (key.length === 32) {
+        try {
+          chmodSync(file, 0o600)
+        } catch {
+          // Windows and some mounts do not expose POSIX modes.
+        }
+        return key
+      }
+      lastProblem = `expected 32 bytes, found ${key.length}`
+    } catch (error) {
+      lastProblem = error instanceof Error ? error.message : String(error)
+      if (codeOf(error) !== 'ENOENT' && codeOf(error) !== 'EBUSY') break
+    }
+    if (attempt < 24) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10)
+    }
+  }
+  throw new Error(`Existing secret key "${file}" is malformed or unreadable: ${lastProblem}`)
+}
+
 export function ensureSecretKey(): Buffer {
   if (cached) return cached
   const file = keyFile()
+  mkdirSync(dataDir(), { recursive: true, mode: 0o700 })
   try {
-    if (existsSync(file)) {
-      const key = readFileSync(file)
-      if (key.length === 32) {
-        cached = key
-        return key
+    chmodSync(dataDir(), 0o700)
+  } catch {
+    // Windows and some mounts do not expose POSIX modes.
+  }
+
+  let fd: number | null = null
+  let created = false
+  try {
+    try {
+      fd = openSync(file, 'wx', 0o600)
+      created = true
+    } catch (error) {
+      if (codeOf(error) !== 'EEXIST') throw error
+      const existing = readExistingKey(file)
+      cached = existing
+      return existing
+    }
+
+    const key = randomBytes(32)
+    writeFileSync(fd, key)
+    fsyncSync(fd)
+    closeSync(fd)
+    fd = null
+    try {
+      chmodSync(file, 0o600)
+    } catch {
+      // Windows and some mounts do not implement POSIX modes.
+    }
+    fsyncDataDirectoryQuiet()
+    cached = key
+    return key
+  } catch (error) {
+    if (created) {
+      try {
+        rmSync(file, { force: true })
+      } catch {
+        // Preserve the original creation failure.
       }
     }
-  } catch {
-    // Unreadable key: fall through and write a new one.
+    throw new Error(
+      `Cannot create or read secret key "${file}": ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    )
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd)
+      } catch {
+        // Preserve the original error.
+      }
+    }
   }
-  const key = randomBytes(32)
-  mkdirSync(dataDir(), { recursive: true })
-  writeFileSync(file, key)
-  try {
-    chmodSync(file, 0o600)
-  } catch {
-    // Windows and some mounts do not implement POSIX modes.
-  }
-  cached = key
-  return key
+}
+
+/** Test seam for isolated BM_APP_ROOT fixtures. */
+export function resetSecretKeyCacheForTests(): void {
+  cached = null
 }
 
 /** AES-256-GCM. Returns `enc2:` + base64(iv | tag | ciphertext). */

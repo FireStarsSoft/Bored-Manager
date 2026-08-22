@@ -107,7 +107,12 @@ function ModulesCard(): React.JSX.Element {
   }
 
   const doInstall = async (): Promise<void> => {
-    const next = await api.modules.install()
+    const token = state?.confirmation?.token
+    if (!token) {
+      showNotice('error', 'The install confirmation expired. Check the module again.')
+      return
+    }
+    const next = await api.modules.install(token)
     setState(next)
     if (next.error) showNotice('error', next.error)
   }
@@ -147,7 +152,9 @@ function ModulesCard(): React.JSX.Element {
           Every feature except the Overview, Packages, Terminals and these Settings is a module.
           Switching one off stops its collectors and hides its page and cards immediately.
           Installing, updating, removing and reloading a module take effect immediately too - none
-          of them rebuild or restart the app. See <span className="mono">docs/MODULE-RULESET.md</span>{' '}
+          of them rebuild or restart the app. Installed modules are trusted in-process code with the
+          app&apos;s access to the target machine. See{' '}
+          <span className="mono">docs/MODULE-RULESET.md</span>{' '}
           to write your own.
         </div>
 

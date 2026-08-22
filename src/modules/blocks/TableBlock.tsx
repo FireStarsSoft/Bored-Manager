@@ -33,7 +33,7 @@ import {
 } from '@/components/ui/table'
 import { Checkbox } from '@/components/ui/checkbox'
 import { cn } from '@/lib/utils'
-import { useBlockDataWithRefetch } from '../binding'
+import { BlockData } from '../binding'
 import { ActionButton } from '../action-runner'
 import { formatBlockValue } from '../format'
 import { BlockList, type BlockCtx } from '../BlockRenderer'
@@ -62,7 +62,26 @@ const VIRTUALIZE_ABOVE = 200
 const ROW_HEIGHT = 26
 
 export function TableBlockView({ block, ctx }: { block: TableBlock; ctx: BlockCtx }): React.JSX.Element {
-  const { value, refetch } = useBlockDataWithRefetch(ctx.moduleId, block.source, ctx)
+  return (
+    <BlockData moduleId={ctx.moduleId} source={block.source} opts={ctx}>
+      {({ value, refetch }) => (
+        <TableBlockContent block={block} ctx={ctx} value={value} refetch={refetch} />
+      )}
+    </BlockData>
+  )
+}
+
+function TableBlockContent({
+  block,
+  ctx,
+  value,
+  refetch
+}: {
+  block: TableBlock
+  ctx: BlockCtx
+  value: unknown
+  refetch: () => void
+}): React.JSX.Element {
   const rows = React.useMemo<Row[]>(() => (Array.isArray(value) ? (value as Row[]) : []), [value])
   const idKey = block.rowKey ?? block.columns[0]?.key ?? 'id'
 
@@ -371,7 +390,9 @@ export function TableBlockView({ block, ctx }: { block: TableBlock; ctx: BlockCt
                     const col = block.columns.find((c) => c.key === header.column.id)
                     const sortable = col != null && col.sortable !== false
                     const sorted = sortState?.key === header.column.id ? sortState.dir : null
-                    const align = header.column.columnDef.meta?.align
+                    const align = (
+                      header.column.columnDef.meta as { align?: 'left' | 'right' } | undefined
+                    )?.align
                     return (
                       <TableHead
                         key={header.id}
@@ -452,7 +473,11 @@ export function TableBlockView({ block, ctx }: { block: TableBlock; ctx: BlockCt
                         key={cell.id}
                         className={cn(
                           'max-w-0 truncate px-2 py-1',
-                          cell.column.columnDef.meta?.align === 'right' && 'text-right'
+                          (
+                            cell.column.columnDef.meta as
+                              | { align?: 'left' | 'right' }
+                              | undefined
+                          )?.align === 'right' && 'text-right'
                         )}
                       >
                         {flexRender(cell.column.columnDef.cell, cell.getContext())}

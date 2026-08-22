@@ -48,10 +48,13 @@ function hourKeyToMs(key: string): number {
 const FILE_RE = /^([a-z][a-z0-9-]*)-(\d{10})\.jsonl$/
 
 /** Filesystem-safe id for the machine the samples came from. */
-export function hostKeyFor(mode: string, host?: string, username?: string): string {
+export function machineIdFor(mode: string, host?: string, username?: string): string {
   const raw = mode === 'local' ? 'local' : `${username ?? 'user'}@${host ?? 'host'}`
   return raw.replace(/[^a-zA-Z0-9._@-]/g, '_')
 }
+
+/** Backwards-compatible name used by older tests and integrations. */
+export const hostKeyFor = machineIdFor
 
 /**
  * Long-term metrics history.
@@ -71,6 +74,10 @@ export class MetricsHistoryService {
   private timer: NodeJS.Timeout | null = null
   private registryId: string | null = null
   private lastFlush: number | null = null
+
+  constructor(hostKey: string | null = null) {
+    this.hostKey = hostKey
+  }
 
   configure(settings: HistorySettings): void {
     const wasEnabled = this.settings.enabled
@@ -98,7 +105,10 @@ export class MetricsHistoryService {
   private startTimer(): void {
     if (this.timer) return
     this.timer = setInterval(() => this.flush(), HISTORY_FLUSH_MS)
-    this.registryId = registry.register('metrics-history', () => this.stopTimer())
+    this.registryId = registry.register(
+      `metrics-history:${this.hostKey ?? 'idle'}`,
+      () => this.stopTimer()
+    )
   }
 
   private stopTimer(): void {
@@ -110,6 +120,12 @@ export class MetricsHistoryService {
       registry.unregister(this.registryId)
       this.registryId = null
     }
+  }
+
+  /** Flush and stop this machine's timer without changing its stable id. */
+  close(): void {
+    this.flush()
+    this.stopTimer()
   }
 
   // ---------- Ingest ----------

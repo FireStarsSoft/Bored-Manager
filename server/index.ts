@@ -1,16 +1,26 @@
 import type { RequestHandler } from 'express'
 import type { IncomingMessage } from 'http'
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
 import { createServer } from 'http'
 import { join } from 'path'
 import { WebSocketServer, type WebSocket } from 'ws'
-import { unlock } from './auth'
-import { createHttpApp } from './http'
+import { isAuthenticatedSession, unlock } from './auth'
+import { internalErrorDetail } from './errors'
+import { applyHttpServerLimits, createHttpApp } from './http'
 import { cleanClose, currentSettings, registerRpc } from './ipc'
+import {
+  acquirePidFile,
+  RequestTracker,
+  withinDeadline
+} from './lifecycle'
 import { log, startLogSession } from './log'
-import { RpcRouter } from './rpc'
+import { RPC_LIMITS, RpcRouter } from './rpc'
+import {
+  deriveAllowedHostnames,
+  requestHostAllowed,
+  requestOriginAllowed
+} from './security'
 import { appRoot, dataDir, hardenDataPermissions } from './services/store'
-import { ensureDefaultAdmin } from './services/users'
+import { ensureDefaultAdmin, sessionIsCurrent } from './services/users'
 import { isOpenBind } from '@shared/types'
 
 /**
@@ -24,9 +34,14 @@ const HEARTBEAT_MS = 30_000
 // Run from a terminal on the host to clear the login lockout. It only touches a
 // file, so it works whether or not a server is running.
 if (process.argv[2] === 'unlock') {
-  unlock()
-  console.log('webUI unlocked')
-  process.exit(0)
+  try {
+    unlock()
+    console.log('webUI unlocked')
+    process.exit(0)
+  } catch (error) {
+    console.error(`could not unlock webUI: ${error instanceof Error ? error.message : String(error)}`)
+    process.exit(1)
+  }
 }
 
 const root = appRoot()
@@ -34,27 +49,7 @@ startLogSession()
 ensureDefaultAdmin()
 hardenDataPermissions()
 
-function pidPath(): string {
-  return join(dataDir(), 'server.pid')
-}
-
-function writePidFile(): void {
-  mkdirSync(dataDir(), { recursive: true })
-  writeFileSync(pidPath(), String(process.pid))
-}
-
-function removePidFile(): void {
-  try {
-    const path = pidPath()
-    if (!existsSync(path)) return
-    if (readFileSync(path, 'utf8').trim() !== String(process.pid)) return
-    unlinkSync(path)
-  } catch {
-    /* a leftover pidfile is only a status hint */
-  }
-}
-
-writePidFile()
+const pidLease = acquirePidFile(join(dataDir(), 'server.pid'))
 
 /** `--port 9999 --host 127.0.0.1`, the only flags the server takes. */
 function flag(name: string): string | undefined {
@@ -73,11 +68,6 @@ function host(): string {
   return flag('host') ?? process.env['BM_HOST'] ?? currentSettings().server.host
 }
 
-process.on('uncaughtException', (err) => log(`FATAL uncaughtException: ${err.stack || err}`))
-process.on('unhandledRejection', (reason) => {
-  log(`unhandledRejection: ${reason instanceof Error ? reason.stack : String(reason)}`)
-})
-
 const buildTime = typeof __BUILD_TIME__ === 'string' ? __BUILD_TIME__ : 'unknown'
 const version = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : 'dev'
 log(
@@ -86,9 +76,30 @@ log(
 )
 
 const router = new RpcRouter(log)
-const { app, api, session: sessionMiddleware, sessionStore } = createHttpApp(root, currentSettings)
+const listenPort = port()
+const listenHost = host()
+const startupServerSettings = {
+  ...currentSettings().server,
+  port: listenPort,
+  host: listenHost
+}
+const requestSecurity = {
+  allowedHosts: deriveAllowedHostnames(startupServerSettings),
+  devMode: process.env.BM_DEV === '1'
+}
+const requestTracker = new RequestTracker()
+const { app, api, session: sessionMiddleware, sessions } = createHttpApp(
+  root,
+  currentSettings,
+  { security: requestSecurity, requestTracker, logger: log }
+)
 const server = createServer(app)
-const wss = new WebSocketServer({ noServer: true })
+applyHttpServerLimits(server)
+const wss = new WebSocketServer({
+  noServer: true,
+  maxPayload: RPC_LIMITS.maxPayload,
+  perMessageDeflate: false
+})
 
 // A socket that stopped answering pings is gone even when TCP has not noticed;
 // without this a laptop that was closed mid-session would hold pollers open.
@@ -100,40 +111,18 @@ const alive = new WeakSet<WebSocket>()
  * from the store - an upgrade never sends a response body, so a bare object
  * stands in for the one it would write to.
  */
-/**
- * Same-origin check for the WebSocket upgrade. A browser always sends Origin
- * on a socket; a page on another site would send that site's origin, which
- * is how a drive-by tab reaches this server when login is off.
- * Vite's dev proxy is the one exception: the page is on :5173, the socket
- * is forwarded to the API port, and BM_DEV=1 is set on that process.
- */
-function originAllowed(req: IncomingMessage): boolean {
-  const origin = req.headers.origin
-  if (!origin) return true
-  let url: URL
-  try {
-    url = new URL(origin)
-  } catch {
-    return false
-  }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
-  const host = req.headers.host
-  if (host && url.host === host) return true
-  if (process.env.BM_DEV === '1') {
-    const loopback = new Set(['localhost', '127.0.0.1', '[::1]', '::1'])
-    const reqHost = host?.split(':')[0]
-    return loopback.has(url.hostname) && (!reqHost || loopback.has(reqHost))
-  }
-  return false
-}
-
-function readSession(req: IncomingMessage): Promise<{ username: string | null; sid: string | null }> {
+function readSession(req: IncomingMessage): Promise<{
+  username: string | null
+  authVersion: number | null
+  sid: string | null
+}> {
   return new Promise((resolve) => {
     const request = req as unknown as Parameters<RequestHandler>[0]
     const response = {} as Parameters<RequestHandler>[1]
     sessionMiddleware(request, response, () =>
       resolve({
         username: request.session?.username ?? null,
+        authVersion: request.session?.authVersion ?? null,
         sid: request.sessionID ?? null
       })
     )
@@ -145,26 +134,50 @@ function readSession(req: IncomingMessage): Promise<{ username: string | null; s
  * is read (which is where an expired one is noticed) and touched (which pushes
  * the deadline out) - the same thing an HTTP request does through `rolling`.
  */
-router.authorize = async (client) => {
+router.authorize = async (client, activity) => {
   if (!currentSettings().auth.enabled) return true
   const sid = client.sessionId
   if (!sid) return false
-  const data = await new Promise<{ username?: string } | null>((resolve) => {
-    sessionStore.get(sid, (err, value) => resolve(err || !value ? null : value))
-  })
-  if (!data?.username) return false
-  sessionStore.touch?.(sid, data as Parameters<NonNullable<typeof sessionStore.touch>>[1], () => {})
+  const data = await sessions.get(sid)
+  if (
+    !data?.username ||
+    data.username !== client.username ||
+    !sessionIsCurrent(data.username, data.authVersion)
+  ) {
+    void sessions.revokeSession(sid).catch(() => {})
+    return false
+  }
+  if (activity && !(await sessions.touch(sid, data))) return false
   return true
 }
 
+let closing = false
 server.on('upgrade', (req, socket, head) => {
-  const { pathname } = new URL(req.url ?? '/', 'http://localhost')
+  if (closing) {
+    socket.write('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n')
+    socket.destroy()
+    return
+  }
+  if (!requestHostAllowed(req, requestSecurity.allowedHosts)) {
+    socket.write('HTTP/1.1 421 Misdirected Request\r\nConnection: close\r\n\r\n')
+    socket.destroy()
+    log('rejected a WebSocket upgrade with an untrusted Host')
+    return
+  }
+  let pathname = '/'
+  try {
+    pathname = new URL(req.url ?? '/', 'http://localhost').pathname
+  } catch {
+    socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n')
+    socket.destroy()
+    return
+  }
   if (pathname !== '/ws') {
     socket.destroy()
     return
   }
   void (async () => {
-    if (!originAllowed(req)) {
+    if (!requestOriginAllowed(req, requestSecurity)) {
       socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')
       socket.destroy()
       log('rejected a WebSocket upgrade from another origin')
@@ -173,26 +186,42 @@ server.on('upgrade', (req, socket, head) => {
     // The socket carries every call the UI makes, so it is gated exactly like
     // /api is: no valid session while a login is required means no socket.
     const found = await readSession(req)
-    if (currentSettings().auth.enabled && !found.username) {
+    if (currentSettings().auth.enabled && !isAuthenticatedSession(found)) {
+      if (found.sid) void sessions.revokeSession(found.sid).catch(() => {})
       socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
       socket.destroy()
       log('rejected a WebSocket upgrade without a session')
       return
     }
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req, found))
-  })()
+  })().catch((error) => {
+    log(`failed to authorize a WebSocket upgrade: ${String(error)}`)
+    try {
+      socket.write('HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\n\r\n')
+    } catch {
+      // The peer may already have gone away.
+    }
+    socket.destroy()
+  })
 })
 
-wss.on('connection', (ws, _req, found?: { username: string | null; sid: string | null }) => {
-  const client = router.attach(ws)
-  client.username = found?.username ?? null
-  client.sessionId = found?.sid ?? null
-  alive.add(ws)
-  ws.on('pong', () => alive.add(ws))
-  log(`client ${client.id} connected (${wss.clients.size} total)`)
-  // ws has already dropped the socket from wss.clients by the time this fires.
-  ws.on('close', () => log(`client ${client.id} disconnected (${wss.clients.size} left)`))
-})
+wss.on(
+  'connection',
+  (
+    ws,
+    _req,
+    found?: { username: string | null; authVersion: number | null; sid: string | null }
+  ) => {
+    const client = router.attach(ws)
+    client.username = found?.username ?? null
+    client.sessionId = found?.sid ?? null
+    alive.add(ws)
+    ws.on('pong', () => alive.add(ws))
+    log(`client ${client.id} connected (${wss.clients.size} total)`)
+    // ws has already dropped the socket from wss.clients by the time this fires.
+    ws.on('close', () => log(`client ${client.id} disconnected (${wss.clients.size} left)`))
+  }
+)
 
 const heartbeat = setInterval(() => {
   for (const ws of wss.clients) {
@@ -207,11 +236,99 @@ const heartbeat = setInterval(() => {
 heartbeat.unref()
 
 router.registerHandler('app:ping', () => 'pong')
-registerRpc(router, api)
+registerRpc(router, api, sessions)
 
-server.listen(port(), host(), () => {
-  log(`listening on http://${host()}:${port()}`)
-  if (isOpenBind(host()) && !currentSettings().auth.enabled) {
+let shutdownPromise: Promise<void> | null = null
+
+function closeHttpListener(): Promise<void> {
+  return new Promise((resolve) => {
+    if (!server.listening) {
+      resolve()
+      return
+    }
+    server.close((error) => {
+      if (error) log(`HTTP close reported: ${internalErrorDetail(error)}`)
+      resolve()
+    })
+    server.closeIdleConnections?.()
+  })
+}
+
+function closeWebSockets(): Promise<void> {
+  return new Promise((resolve) => {
+    router.closeAll(1001, 'server shutting down')
+    try {
+      wss.close((error) => {
+        if (error) log(`WebSocket close reported: ${internalErrorDetail(error)}`)
+        resolve()
+      })
+    } catch (error) {
+      log(`WebSocket close failed: ${internalErrorDetail(error)}`)
+      resolve()
+    }
+  })
+}
+
+function requestShutdown(reason: string, requestedCode: number): Promise<void> {
+  if (requestedCode !== 0) process.exitCode = requestedCode
+  if (shutdownPromise) return shutdownPromise
+  closing = true
+  log(`${reason} - stopping new work and draining clients`)
+  clearInterval(heartbeat)
+  requestTracker.stopAccepting()
+  router.stopAccepting()
+  const httpClosed = closeHttpListener()
+
+  shutdownPromise = (async () => {
+    try {
+      const drained = await withinDeadline(
+        Promise.all([router.drain(), requestTracker.drain()]),
+        5_000
+      )
+      if (!drained) log('shutdown drain deadline reached; closing remaining clients')
+
+      const socketsClosed = closeWebSockets()
+      const networkClosed = await withinDeadline(
+        Promise.all([httpClosed, socketsClosed]),
+        2_000
+      )
+      if (!networkClosed) {
+        log('network close deadline reached; terminating remaining connections')
+        router.terminateAll()
+        server.closeAllConnections?.()
+      }
+
+      const cleaned = await withinDeadline(
+        cleanClose().catch((error) => {
+          log(`clean close failed: ${internalErrorDetail(error)}`)
+          throw error
+        }),
+        10_000
+      )
+      log(cleaned ? 'clean close done' : 'clean close deadline reached')
+    } catch (error) {
+      log(`shutdown failed: ${internalErrorDetail(error)}`)
+      process.exitCode = process.exitCode || 1
+    } finally {
+      pidLease.release()
+      process.exit(process.exitCode || 0)
+    }
+  })()
+  return shutdownPromise
+}
+
+process.on('uncaughtException', (error) => {
+  log(`FATAL uncaughtException: ${internalErrorDetail(error)}`)
+  void requestShutdown('fatal uncaught exception', 1)
+})
+process.on('unhandledRejection', (reason) => {
+  log(`FATAL unhandledRejection: ${internalErrorDetail(reason)}`)
+  void requestShutdown('fatal unhandled rejection', 1)
+})
+
+server.listen(listenPort, listenHost, () => {
+  log(`listening on http://${listenHost}:${listenPort}`)
+  if (isOpenBind(listenHost) && !currentSettings().auth.enabled) {
     log(
       'WARNING: login is off and the server is bound to every interface - ' +
         'anyone who can reach this address has full access. Enable login in Settings, ' +
@@ -220,36 +337,16 @@ server.listen(port(), host(), () => {
   }
 })
 server.on('error', (err) => {
-  log(`FATAL: the server could not start: ${String(err)}`)
-  removePidFile()
-  process.exit(1)
+  log(`FATAL server error: ${internalErrorDetail(err)}`)
+  void requestShutdown('server error', 1)
 })
 
-let closing = false
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
-    if (closing) return
-    closing = true
-    log(`received ${signal} - quit requested, cleaning up sessions`)
-    clearInterval(heartbeat)
-    for (const ws of wss.clients) ws.close(1001, 'server shutting down')
-    wss.close()
-    server.close()
-    // Terminals, SSH sessions and the metrics buffer all need flushing before
-    // the process may go away; a client that refuses to let go must not stop it.
-    const code = process.exitCode || 0
-    const bail = setTimeout(() => {
-      removePidFile()
-      process.exit(code)
-    }, 8000)
-    bail.unref()
-    void cleanClose()
-      .catch((err) => log(`clean close failed: ${String(err)}`))
-      .finally(() => {
-        clearTimeout(bail)
-        log('clean close done')
-        removePidFile()
-        process.exit(code)
-      })
+    const code =
+      typeof process.exitCode === 'number'
+        ? process.exitCode
+        : Number.parseInt(process.exitCode ?? '', 10) || 0
+    void requestShutdown(`received ${signal}`, code)
   })
 }

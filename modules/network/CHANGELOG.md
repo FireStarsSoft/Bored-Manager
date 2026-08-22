@@ -2,6 +2,10 @@
 
 All notable changes to the Network module. Versions are independent of the app's.
 
+## 3.0.1
+
+- Coalesces the Host tuning page's duplicate `netTunables` reads into one target probe per refresh interval, instead of running the same `/proc/sys`, neighbour and conntrack command once for every bound field.
+
 ## 3.0.0
 
 - New **Host tuning** page: the kernel limits that decide how many containers a machine can actually hold — the neighbour (ARP) table, file descriptors, inotify watches, conntrack and the queue sizes — shown next to how close the machine is to each one.

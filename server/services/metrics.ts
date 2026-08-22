@@ -1,7 +1,7 @@
 import type { CollectorSettings, SystemSnapshot } from '@shared/types'
 import { DEFAULT_SETTINGS } from '@shared/types'
 import { PHYSICAL_DISK, splitSections } from '@shared/shell'
-import { connection } from '../connection'
+import { connection, type ConnectionManager } from '../connection'
 import { Poller } from './poller'
 
 const HISTORY_MS = 5 * 60 * 1000
@@ -20,19 +20,42 @@ interface RawSample {
   diskWriteBytes: number
 }
 
+interface FileSection {
+  name: string
+  path: string
+}
+
 export class SystemMetricsService {
   history: SystemSnapshot[] = []
   private prev: RawSample | null = null
+  private hostname: string | null = null
   private collectors: CollectorSettings = DEFAULT_SETTINGS.collectors
+  private collectorsRevision = 0
+  private suppressCpuRate = false
+  private suppressNetworkRate = false
+  private suppressDiskRate = false
   readonly poller: Poller
 
-  constructor(private emit: (snap: SystemSnapshot) => void) {
-    this.poller = new Poller('system-metrics', () => this.sample())
+  constructor(
+    private emit: (snap: SystemSnapshot) => void,
+    private readonly target: ConnectionManager = connection,
+    pollerName = 'system-metrics'
+  ) {
+    this.poller = new Poller(pollerName, () => this.sample())
   }
 
   /** Only the sections whose collector is enabled are read on the target. */
   configure(collectors: CollectorSettings): void {
+    const changed =
+      this.collectors.cpu !== collectors.cpu ||
+      this.collectors.memory !== collectors.memory ||
+      this.collectors.network !== collectors.network ||
+      this.collectors.disk !== collectors.disk
+    if (!this.collectors.cpu && collectors.cpu) this.suppressCpuRate = true
+    if (!this.collectors.network && collectors.network) this.suppressNetworkRate = true
+    if (!this.collectors.disk && collectors.disk) this.suppressDiskRate = true
     this.collectors = collectors
+    if (changed) this.collectorsRevision++
   }
 
   /** False when every section this service could collect is disabled. */
@@ -41,8 +64,7 @@ export class SystemMetricsService {
     return c.cpu || c.memory || c.network || c.disk
   }
 
-  private compositeCmd(): string {
-    const c = this.collectors
+  private compositeCmd(c: CollectorSettings = this.collectors): string {
     const parts: string[] = []
     if (c.cpu) parts.push(`echo '===STAT==='; cat /proc/stat`)
     if (c.memory) parts.push(`echo '===MEM==='; cat /proc/meminfo`)
@@ -56,17 +78,73 @@ export class SystemMetricsService {
     return parts.join('; ')
   }
 
+  private fileSections(c: CollectorSettings): FileSection[] {
+    const sections: FileSection[] = []
+    if (c.cpu) sections.push({ name: 'STAT', path: '/proc/stat' })
+    if (c.memory) sections.push({ name: 'MEM', path: '/proc/meminfo' })
+    if (c.network) sections.push({ name: 'NET', path: '/proc/net/dev' })
+    if (c.disk) sections.push({ name: 'DISK', path: '/proc/diskstats' })
+    sections.push(
+      { name: 'UPTIME', path: '/proc/uptime' },
+      { name: 'LOAD', path: '/proc/loadavg' }
+    )
+    return sections
+  }
+
   reset(): void {
+    this.collectorsRevision++
     this.history = []
     this.prev = null
+    this.hostname = null
+    this.suppressCpuRate = false
+    this.suppressNetworkRate = false
+    this.suppressDiskRate = false
+  }
+
+  private async compositeSections(
+    collectors: CollectorSettings
+  ): Promise<Map<string, string> | null> {
+    const res = await this.target.exec(this.compositeCmd(collectors), {
+      timeoutMs: 15000
+    })
+    if (res.code !== 0 && !res.stdout) return null
+    return splitSections(res.stdout)
+  }
+
+  private async sampleSections(
+    collectors: CollectorSettings
+  ): Promise<Map<string, string> | null> {
+    const wanted = this.fileSections(collectors)
+    const files = await this.target.readFiles(wanted.map((section) => section.path))
+    if (files === null || files.some((file) => !file.ok)) {
+      return this.compositeSections(collectors)
+    }
+
+    const sections = new Map<string, string>()
+    for (let index = 0; index < wanted.length; index++) {
+      sections.set(wanted[index].name, files[index]?.text ?? '')
+    }
+    // A hostname is effectively immutable during one connection. Cache the
+    // one shell lookup so local /proc sampling remains zero-process thereafter.
+    if (this.hostname === null) {
+      const host = await this.target.exec('hostname', {
+        timeoutMs: 15_000,
+        maxOutputBytes: 64 * 1024
+      })
+      this.hostname = host.stdout.trim()
+    }
+    sections.set('HOST', this.hostname)
+    return sections
   }
 
   private async sample(): Promise<void> {
-    if (!connection.connected) return
-    const res = await connection.exec(this.compositeCmd(), { timeoutMs: 15000 })
-    if (res.code !== 0 && !res.stdout) return
+    if (!this.target.connected) return
+    const collectors = this.collectors
+    const revision = this.collectorsRevision
+    const sec = await this.sampleSections(collectors)
+    if (revision !== this.collectorsRevision) return
+    if (!sec) return
     const t = Date.now()
-    const sec = splitSections(res.stdout)
 
     // --- CPU ---
     const cpus = new Map<string, CpuTimes>()
@@ -103,11 +181,18 @@ export class SystemMetricsService {
     const raw: RawSample = { t, cpus, netRxBytes, netTxBytes, diskReadBytes, diskWriteBytes }
     const prev = this.prev
     this.prev = raw
+    const suppressCpuRate = this.suppressCpuRate
+    const suppressNetworkRate = this.suppressNetworkRate
+    const suppressDiskRate = this.suppressDiskRate
+    if (this.collectors.cpu) this.suppressCpuRate = false
+    if (this.collectors.network) this.suppressNetworkRate = false
+    if (this.collectors.disk) this.suppressDiskRate = false
     if (!prev) return // need two samples for rates
 
     const dt = Math.max((t - prev.t) / 1000, 0.001)
 
     const cpuPct = (key: string): number => {
+      if (suppressCpuRate) return 0
       const a = prev.cpus.get(key)
       const b = cpus.get(key)
       if (!a || !b) return 0
@@ -149,10 +234,18 @@ export class SystemMetricsService {
         swapTotal,
         swapUsed: swapTotal - swapFree
       },
-      netRx: Math.max(0, (netRxBytes - prev.netRxBytes) / dt),
-      netTx: Math.max(0, (netTxBytes - prev.netTxBytes) / dt),
-      diskRead: Math.max(0, (diskReadBytes - prev.diskReadBytes) / dt),
-      diskWrite: Math.max(0, (diskWriteBytes - prev.diskWriteBytes) / dt),
+      netRx: suppressNetworkRate
+        ? 0
+        : Math.max(0, (netRxBytes - prev.netRxBytes) / dt),
+      netTx: suppressNetworkRate
+        ? 0
+        : Math.max(0, (netTxBytes - prev.netTxBytes) / dt),
+      diskRead: suppressDiskRate
+        ? 0
+        : Math.max(0, (diskReadBytes - prev.diskReadBytes) / dt),
+      diskWrite: suppressDiskRate
+        ? 0
+        : Math.max(0, (diskWriteBytes - prev.diskWriteBytes) / dt),
       load,
       uptimeSec,
       hostname

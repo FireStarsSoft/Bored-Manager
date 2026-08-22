@@ -1,23 +1,46 @@
-import { createHash } from 'crypto'
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync } from 'fs'
+import { createHash, randomBytes, timingSafeEqual } from 'crypto'
+import {
+  chmodSync,
+  closeSync,
+  constants,
+  copyFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  readSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync
+} from 'fs'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { basename, join, relative, sep } from 'path'
 import type {
+  ModuleCatalog,
   ModuleCheckItem,
   ModuleInstallKind,
   ModuleInstallState,
+  ModuleManifest,
+  ModuleRuntimeState,
   ModuleSource,
-  ModuleValidation
+  ModuleValidation,
+  RegistryEntry
 } from '@shared/modules'
 import {
   MODULE_ARCHIVE_MAX_BYTES,
   MODULE_DOWNLOAD_TIMEOUT_MS,
+  MODULE_ID_PATTERN,
   MODULE_MANIFEST_FILE,
   compareVersions,
   manifestProblems
 } from '@shared/modules'
-import type { ModuleManifest } from '@shared/modules'
 import { specProblems } from '@shared/module-ui'
+import { isRecord } from '@shared/validation'
+import { PublicError, internalErrorDetail } from '../errors'
+import { log } from '../log'
 import { extractZip } from './zip'
 import {
   assertSafeDownloadUrl,
@@ -30,67 +53,542 @@ import { compileModuleAt } from './module-compiler'
 import { defaultBranchZipUrl, latestReleaseZip, looksLikeZipUrl, parseGithubRepo } from './github'
 import type { ModulesHost } from './modules-host'
 import { moduleFolderHash, modulesDir, moduleDir } from './modules-host'
+import { backupFile, writeAtomicPrivateFile } from './private-file'
 import { getCatalog } from './registry'
-import { appVersion, deleteModuleConfig, deleteModuleData } from './store'
+import {
+  appVersion,
+  dataDir,
+  deleteModuleConfig,
+  deleteModuleData,
+  ensurePrivateDir,
+  moduleConfigPath,
+  moduleDataPath,
+  writeModuleRegistry
+} from './store'
 
 /**
  * Installing, updating and removing a module.
  *
- * A module is a folder the host reads and compiles at runtime (see
- * modules-host.ts / module-compiler.ts), so putting one in place never
- * touches the app's own bundle: write the folder, compile its main half with
- * esbuild, (re)activate it. The compile is the part that can fail (a type
- * error, a disallowed import), so the previous folder is backed up first and
- * put back when it does not succeed - a bad module can never leave a working
- * install broken, and nothing here ever asks for a restart.
- *
- * Nothing is decided silently: the archive is graded against the rule set and
- * the verdict goes to the UI, which only calls install() once the user has seen
- * it (and confirmed, when overwriting).
+ * Inspection always happens in a fresh private OS-temp directory. Applying a
+ * module is a journalled transaction: a candidate is built next to the target,
+ * the old folder and module-owned state are snapshotted, and only atomic
+ * renames put code into service. A startup recovery pass rolls an incomplete
+ * transaction back, or finishes cleanup after a committed one.
  */
 
-/** How much of the compile output is kept for the UI's log panel. */
 const MAX_LOG_LINES = 400
+const WORK_PREFIX = 'bored-manager-module-'
+const TRANSACTION_DIRECTORY = 'module-transactions'
+const TRANSACTION_VERSION = 1
+const CATALOG_MAX_AGE_MS = 24 * 60 * 60 * 1000
+const CONFIRMATION_TTL_MS = 5 * 60 * 1000
+const TRANSACTION_ID_PATTERN = /^[0-9a-f]{32}$/
 
-function message(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
+type TransactionOperation = 'install' | 'uninstall'
+type TransactionPhase =
+  | 'preparing'
+  | 'snapshotting'
+  | 'prepared'
+  | 'moving-target'
+  | 'promoting-candidate'
+  | 'updating-state'
+  | 'rolled-back'
+  | 'committed'
+
+interface CatalogBinding {
+  repo: string
+  sourceUrl: string
+  expectedId: string
+  expectedVersion: string
+  expectedSha256: string
+  fetchedAt: number
+}
+
+interface StagedModule {
+  workDir: string
+  root: string
+  archivePath: string
+  archiveSha256: string
+  treeSha256: string
+  manifest: ModuleManifest
+  source: ModuleSource
+  sourceUrl: string | null
+  catalogBinding: CatalogBinding | null
+}
+
+interface InstallConfirmation {
+  tokenHash: Buffer
+  expiresAt: number
+  runId: number
+  treeSha256: string
+  moduleId: string
+  consumed: boolean
+}
+
+interface TransactionJournal {
+  version: typeof TRANSACTION_VERSION
+  transactionId: string
+  operation: TransactionOperation
+  id: string
+  phase: TransactionPhase
+  hadTarget: boolean
+  registry: Record<string, ModuleRuntimeState> | null
+  configPrimary: boolean
+  configBackup: boolean
+  moduleData: boolean
+}
+
+interface ActiveTransaction {
+  journal: TransactionJournal
+  hostStopped: boolean
+}
+
+class ActivationFailure extends Error {
+  constructor(readonly compilerLog: string) {
+    super('candidate activation failed')
+  }
+}
+
+function rawMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function statusOf(checks: ModuleCheckItem[]): ModuleValidation['status'] {
+  if (checks.some((check) => check.level === 'error')) return 'error'
+  if (checks.some((check) => check.level === 'warning')) return 'warning'
+  return 'pass'
 }
 
 function normalizeUrl(raw: string): { value: string; trusted: boolean } | { error: string } {
   const trimmed = raw.trim()
   if (!trimmed) return { error: 'Paste a module .zip URL, an owner/repo, or a GitHub repo URL first' }
-  let url: URL
   try {
-    url = assertSafeDownloadUrl(trimmed, GITHUB_DOWNLOAD_HOSTS)
-  } catch (err) {
-    return { error: message(err) }
+    const url = assertSafeDownloadUrl(trimmed, GITHUB_DOWNLOAD_HOSTS)
+    if (!looksLikeZipUrl(url)) return { error: 'The link must point directly at a .zip archive' }
+    return { value: url.toString(), trusted: true }
+  } catch (error) {
+    return { error: redactPaths(rawMessage(error)) }
   }
-  if (!looksLikeZipUrl(url)) {
-    return { error: 'The link must point directly at a .zip archive' }
-  }
-  return { value: url.toString(), trusted: true }
 }
 
-/** The worst level present decides whether installing is allowed at all. */
-function statusOf(checks: ModuleCheckItem[]): ModuleValidation['status'] {
-  if (checks.some((c) => c.level === 'error')) return 'error'
-  if (checks.some((c) => c.level === 'warning')) return 'warning'
-  return 'pass'
+function redactPaths(text: string, knownRoots: readonly string[] = []): string {
+  let safe = text
+  for (const root of [...knownRoots].sort((a, b) => b.length - a.length)) {
+    if (!root) continue
+    safe = safe.split(root).join('[path]')
+    safe = safe.split(root.replace(/\\/g, '/')).join('[path]')
+    safe = safe.split(root.replace(/\//g, '\\')).join('[path]')
+  }
+  // Filesystem errors commonly append an absolute path. Keep the useful
+  // diagnostic before it, but never return a host path to the browser.
+  safe = safe.replace(/\b[A-Za-z]:[\\/][^\r\n]*/g, '[path]')
+  safe = safe.replace(/(^|[\s("'`])\/(?:tmp|var|home|Users|opt|srv)\/[^\r\n]*/g, '$1[path]')
+  return safe.trim().slice(0, 2_000)
+}
+
+function publicFailure(
+  error: unknown,
+  fallback: string,
+  code = 'MODULE_OPERATION_FAILED',
+  status = 500
+): PublicError {
+  if (error instanceof PublicError) return error
+  log(`[module-installer] ${internalErrorDetail(error)}`)
+  return new PublicError(code, fallback, status)
+}
+
+function diagnostic(error: unknown, fallback: string, roots: readonly string[] = []): string {
+  log(`[module-installer] ${internalErrorDetail(error)}`)
+  return redactPaths(rawMessage(error), roots) || fallback
+}
+
+function chmodPrivate(path: string, mode: number): void {
+  try {
+    chmodSync(path, mode)
+  } catch (error) {
+    // POSIX permissions are not implemented by Windows. On a POSIX host a
+    // failure means the staging area is not known to be private, so fail.
+    if (process.platform !== 'win32') throw error
+  }
+}
+
+function isRegularFile(path: string): boolean {
+  try {
+    return statSync(path).isFile()
+  } catch {
+    return false
+  }
+}
+
+function hashFile(path: string): string {
+  const hash = createHash('sha256')
+  const buffer = Buffer.allocUnsafe(64 * 1024)
+  const fd = openSync(path, 'r')
+  try {
+    for (;;) {
+      const read = readSync(fd, buffer, 0, buffer.length, null)
+      if (read === 0) break
+      hash.update(buffer.subarray(0, read))
+    }
+  } finally {
+    closeSync(fd)
+  }
+  return hash.digest('hex')
+}
+
+function treeFiles(root: string, dir = root, out: string[] = []): string[] {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === '.dist') continue
+    const path = join(dir, entry.name)
+    if (entry.isDirectory()) {
+      treeFiles(root, path, out)
+      continue
+    }
+    if (!entry.isFile()) {
+      throw new Error(`module tree contains a non-regular entry: ${entry.name}`)
+    }
+    out.push(relative(root, path).split(sep).join('/'))
+  }
+  return out
+}
+
+/** Exact-byte digest used to pin the inspected tree until its atomic swap. */
+function exactModuleTreeHash(root: string): string {
+  if (!statSync(root).isDirectory()) throw new Error('module root is not a directory')
+  const hash = createHash('sha256')
+  const buffer = Buffer.allocUnsafe(64 * 1024)
+  for (const rel of treeFiles(root).sort()) {
+    hash.update(rel)
+    hash.update('\0')
+    const fd = openSync(join(root, rel), 'r')
+    try {
+      for (;;) {
+        const read = readSync(fd, buffer, 0, buffer.length, null)
+        if (read === 0) break
+        hash.update(buffer.subarray(0, read))
+      }
+    } finally {
+      closeSync(fd)
+    }
+  }
+  return hash.digest('hex')
+}
+
+function transactionDir(): string {
+  return join(dataDir(), TRANSACTION_DIRECTORY)
+}
+
+function transactionFile(transactionId: string): string {
+  return join(transactionDir(), `${transactionId}.json`)
+}
+
+function snapshotDir(transactionId: string): string {
+  return join(transactionDir(), `${transactionId}.snapshot`)
+}
+
+function candidateDir(id: string, transactionId: string): string {
+  return join(modulesDir(), `${id}.candidate-${transactionId}`)
+}
+
+function backupDir(id: string, transactionId: string): string {
+  return join(modulesDir(), `${id}.backup-${transactionId}`)
+}
+
+function snapshotConfigPrimary(transactionId: string): string {
+  return join(snapshotDir(transactionId), 'config.primary')
+}
+
+function snapshotConfigBackup(transactionId: string): string {
+  return join(snapshotDir(transactionId), 'config.backup')
+}
+
+function snapshotModuleData(transactionId: string): string {
+  return join(snapshotDir(transactionId), 'module-data')
+}
+
+function cloneRegistry(
+  registry: Record<string, ModuleRuntimeState>
+): Record<string, ModuleRuntimeState> {
+  return Object.fromEntries(
+    Object.entries(registry).map(([id, state]) => [id, { ...state }])
+  )
+}
+
+function parseRegistry(value: unknown): Record<string, ModuleRuntimeState> {
+  if (!isRecord(value)) throw new Error('transaction registry snapshot is not an object')
+  const registry: Record<string, ModuleRuntimeState> = {}
+  for (const [id, raw] of Object.entries(value)) {
+    if (
+      !MODULE_ID_PATTERN.test(id) ||
+      !isRecord(raw) ||
+      raw['id'] !== id ||
+      typeof raw['enabled'] !== 'boolean' ||
+      typeof raw['version'] !== 'string' ||
+      typeof raw['hash'] !== 'string' ||
+      !['default', 'zip', 'url'].includes(String(raw['source'])) ||
+      typeof raw['installedAt'] !== 'number' ||
+      !Number.isFinite(raw['installedAt']) ||
+      typeof raw['updatedAt'] !== 'number' ||
+      !Number.isFinite(raw['updatedAt'])
+    ) {
+      throw new Error(`transaction registry entry "${id}" is invalid`)
+    }
+    registry[id] = {
+      id,
+      enabled: raw['enabled'],
+      version: raw['version'],
+      hash: raw['hash'],
+      source: raw['source'] as ModuleSource,
+      installedAt: raw['installedAt'],
+      updatedAt: raw['updatedAt']
+    }
+  }
+  return registry
+}
+
+function parseJournal(file: string, expectedId: string): TransactionJournal {
+  const raw = JSON.parse(readFileSync(file, 'utf8')) as unknown
+  if (!isRecord(raw)) throw new Error('transaction journal is not an object')
+  const phase = raw['phase']
+  const operation = raw['operation']
+  const transactionId = raw['transactionId']
+  const id = raw['id']
+  const phases: readonly string[] = [
+    'preparing',
+    'snapshotting',
+    'prepared',
+    'moving-target',
+    'promoting-candidate',
+    'updating-state',
+    'rolled-back',
+    'committed'
+  ]
+  if (
+    raw['version'] !== TRANSACTION_VERSION ||
+    transactionId !== expectedId ||
+    typeof transactionId !== 'string' ||
+    !TRANSACTION_ID_PATTERN.test(transactionId) ||
+    (operation !== 'install' && operation !== 'uninstall') ||
+    typeof id !== 'string' ||
+    !MODULE_ID_PATTERN.test(id) ||
+    !phases.includes(String(phase)) ||
+    typeof raw['hadTarget'] !== 'boolean' ||
+    typeof raw['configPrimary'] !== 'boolean' ||
+    typeof raw['configBackup'] !== 'boolean' ||
+    typeof raw['moduleData'] !== 'boolean'
+  ) {
+    throw new Error('transaction journal has invalid fields')
+  }
+  const registry = raw['registry'] === null ? null : parseRegistry(raw['registry'])
+  if (
+    registry === null &&
+    phase !== 'preparing'
+  ) {
+    throw new Error('transaction journal has no registry snapshot')
+  }
+  return {
+    version: TRANSACTION_VERSION,
+    transactionId,
+    operation,
+    id,
+    phase: phase as TransactionPhase,
+    hadTarget: raw['hadTarget'],
+    registry,
+    configPrimary: raw['configPrimary'],
+    configBackup: raw['configBackup'],
+    moduleData: raw['moduleData']
+  }
+}
+
+function writeJournal(journal: TransactionJournal, phase: TransactionPhase): void {
+  ensurePrivateDir(transactionDir())
+  const next = { ...journal, phase }
+  writeAtomicPrivateFile(
+    transactionFile(journal.transactionId),
+    JSON.stringify(next, null, 2),
+    { backup: false }
+  )
+  journal.phase = phase
+}
+
+function copyPrivateFile(source: string, destination: string): void {
+  copyFileSync(source, destination, constants.COPYFILE_EXCL)
+  chmodPrivate(destination, 0o600)
+}
+
+function capturePersistentSnapshot(journal: TransactionJournal): void {
+  const root = snapshotDir(journal.transactionId)
+  ensurePrivateDir(root)
+  chmodPrivate(root, 0o700)
+  const config = moduleConfigPath(journal.id)
+  if (journal.configPrimary) copyPrivateFile(config, snapshotConfigPrimary(journal.transactionId))
+  if (journal.configBackup) {
+    copyPrivateFile(backupFile(config), snapshotConfigBackup(journal.transactionId))
+  }
+  if (journal.moduleData) {
+    cpSync(moduleDataPath(journal.id), snapshotModuleData(journal.transactionId), {
+      recursive: true,
+      errorOnExist: true,
+      force: false
+    })
+  }
+}
+
+function assertSnapshotComplete(journal: TransactionJournal): void {
+  if (journal.configPrimary && !isRegularFile(snapshotConfigPrimary(journal.transactionId))) {
+    throw new Error('module config snapshot is incomplete')
+  }
+  if (journal.configBackup && !isRegularFile(snapshotConfigBackup(journal.transactionId))) {
+    throw new Error('module config backup snapshot is incomplete')
+  }
+  if (
+    journal.moduleData &&
+    (!existsSync(snapshotModuleData(journal.transactionId)) ||
+      !statSync(snapshotModuleData(journal.transactionId)).isDirectory())
+  ) {
+    throw new Error('module data snapshot is incomplete')
+  }
+}
+
+function restorePrivateFile(source: string, destination: string): void {
+  writeAtomicPrivateFile(destination, readFileSync(source), { backup: false })
+}
+
+function restorePersistentFiles(journal: TransactionJournal): void {
+  assertSnapshotComplete(journal)
+  const config = moduleConfigPath(journal.id)
+  const configBackup = backupFile(config)
+  if (journal.configBackup) {
+    restorePrivateFile(snapshotConfigBackup(journal.transactionId), configBackup)
+  } else {
+    rmSync(configBackup, { force: true })
+  }
+  if (journal.configPrimary) {
+    restorePrivateFile(snapshotConfigPrimary(journal.transactionId), config)
+  } else {
+    rmSync(config, { force: true })
+  }
+
+  const currentData = moduleDataPath(journal.id)
+  if (!journal.moduleData) {
+    rmSync(currentData, { recursive: true, force: true })
+    return
+  }
+
+  const restore = `${currentData}.restore-${journal.transactionId}`
+  const displaced = `${currentData}.discard-${journal.transactionId}`
+  rmSync(restore, { recursive: true, force: true })
+  rmSync(displaced, { recursive: true, force: true })
+  cpSync(snapshotModuleData(journal.transactionId), restore, {
+    recursive: true,
+    errorOnExist: true,
+    force: false
+  })
+  if (existsSync(currentData)) renameSync(currentData, displaced)
+  try {
+    renameSync(restore, currentData)
+  } catch (error) {
+    if (existsSync(displaced) && !existsSync(currentData)) renameSync(displaced, currentData)
+    throw error
+  }
+  rmSync(displaced, { recursive: true, force: true })
+}
+
+function restoreModuleFolder(journal: TransactionJournal): void {
+  const target = moduleDir(journal.id)
+  const backup = backupDir(journal.id, journal.transactionId)
+  const candidate = candidateDir(journal.id, journal.transactionId)
+  if (journal.hadTarget) {
+    if (existsSync(backup)) {
+      rmSync(target, { recursive: true, force: true })
+      renameSync(backup, target)
+    } else if (!existsSync(target)) {
+      throw new Error('both the module target and its transaction backup are missing')
+    }
+  } else {
+    rmSync(target, { recursive: true, force: true })
+  }
+  rmSync(candidate, { recursive: true, force: true })
+}
+
+function removeTransactionArtifacts(journal: TransactionJournal): void {
+  rmSync(candidateDir(journal.id, journal.transactionId), { recursive: true, force: true })
+  rmSync(backupDir(journal.id, journal.transactionId), { recursive: true, force: true })
+  rmSync(snapshotDir(journal.transactionId), { recursive: true, force: true })
+  rmSync(transactionFile(journal.transactionId), { force: true })
+}
+
+function removeUntouchedTransaction(journal: TransactionJournal): void {
+  rmSync(candidateDir(journal.id, journal.transactionId), { recursive: true, force: true })
+  rmSync(snapshotDir(journal.transactionId), { recursive: true, force: true })
+  rmSync(transactionFile(journal.transactionId), { force: true })
+}
+
+function phaseMayHaveMutatedState(phase: TransactionPhase): boolean {
+  return (
+    phase === 'moving-target' ||
+    phase === 'promoting-candidate' ||
+    phase === 'updating-state' ||
+    phase === 'committed'
+  )
+}
+
+function catalogIsFresh(
+  catalog: ModuleCatalog,
+  expectedRepo: string,
+  now = Date.now()
+): catalog is ModuleCatalog & {
+  fetchedAt: number
+} {
+  if (catalog.stale || catalog.fetchedAt === null) return false
+  if (
+    catalog.sourceRepo !== expectedRepo ||
+    catalog.sourceUrl !==
+      `https://raw.githubusercontent.com/${expectedRepo}/main/registry/modules.json`
+  ) {
+    return false
+  }
+  const age = now - catalog.fetchedAt
+  return age >= 0 && age <= CATALOG_MAX_AGE_MS
+}
+
+function canonicalCatalogUrl(raw: string): string | null {
+  try {
+    const url = assertSafeDownloadUrl(raw, GITHUB_DOWNLOAD_HOSTS)
+    return looksLikeZipUrl(url) ? url.toString() : null
+  } catch {
+    return null
+  }
+}
+
+function exactCatalogMatches(
+  entries: readonly RegistryEntry[],
+  sourceUrl: string,
+  id: string,
+  version: string,
+  sha256: string
+): RegistryEntry[] {
+  return entries.filter(
+    (entry) =>
+      entry.id === id &&
+      entry.version === version &&
+      entry.sha256 === sha256 &&
+      canonicalCatalogUrl(entry.download) === sourceUrl
+  )
 }
 
 export class ModuleInstallerService {
   private state: ModuleInstallState = { phase: 'idle' }
   private transfer: DownloadHandle | null = null
-  /** Root of the extracted module folder, set once it passed validation. */
-  private stagedRoot: string | null = null
-  private stagedManifest: ModuleManifest | null = null
-  private stagedSource: ModuleSource = 'zip'
+  private workspace: string | null = null
+  private staged: StagedModule | null = null
+  private confirmation: InstallConfirmation | null = null
   /** Bumped by cancel(), so an aborted check stops reporting into the state. */
   private runId = 0
 
   constructor(
     private readonly host: ModulesHost,
-    private readonly onState: (s: ModuleInstallState) => void,
+    private readonly onState: (state: ModuleInstallState) => void,
     private readonly onListChanged: () => void,
     /** `settings.update.repo`, read lazily so a change takes effect immediately. */
     private readonly getRepo: () => string
@@ -101,13 +599,11 @@ export class ModuleInstallerService {
   }
 
   private setState(patch: Partial<ModuleInstallState>): ModuleInstallState {
-    this.state = { ...this.state, ...patch }
+    const confirmation =
+      patch.phase !== undefined && patch.phase !== 'ready' ? undefined : this.state.confirmation
+    this.state = { ...this.state, confirmation, ...patch }
     this.onState(this.state)
     return this.state
-  }
-
-  private workDir(): string {
-    return join(tmpdir(), 'bored-manager-module')
   }
 
   private busy(): boolean {
@@ -116,14 +612,107 @@ export class ModuleInstallerService {
     )
   }
 
-  // ---------- Inspect ----------
+  private failState(
+    error: unknown,
+    fallback: string,
+    patch: Partial<ModuleInstallState> = {}
+  ): ModuleInstallState {
+    const safe = publicFailure(error, fallback)
+    return this.setState({ ...patch, phase: 'error', error: safe.message })
+  }
+
+  private createWorkspace(): string {
+    this.discardWorkspace()
+    const work = mkdtempSync(join(tmpdir(), WORK_PREFIX))
+    chmodPrivate(work, 0o700)
+    this.workspace = work
+    return work
+  }
+
+  private discardWorkspace(): void {
+    this.confirmation = null
+    if (!this.workspace) {
+      this.staged = null
+      return
+    }
+    const work = this.workspace
+    rmSync(work, { recursive: true, force: true })
+    if (existsSync(work)) throw new Error('private module staging could not be removed')
+    this.workspace = null
+    this.staged = null
+  }
+
+  private hasPendingTransaction(): boolean {
+    if (!existsSync(transactionDir())) return false
+    return readdirSync(transactionDir()).some((name) => name.endsWith('.json'))
+  }
+
+  // ---------- Startup recovery ----------
 
   /**
-   * Download an archive and grade it. Nothing is written to the app folder.
-   * `rawUrl` may be a direct `.zip` link, `owner/repo`, or a GitHub repo URL -
-   * the latter two are resolved to the latest release's zip (or, lacking a
-   * release, the default branch's source zip) before anything downloads.
+   * Recover every interrupted install/update/uninstall before ModulesHost.init
+   * reconciles the folders with the registry. Incomplete work is rolled back;
+   * a committed transaction only has its backup/snapshot cleanup finished.
    */
+  recoverPendingTransactions(): number {
+    if (!existsSync(transactionDir())) return 0
+    let recovered = 0
+    let names: string[]
+    try {
+      names = readdirSync(transactionDir())
+        .filter((name) => name.endsWith('.json'))
+        .sort()
+    } catch (error) {
+      throw publicFailure(error, 'Interrupted module operations could not be recovered')
+    }
+
+    for (const name of names) {
+      const transactionId = name.slice(0, -'.json'.length)
+      try {
+        if (!TRANSACTION_ID_PATTERN.test(transactionId)) {
+          throw new Error('unexpected transaction journal filename')
+        }
+        const journal = parseJournal(join(transactionDir(), name), transactionId)
+        const target = moduleDir(journal.id)
+        const committedLooksComplete =
+          journal.phase === 'committed' &&
+          (journal.operation === 'install' ? existsSync(target) : !existsSync(target))
+
+        if (journal.phase === 'committed' && committedLooksComplete) {
+          removeTransactionArtifacts(journal)
+        } else if (journal.phase === 'rolled-back') {
+          removeTransactionArtifacts(journal)
+        } else if (!phaseMayHaveMutatedState(journal.phase)) {
+          removeUntouchedTransaction(journal)
+        } else {
+          if (!journal.registry) throw new Error('transaction has no registry snapshot')
+          restoreModuleFolder(journal)
+          restorePersistentFiles(journal)
+          writeModuleRegistry(cloneRegistry(journal.registry))
+          writeJournal(journal, 'rolled-back')
+          removeTransactionArtifacts(journal)
+        }
+
+        // ModulesHost discovers folders in its constructor, which runs before
+        // this recovery call. Remove any candidate/backup it saw and refresh
+        // the actual id before init() consumes the recovered registry.
+        this.host.rescan(journal.id)
+        this.host.rescan(basename(candidateDir(journal.id, journal.transactionId)))
+        this.host.rescan(basename(backupDir(journal.id, journal.transactionId)))
+        recovered++
+      } catch (error) {
+        throw publicFailure(
+          error,
+          'Interrupted module operations could not be recovered',
+          'MODULE_RECOVERY_FAILED'
+        )
+      }
+    }
+    return recovered
+  }
+
+  // ---------- Inspect ----------
+
   async checkUrl(rawUrl: string): Promise<ModuleInstallState> {
     if (this.busy()) return this.setState({ error: 'Another module operation is running' })
     const trimmed = rawUrl.trim()
@@ -134,8 +723,19 @@ export class ModuleInstallerService {
         validation: undefined
       })
     }
+    if (this.hasPendingTransaction()) {
+      return this.setState({
+        phase: 'error',
+        error: 'An interrupted module operation must be recovered before another can start',
+        validation: undefined
+      })
+    }
 
-    this.reset()
+    try {
+      this.discardWorkspace()
+    } catch (error) {
+      return this.failState(error, 'The previous private staging area could not be removed')
+    }
     const runId = ++this.runId
     const repo = trimmed.toLowerCase().endsWith('.zip') ? null : parseGithubRepo(trimmed)
     let resolvedUrl = trimmed
@@ -153,24 +753,34 @@ export class ModuleInstallerService {
           repo,
           (name) => name.toLowerCase().endsWith('.zip') && !/^bored-manager-.*\.zip$/i.test(name)
         )
-        resolvedUrl = release?.matched ? release.url : await defaultBranchZipUrl(repo)
-      } catch (err) {
+        resolvedUrl = release?.url ?? (await defaultBranchZipUrl(repo))
+      } catch (error) {
         if (runId !== this.runId) return this.state
-        return this.setState({ phase: 'error', error: `Could not resolve ${repo} on GitHub: ${message(err)}` })
+        const safe = new PublicError(
+          'MODULE_SOURCE_RESOLUTION_FAILED',
+          `Could not resolve the GitHub repository: ${redactPaths(rawMessage(error))}`,
+          502
+        )
+        return this.setState({ phase: 'error', error: safe.message })
       }
       if (runId !== this.runId) return this.state
     }
 
-    const url = normalizeUrl(resolvedUrl)
-    if ('error' in url) {
-      return this.setState({ phase: 'error', error: url.error, validation: undefined })
+    const normalized = normalizeUrl(resolvedUrl)
+    if ('error' in normalized) {
+      return this.setState({ phase: 'error', error: normalized.error, validation: undefined })
     }
 
-    const work = this.workDir()
-    const zipPath = join(work, 'module.zip')
+    let work: string
+    try {
+      work = this.createWorkspace()
+    } catch (error) {
+      return this.failState(error, 'A private staging area could not be created')
+    }
+    const archivePath = join(work, 'module.zip')
     this.setState({
       phase: 'downloading',
-      source: url.value,
+      source: normalized.value,
       error: undefined,
       validation: undefined,
       log: undefined,
@@ -178,109 +788,239 @@ export class ModuleInstallerService {
     })
 
     try {
-      mkdirSync(work, { recursive: true })
-      const transfer = downloadFile(url.value, zipPath, {
+      const transfer = downloadFile(normalized.value, archivePath, {
         maxBytes: MODULE_ARCHIVE_MAX_BYTES,
         timeoutMs: MODULE_DOWNLOAD_TIMEOUT_MS,
         allowedHosts: GITHUB_DOWNLOAD_HOSTS,
-        onProgress: (receivedBytes, totalBytes) =>
-          this.setState({ progress: { receivedBytes, totalBytes } })
+        onProgress: (receivedBytes, totalBytes) => {
+          if (runId === this.runId) {
+            this.setState({ progress: { receivedBytes, totalBytes } })
+          }
+        }
       })
       this.transfer = transfer
       await transfer.done
-    } catch (err) {
+      chmodPrivate(archivePath, 0o600)
+    } catch (error) {
       if (runId !== this.runId) return this.state
-      this.cleanWorkDir()
-      return this.setState({ phase: 'error', error: `Download failed: ${message(err)}` })
+      let cleanupError: unknown = null
+      try {
+        this.discardWorkspace()
+      } catch (caught) {
+        cleanupError = caught
+      }
+      if (cleanupError) {
+        return this.failState(
+          cleanupError,
+          'The failed download and its private staging area could not be removed'
+        )
+      }
+      const detail = redactPaths(rawMessage(error), [work])
+      const safe = new PublicError(
+        'MODULE_DOWNLOAD_FAILED',
+        `Download failed: ${detail || 'the archive could not be downloaded'}`,
+        502
+      )
+      return this.setState({ phase: 'error', error: safe.message })
     } finally {
       this.transfer = null
     }
     if (runId !== this.runId) return this.state
-    return this.inspect(zipPath, runId, 'url', url.trusted)
+    return this.inspect(archivePath, runId, 'url', normalized.trusted, normalized.value)
   }
 
-  /** Grade a zip the user picked from disk. */
+  /** Grade a zip the user picked from disk after copying it into private staging. */
   async checkFile(path: string): Promise<ModuleInstallState> {
     if (this.busy()) return this.setState({ error: 'Another module operation is running' })
-    this.reset()
+    if (this.hasPendingTransaction()) {
+      return this.setState({
+        phase: 'error',
+        error: 'An interrupted module operation must be recovered before another can start',
+        validation: undefined
+      })
+    }
+    let work: string
+    try {
+      work = this.createWorkspace()
+    } catch (error) {
+      return this.failState(error, 'A private staging area could not be created')
+    }
     const runId = ++this.runId
     this.setState({
       phase: 'extracting',
-      source: path,
+      source: 'upload',
       error: undefined,
       validation: undefined,
       log: undefined,
       progress: undefined
     })
-    if (!existsSync(path)) {
-      return this.setState({ phase: 'error', error: `${path} does not exist` })
+    if (!isRegularFile(path)) {
+      try {
+        this.discardWorkspace()
+      } catch (error) {
+        return this.failState(error, 'The private staging area could not be removed')
+      }
+      return this.setState({ phase: 'error', error: 'The uploaded file was not saved' })
     }
-    return this.inspect(path, runId, 'zip', true)
+
+    const archivePath = join(work, 'module.zip')
+    try {
+      copyPrivateFile(path, archivePath)
+    } catch (error) {
+      try {
+        this.discardWorkspace()
+      } catch (cleanupError) {
+        return this.failState(
+          cleanupError,
+          'The upload and its private staging area could not be removed'
+        )
+      }
+      return this.failState(error, 'The uploaded archive could not be staged')
+    }
+    return this.inspect(archivePath, runId, 'zip', true, null)
   }
 
   private async inspect(
-    zipPath: string,
+    archivePath: string,
     runId: number,
     source: ModuleSource,
-    trusted: boolean
+    trusted: boolean,
+    sourceUrl: string | null
   ): Promise<ModuleInstallState> {
-    const stagingDir = join(this.workDir(), 'staging')
+    const work = this.workspace
+    if (!work) return this.setState({ phase: 'error', error: 'Private staging is no longer available' })
+    const stagingDir = join(work, 'staging')
     this.setState({ phase: 'extracting' })
-    // Hashes the archive as downloaded/uploaded, before it is unpacked - this
-    // is what a registry entry's sha256 is computed from (see registry.ts).
-    const sha256 = this.hashArchive(zipPath)
+
+    let archiveSha256: string
     let root: string | null = null
     try {
-      mkdirSync(this.workDir(), { recursive: true })
-      rmSync(stagingDir, { recursive: true, force: true })
-      await extractZip(zipPath, stagingDir)
+      archiveSha256 = hashFile(archivePath)
+      await extractZip(archivePath, stagingDir)
       root = findArchiveRoot(stagingDir, MODULE_MANIFEST_FILE)
-    } catch (err) {
+    } catch (error) {
       if (runId !== this.runId) return this.state
-      return this.setState({
-        phase: 'error',
-        error: `The file is not a readable zip archive: ${message(err)}`
-      })
+      let cleanupError: unknown = null
+      try {
+        this.discardWorkspace()
+      } catch (caught) {
+        cleanupError = caught
+      }
+      if (cleanupError) {
+        return this.failState(
+          cleanupError,
+          'The unreadable archive and its private staging area could not be removed'
+        )
+      }
+      const safe = new PublicError(
+        'MODULE_ARCHIVE_INVALID',
+        `The file is not a readable module archive: ${redactPaths(rawMessage(error), [work])}`,
+        400
+      )
+      return this.setState({ phase: 'error', error: safe.message })
     }
     if (runId !== this.runId) return this.state
 
     this.setState({ phase: 'validating' })
-    const { validation, manifest } = await this.validate(root, trusted, sha256)
+    let result: Awaited<ReturnType<ModuleInstallerService['validate']>>
+    try {
+      result = await this.validate(root, trusted, archiveSha256, sourceUrl, work)
+    } catch (error) {
+      log(`[module-installer] validator escaped its boundary: ${internalErrorDetail(error)}`)
+      result = {
+        validation: {
+          status: 'error',
+          kind: 'new',
+          overwritesDefault: false,
+          checks: [
+            {
+              id: 'validator',
+              level: 'error',
+              label: 'Module validation completed safely',
+              detail: 'A validator rejected malformed archive data'
+            }
+          ]
+        },
+        manifest: null,
+        catalogBinding: null
+      }
+    }
     if (runId !== this.runId) return this.state
-    const installable = validation.status !== 'error'
-    this.stagedRoot = installable ? root : null
-    this.stagedManifest = installable ? manifest : null
-    this.stagedSource = source
+
+    let treeSha256 = ''
+    if (result.validation.status !== 'error' && root && result.manifest) {
+      try {
+        treeSha256 = exactModuleTreeHash(root)
+      } catch (error) {
+        log(`[module-installer] staged tree digest failed: ${internalErrorDetail(error)}`)
+        result.validation.checks.push({
+          id: 'tree-digest',
+          level: 'error',
+          label: 'The staged module tree can be pinned for installation',
+          detail: 'The extracted module tree could not be read safely'
+        })
+        result.validation.status = 'error'
+      }
+    }
+
+    const installable =
+      result.validation.status !== 'error' && !!root && !!result.manifest && !!treeSha256
+    let confirmation: ModuleInstallState['confirmation']
+    if (installable) {
+      this.staged = {
+        workDir: work,
+        root: root!,
+        archivePath,
+        archiveSha256,
+        treeSha256,
+        manifest: result.manifest!,
+        source,
+        sourceUrl,
+        catalogBinding: result.catalogBinding
+      }
+      confirmation = this.issueConfirmation(this.staged)
+    } else {
+      try {
+        this.discardWorkspace()
+      } catch (error) {
+        return this.failState(
+          error,
+          'The rejected archive and its private staging area could not be removed',
+          { validation: result.validation }
+        )
+      }
+    }
+
     return this.setState({
       phase: installable ? 'ready' : 'error',
-      validation,
+      confirmation,
+      validation: result.validation,
       error: installable ? undefined : 'The archive did not pass every check'
     })
   }
 
-  /** SHA-256 of the archive file itself, hex-encoded; '' when it cannot be read. */
-  private hashArchive(path: string): string {
-    try {
-      return createHash('sha256').update(readFileSync(path)).digest('hex')
-    } catch {
-      return ''
-    }
-  }
-
-  /**
-   * The rule set, in the order a reader would want it: is this an archive, is
-   * it a module, can this app run it, does its declarative UI check out, and
-   * what would installing it replace.
-   */
   private async validate(
     root: string | null,
     trusted: boolean,
-    sha256: string
-  ): Promise<{ validation: ModuleValidation; manifest: ModuleManifest | null }> {
+    sha256: string,
+    sourceUrl: string | null,
+    work: string
+  ): Promise<{
+    validation: ModuleValidation
+    manifest: ModuleManifest | null
+    catalogBinding: CatalogBinding | null
+  }> {
     const checks: ModuleCheckItem[] = []
-    const fail = (kind: ModuleInstallKind = 'new'): { validation: ModuleValidation; manifest: null } => ({
-      validation: { status: 'error', kind, overwritesDefault: false, checks },
+    const fail = (
+      kind: ModuleInstallKind = 'new'
+    ): {
+      validation: ModuleValidation
       manifest: null
+      catalogBinding: null
+    } => ({
+      validation: { status: 'error', kind, overwritesDefault: false, checks },
+      manifest: null,
+      catalogBinding: null
     })
 
     if (!root) {
@@ -296,24 +1036,42 @@ export class ModuleInstallerService {
       id: 'archive',
       level: 'pass',
       label: 'Archive contains a module folder',
-      detail: root.split(/[\\/]/).pop()
+      detail: basename(root)
     })
 
     let raw: unknown
     try {
-      raw = JSON.parse(readFileSync(join(root, MODULE_MANIFEST_FILE), 'utf8'))
-    } catch (err) {
+      raw = JSON.parse(readFileSync(join(root, MODULE_MANIFEST_FILE), 'utf8')) as unknown
+    } catch (error) {
       checks.push({
         id: 'manifest',
         level: 'error',
         label: `${MODULE_MANIFEST_FILE} is readable`,
-        detail: message(err)
+        detail:
+          error instanceof SyntaxError
+            ? redactPaths(error.message)
+            : 'The manifest file could not be read'
       })
+      if (!(error instanceof SyntaxError)) {
+        log(`[module-installer] manifest read failed: ${internalErrorDetail(error)}`)
+      }
       return fail()
     }
     checks.push({ id: 'manifest', level: 'pass', label: `${MODULE_MANIFEST_FILE} is readable` })
 
-    const problems = manifestProblems(raw)
+    let problems: string[]
+    try {
+      problems = manifestProblems(raw)
+    } catch (error) {
+      log(`[module-installer] manifest validator failed: ${internalErrorDetail(error)}`)
+      checks.push({
+        id: 'schema',
+        level: 'error',
+        label: 'Manifest matches the module schema',
+        detail: 'Manifest validation failed safely; the archive was rejected'
+      })
+      return fail()
+    }
     if (problems.length) {
       checks.push({
         id: 'schema',
@@ -331,9 +1089,7 @@ export class ModuleInstallerService {
       detail: `${manifest.name} ${manifest.version} (id "${manifest.id}", API ${manifest.apiVersion})`
     })
 
-    // The declared entry point has to be in the archive, or the module loads
-    // into nothing and silently does not exist once installed.
-    if (!existsSync(join(root, manifest.entries.main))) {
+    if (!isRegularFile(join(root, manifest.entries.main))) {
       checks.push({
         id: 'entries',
         level: 'error',
@@ -366,17 +1122,14 @@ export class ModuleInstallerService {
       detail: manifest.minAppVersion ? `needs ${manifest.minAppVersion}, this is ${current}` : undefined
     })
 
-    // Every declared page/widget needs a ui/*.json spec - manifestProblems()
-    // already rejected `entries.renderer` above, so there is no transitional
-    // fallback left to check for.
     const missingSpecs: string[] = []
     for (const page of manifest.pages ?? []) {
-      if (!existsSync(join(root, 'ui', 'pages', `${page.id}.json`))) {
+      if (!isRegularFile(join(root, 'ui', 'pages', `${page.id}.json`))) {
         missingSpecs.push(`ui/pages/${page.id}.json`)
       }
     }
     for (const widget of manifest.widgets ?? []) {
-      if (!existsSync(join(root, 'ui', 'widgets', `${widget.id}.json`))) {
+      if (!isRegularFile(join(root, 'ui', 'widgets', `${widget.id}.json`))) {
         missingSpecs.push(`ui/widgets/${widget.id}.json`)
       }
     }
@@ -395,16 +1148,36 @@ export class ModuleInstallerService {
     for (const kind of ['pages', 'widgets'] as const) {
       const dir = join(root, 'ui', kind)
       if (!existsSync(dir)) continue
-      for (const file of readdirSync(dir).filter((f) => f.endsWith('.json'))) {
+      let files: string[]
+      try {
+        files = readdirSync(dir).filter((file) => file.endsWith('.json'))
+      } catch (error) {
+        log(`[module-installer] UI spec directory read failed: ${internalErrorDetail(error)}`)
+        specFileProblems.push(`${kind}: directory could not be read`)
+        continue
+      }
+      for (const file of files) {
         let specRaw: unknown
         try {
-          specRaw = JSON.parse(readFileSync(join(dir, file), 'utf8'))
-        } catch (err) {
-          specFileProblems.push(`${kind}/${file}: not valid JSON (${message(err)})`)
+          specRaw = JSON.parse(readFileSync(join(dir, file), 'utf8')) as unknown
+        } catch (error) {
+          specFileProblems.push(
+            `${kind}/${file}: ${
+              error instanceof SyntaxError ? redactPaths(error.message) : 'file could not be read'
+            }`
+          )
+          if (!(error instanceof SyntaxError)) {
+            log(`[module-installer] UI spec read failed: ${internalErrorDetail(error)}`)
+          }
           continue
         }
-        const found = specProblems(specRaw, manifest)
-        if (found.length) specFileProblems.push(`${kind}/${file}: ${found.join('; ')}`)
+        try {
+          const found = specProblems(specRaw, manifest)
+          if (found.length) specFileProblems.push(`${kind}/${file}: ${found.join('; ')}`)
+        } catch (error) {
+          log(`[module-installer] UI spec validator failed: ${internalErrorDetail(error)}`)
+          specFileProblems.push(`${kind}/${file}: validator rejected malformed data`)
+        }
       }
     }
     if (specFileProblems.length) {
@@ -418,10 +1191,7 @@ export class ModuleInstallerService {
     }
     checks.push({ id: 'ui-spec-schema', level: 'pass', label: 'ui/ specs match the block schema' })
 
-    // Trial-compile in place (a throwaway output, nothing under modules/ is
-    // touched yet) so a disallowed import shows up here, not after install.
-    // The host writes the same bytes to modules/<id>/.dist/main.mjs on install.
-    const compiledMain = join(this.workDir(), '.dist', 'main.mjs')
+    const compiledMain = join(work, '.dist', 'main.mjs')
     try {
       await compileModuleAt(root, compiledMain)
       checks.push({
@@ -429,19 +1199,16 @@ export class ModuleInstallerService {
         level: 'pass',
         label: 'Main half compiles (only imports its own files and shared/)'
       })
-    } catch (err) {
+    } catch (error) {
       checks.push({
         id: 'compile',
         level: 'error',
         label: 'Main half compiles (only imports its own files and shared/)',
-        detail: message(err)
+        detail: diagnostic(error, 'The module did not compile', [root, work])
       })
       return fail()
     }
 
-    // Spec already rejects http(s) as an error (specProblems). A URL that
-    // only exists in compiled main is a warning so the user can still
-    // install a module they trust after reading the list.
     try {
       const compiled = readFileSync(compiledMain, 'utf8')
       if (/https?:\/\//.test(compiled)) {
@@ -453,8 +1220,15 @@ export class ModuleInstallerService {
           detail: found.length ? found.slice(0, 8).join(', ') : undefined
         })
       }
-    } catch {
-      /* compile succeeded; a missing outfile is not a separate failure */
+    } catch (error) {
+      log(`[module-installer] compiled output could not be inspected: ${internalErrorDetail(error)}`)
+      checks.push({
+        id: 'compiled-output',
+        level: 'error',
+        label: 'Compiled output can be inspected',
+        detail: 'The compiler output could not be read back safely'
+      })
+      return fail()
     }
 
     if (!trusted) {
@@ -467,7 +1241,6 @@ export class ModuleInstallerService {
       })
     }
 
-    // What installing it would do to the current install.
     const installed = this.host.installed(manifest.id)
     const overwritesDefault = installed?.source === 'default'
     let kind: ModuleInstallKind = 'new'
@@ -517,7 +1290,7 @@ export class ModuleInstallerService {
     }
 
     const docs = (['README.md', 'CHANGELOG.md'] as const).filter(
-      (name) => !existsSync(join(root, name))
+      (name) => !isRegularFile(join(root, name))
     )
     if (docs.length) {
       checks.push({
@@ -530,25 +1303,20 @@ export class ModuleInstallerService {
       checks.push({ id: 'docs', level: 'pass', label: 'Ships its own documentation' })
     }
 
-    // Independent of the 'source' host check above: a file picked from disk
-    // or a URL on an untrusted host can still be a byte-for-byte copy of a
-    // reviewed release, and a github.com link is not automatically the
-    // reviewed version of that module.
-    const catalog = await getCatalog(this.getRepo())
-    const catalogEntry = catalog.entries.find((e) => e.id === manifest.id)
-    if (catalogEntry && sha256 && catalogEntry.sha256 === sha256) {
+    const catalogBinding = await this.catalogBindingFor(manifest, sha256, sourceUrl)
+    if (catalogBinding) {
       checks.push({
         id: 'catalog-verified',
         level: 'pass',
         label: 'Listed in the verified community catalog',
-        detail: `${catalogEntry.name} ${catalogEntry.version} - sha256 ${sha256} matches the verified entry`
+        detail: `${manifest.name} ${manifest.version} - the fresh catalog URL and sha256 ${sha256} match exactly`
       })
     } else {
       checks.push({
         id: 'unverified-source',
         level: 'warning',
         label: 'Not a verified module',
-        detail: `sha256 ${sha256 || '(unreadable)'} - not in the community catalog of verified modules, or the hash does not match the verified entry. Only install it if you trust this source.`
+        detail: `sha256 ${sha256} - no unique fresh catalog entry binds this exact module id, version, source URL and archive hash. Only install it if you trust this source.`
       })
     }
 
@@ -563,153 +1331,494 @@ export class ModuleInstallerService {
         overwritesDefault,
         checks
       },
-      manifest
+      manifest,
+      catalogBinding
     }
+  }
+
+  private async catalogBindingFor(
+    manifest: ModuleManifest,
+    sha256: string,
+    sourceUrl: string | null
+  ): Promise<CatalogBinding | null> {
+    if (!sourceUrl) return null
+    const repo = this.getRepo().trim()
+    const catalog = await getCatalog(repo)
+    if (!catalogIsFresh(catalog, repo)) return null
+    const matches = exactCatalogMatches(
+      catalog.entries,
+      sourceUrl,
+      manifest.id,
+      manifest.version,
+      sha256
+    )
+    if (matches.length !== 1) return null
+    return {
+      repo,
+      sourceUrl,
+      expectedId: manifest.id,
+      expectedVersion: manifest.version,
+      expectedSha256: sha256,
+      fetchedAt: catalog.fetchedAt
+    }
+  }
+
+  private async verifyCatalogBinding(staged: StagedModule): Promise<void> {
+    const binding = staged.catalogBinding
+    if (!binding) return
+    if (this.getRepo().trim() !== binding.repo) {
+      throw new PublicError(
+        'MODULE_RECHECK_REQUIRED',
+        'The configured catalog repository changed; check the module again',
+        409
+      )
+    }
+    const catalog = await getCatalog(binding.repo, true)
+    if (!catalogIsFresh(catalog, binding.repo)) {
+      throw new PublicError(
+        'MODULE_RECHECK_REQUIRED',
+        'The catalog could not be refreshed; check the module again before installing it as verified',
+        409
+      )
+    }
+    const matches = exactCatalogMatches(
+      catalog.entries,
+      binding.sourceUrl,
+      binding.expectedId,
+      binding.expectedVersion,
+      binding.expectedSha256
+    )
+    if (matches.length !== 1) {
+      throw new PublicError(
+        'MODULE_RECHECK_REQUIRED',
+        'The catalog entry changed or was removed; check the module again',
+        409
+      )
+    }
+  }
+
+  private blockingTreeProblems(root: string): {
+    manifest: ModuleManifest | null
+    problems: string[]
+  } {
+    const problems: string[] = []
+    let raw: unknown
+    try {
+      raw = JSON.parse(readFileSync(join(root, MODULE_MANIFEST_FILE), 'utf8')) as unknown
+    } catch (error) {
+      return {
+        manifest: null,
+        problems: [
+          error instanceof SyntaxError ? `module.json: ${redactPaths(error.message)}` : 'module.json is unreadable'
+        ]
+      }
+    }
+    try {
+      problems.push(...manifestProblems(raw))
+    } catch (error) {
+      log(`[module-installer] manifest revalidation failed: ${internalErrorDetail(error)}`)
+      problems.push('manifest validator rejected malformed data')
+    }
+    if (problems.length) return { manifest: null, problems }
+    const manifest = raw as ModuleManifest
+    if (!isRegularFile(join(root, manifest.entries.main))) {
+      problems.push(`missing: ${manifest.entries.main}`)
+    }
+    if (
+      manifest.minAppVersion &&
+      compareVersions(appVersion(), manifest.minAppVersion) < 0
+    ) {
+      problems.push(`this app is older than required ${manifest.minAppVersion}`)
+    }
+    for (const [kind, declarations] of [
+      ['pages', manifest.pages ?? []],
+      ['widgets', manifest.widgets ?? []]
+    ] as const) {
+      for (const declaration of declarations) {
+        const path = join(root, 'ui', kind, `${declaration.id}.json`)
+        if (!isRegularFile(path)) {
+          problems.push(`missing: ui/${kind}/${declaration.id}.json`)
+          continue
+        }
+        try {
+          const spec = JSON.parse(readFileSync(path, 'utf8')) as unknown
+          try {
+            problems.push(
+              ...specProblems(spec, manifest).map(
+                (problem) => `ui/${kind}/${declaration.id}.json: ${problem}`
+              )
+            )
+          } catch (error) {
+            log(`[module-installer] spec revalidation failed: ${internalErrorDetail(error)}`)
+            problems.push(`ui/${kind}/${declaration.id}.json: validator rejected malformed data`)
+          }
+        } catch (error) {
+          problems.push(
+            `ui/${kind}/${declaration.id}.json: ${
+              error instanceof SyntaxError ? redactPaths(error.message) : 'file is unreadable'
+            }`
+          )
+        }
+      }
+    }
+    return { manifest, problems }
+  }
+
+  private revalidateStaged(staged: StagedModule, candidate: string): void {
+    if (hashFile(staged.archivePath) !== staged.archiveSha256) {
+      throw new PublicError(
+        'MODULE_RECHECK_REQUIRED',
+        'The inspected archive changed; check it again',
+        409
+      )
+    }
+    const stagedCheck = this.blockingTreeProblems(staged.root)
+    const candidateCheck = this.blockingTreeProblems(candidate)
+    const allProblems = [...stagedCheck.problems, ...candidateCheck.problems]
+    if (allProblems.length) {
+      throw new PublicError(
+        'MODULE_RECHECK_REQUIRED',
+        `The staged module no longer passes validation: ${allProblems[0]}`,
+        409
+      )
+    }
+    for (const manifest of [stagedCheck.manifest, candidateCheck.manifest]) {
+      if (
+        !manifest ||
+        manifest.id !== staged.manifest.id ||
+        manifest.version !== staged.manifest.version
+      ) {
+        throw new PublicError(
+          'MODULE_RECHECK_REQUIRED',
+          'The staged module identity changed; check it again',
+          409
+        )
+      }
+    }
+    if (
+      exactModuleTreeHash(staged.root) !== staged.treeSha256 ||
+      exactModuleTreeHash(candidate) !== staged.treeSha256
+    ) {
+      throw new PublicError(
+        'MODULE_RECHECK_REQUIRED',
+        'The staged module files changed; check the archive again',
+        409
+      )
+    }
+  }
+
+  // ---------- Transactions ----------
+
+  private beginTransaction(
+    operation: TransactionOperation,
+    id: string,
+    hadTarget: boolean
+  ): ActiveTransaction {
+    const transactionId = randomBytes(16).toString('hex')
+    const journal: TransactionJournal = {
+      version: TRANSACTION_VERSION,
+      transactionId,
+      operation,
+      id,
+      phase: 'preparing',
+      hadTarget,
+      registry: null,
+      configPrimary: false,
+      configBackup: false,
+      moduleData: false
+    }
+    writeJournal(journal, 'preparing')
+    return { journal, hostStopped: false }
+  }
+
+  private async stopAndSnapshot(transaction: ActiveTransaction): Promise<void> {
+    const journal = transaction.journal
+    await this.host.stop(journal.id)
+    transaction.hostStopped = true
+    journal.registry = cloneRegistry(this.host.moduleRegistrySnapshot())
+    const config = moduleConfigPath(journal.id)
+    journal.configPrimary = existsSync(config)
+    journal.configBackup = existsSync(backupFile(config))
+    journal.moduleData = existsSync(moduleDataPath(journal.id))
+    writeJournal(journal, 'snapshotting')
+    capturePersistentSnapshot(journal)
+    assertSnapshotComplete(journal)
+    writeJournal(journal, 'prepared')
+  }
+
+  private async rollbackTransaction(transaction: ActiveTransaction): Promise<void> {
+    const journal = transaction.journal
+    const mutated = phaseMayHaveMutatedState(journal.phase)
+    if (mutated) {
+      if (!journal.registry) throw new Error('transaction has no registry snapshot')
+      await this.host.stop(journal.id)
+      restoreModuleFolder(journal)
+      restorePersistentFiles(journal)
+      this.host.rescan(journal.id)
+      this.host.restoreModuleRegistrySnapshot(cloneRegistry(journal.registry))
+    }
+
+    if (transaction.hostStopped && journal.hadTarget) {
+      this.host.rescan(journal.id)
+      const restored = await this.host.reload(journal.id)
+      if (!restored.ok) throw new Error(`restored module did not reload: ${restored.error}`)
+    } else if (!journal.hadTarget) {
+      this.host.rescan(journal.id)
+    }
+    if (mutated) {
+      writeJournal(journal, 'rolled-back')
+      removeTransactionArtifacts(journal)
+    } else {
+      removeUntouchedTransaction(journal)
+    }
+    this.host.rescan(basename(candidateDir(journal.id, journal.transactionId)))
+    this.host.rescan(basename(backupDir(journal.id, journal.transactionId)))
+  }
+
+  private notifyListChanged(): void {
+    try {
+      this.onListChanged()
+    } catch (error) {
+      log(`[module-installer] module-list notification failed: ${internalErrorDetail(error)}`)
+    }
+  }
+
+  private issueConfirmation(staged: StagedModule): NonNullable<ModuleInstallState['confirmation']> {
+    const token = randomBytes(32).toString('base64url')
+    const expiresAt = Date.now() + CONFIRMATION_TTL_MS
+    this.confirmation = {
+      tokenHash: createHash('sha256').update(token).digest(),
+      expiresAt,
+      runId: this.runId,
+      treeSha256: staged.treeSha256,
+      moduleId: staged.manifest.id,
+      consumed: false
+    }
+    return { token, expiresAt }
+  }
+
+  private consumeConfirmation(
+    token: unknown,
+    staged: StagedModule
+  ): { error: string; invalidate: boolean } | null {
+    const confirmation = this.confirmation
+    if (!confirmation || confirmation.consumed) {
+      return { error: 'Check the module again to obtain a fresh install confirmation', invalidate: true }
+    }
+    if (Date.now() > confirmation.expiresAt) {
+      this.confirmation = null
+      return { error: 'The install confirmation expired; check the module again', invalidate: true }
+    }
+    if (typeof token !== 'string' || token.length < 32 || token.length > 128) {
+      return { error: 'A valid install confirmation token is required', invalidate: false }
+    }
+    const suppliedHash = createHash('sha256').update(token).digest()
+    if (!timingSafeEqual(suppliedHash, confirmation.tokenHash)) {
+      return {
+        error: 'The install confirmation does not match this checked module',
+        invalidate: false
+      }
+    }
+    if (
+      confirmation.runId !== this.runId ||
+      confirmation.moduleId !== staged.manifest.id ||
+      confirmation.treeSha256 !== staged.treeSha256
+    ) {
+      this.confirmation = null
+      return { error: 'The checked module changed; check it again', invalidate: true }
+    }
+    try {
+      if (exactModuleTreeHash(staged.root) !== confirmation.treeSha256) {
+        this.confirmation = null
+        return { error: 'The staged module changed; check it again', invalidate: true }
+      }
+    } catch {
+      this.confirmation = null
+      return { error: 'The staged module is no longer readable; check it again', invalidate: true }
+    }
+    confirmation.consumed = true
+    return null
   }
 
   // ---------- Apply ----------
 
-  /**
-   * Put the inspected module in place and compile it. On failure everything is
-   * restored - the module folder as it was and the previous compiled output -
-   * so the app the user is looking at is the one they had; nothing here ever
-   * asks for a restart.
-   */
-  async install(): Promise<ModuleInstallState> {
-    if (this.state.phase !== 'ready' || !this.stagedRoot || !this.stagedManifest) {
+  async install(token: unknown): Promise<ModuleInstallState> {
+    const staged = this.staged
+    if (this.state.phase !== 'ready' || !staged) {
       return this.setState({ error: 'No inspected module is ready to install' })
     }
-
-    const id = this.stagedManifest.id
-    const version = this.stagedManifest.version
-    const target = moduleDir(id)
-    const backup = `${target}.backup-${Date.now()}`
-    const hadPrevious = existsSync(target)
-    const previousState = this.host.installed(id)
-
-    this.setState({ phase: 'installing', error: undefined, log: [] })
-    mkdirSync(modulesDir(), { recursive: true })
-
-    // Moved aside before anything is written, so a failure here never
-    // touches the current install - there is nothing yet to roll back. The
-    // version being replaced is stopped first: it would otherwise go on
-    // polling the target machine out of a folder that is being renamed under
-    // it, and the rollback path re-activates it either way.
-    if (hadPrevious) {
-      this.host.stop(id)
-      try {
-        renameSync(target, backup)
-      } catch (err) {
-        // Its folder never moved, so the version that was running is intact -
-        // start it again rather than leaving the user with a module that is
-        // installed, enabled and silent until the next settings change.
-        await this.host.reload(id).catch(() => undefined)
-        return this.setState({
-          phase: 'error',
-          error: `Could not write the module: the current install could not be moved aside (${message(err)})`
-        })
-      }
-    }
-
-    try {
-      cpSync(this.stagedRoot, target, { recursive: true })
-    } catch (err) {
-      // The backup (if any) was already made; put it back exactly as it was.
-      try {
-        rmSync(target, { recursive: true, force: true })
-        if (hadPrevious) {
-          renameSync(backup, target)
-          await this.host.reload(id).catch(() => undefined)
-        }
-      } catch {
-        /* reported below */
-      }
-      return this.setState({ phase: 'error', error: `Could not write the module: ${message(err)}` })
-    }
-
-    this.setState({ phase: 'building', log: [`compiling ${id}@${version} ...`] })
-    this.host.rescan(id)
-    this.host.record(id, version, moduleFolderHash(target), this.stagedSource)
-    const built = await this.host.reload(id)
-
-    if (!built.ok) {
-      try {
-        rmSync(target, { recursive: true, force: true })
-        if (hadPrevious) {
-          renameSync(backup, target)
-          this.host.rescan(id)
-          if (previousState) {
-            this.host.record(id, previousState.version, previousState.hash, previousState.source)
-          }
-          await this.host.reload(id).catch(() => undefined)
-        } else {
-          this.host.forget(id)
-        }
-      } catch (err) {
-        return this.setState({
-          phase: 'error',
-          error: `Compiling failed AND the previous module could not be restored (${message(err)}). The folder ${backup} still holds it.`,
-          log: this.tailLog(built.error)
-        })
-      }
-      this.onListChanged()
+    if (this.hasPendingTransaction()) {
       return this.setState({
         phase: 'error',
-        error: hadPrevious
-          ? `Compiling this module failed - the previous version is back in place and running.`
-          : `Compiling this module failed - nothing was installed.`,
-        log: this.tailLog(built.error)
+        error: 'An interrupted module operation must be recovered before another can start'
       })
     }
-
-    try {
-      rmSync(backup, { recursive: true, force: true })
-    } catch {
-      /* a leftover backup folder is harmless */
+    const confirmationProblem = this.consumeConfirmation(token, staged)
+    if (confirmationProblem) {
+      if (confirmationProblem.invalidate) {
+        return this.setState({
+          phase: 'error',
+          confirmation: undefined,
+          error: confirmationProblem.error
+        })
+      }
+      return this.setState({ error: confirmationProblem.error })
     }
-    this.onListChanged()
-    this.cleanWorkDir()
-    this.stagedRoot = null
-    this.stagedManifest = null
+
+    const id = staged.manifest.id
+    const version = staged.manifest.version
+    const target = moduleDir(id)
+    const hadPrevious = existsSync(target)
+    let transaction: ActiveTransaction | null = null
+    let activationFailure: ActivationFailure | null = null
+
+    this.setState({ phase: 'installing', error: undefined, log: [] })
+    try {
+      mkdirSync(modulesDir(), { recursive: true })
+      transaction = this.beginTransaction('install', id, hadPrevious)
+      const candidate = candidateDir(id, transaction.journal.transactionId)
+      cpSync(staged.root, candidate, {
+        recursive: true,
+        errorOnExist: true,
+        force: false
+      })
+      if (exactModuleTreeHash(candidate) !== staged.treeSha256) {
+        throw new PublicError(
+          'MODULE_RECHECK_REQUIRED',
+          'The candidate copy does not match the inspected module; check it again',
+          409
+        )
+      }
+
+      this.setState({ phase: 'building', log: [`compiling ${id}@${version} candidate ...`] })
+      try {
+        await compileModuleAt(candidate, join(candidate, '.dist', 'main.mjs'))
+      } catch (error) {
+        throw new PublicError(
+          'MODULE_BUILD_FAILED',
+          `The staged module could not be built again: ${diagnostic(
+            error,
+            'compilation failed',
+            [candidate, staged.workDir]
+          )}`,
+          400
+        )
+      }
+
+      // Refresh the exact catalog binding after the potentially slow build,
+      // while the old module is still running.
+      await this.verifyCatalogBinding(staged)
+      await this.stopAndSnapshot(transaction)
+
+      // Last operation before the journalled renames: prove both the immutable
+      // staging tree and the built sibling candidate are still the checked bytes.
+      this.revalidateStaged(staged, candidate)
+
+      const journal = transaction.journal
+      const backup = backupDir(id, journal.transactionId)
+      writeJournal(journal, 'moving-target')
+      if (hadPrevious) renameSync(target, backup)
+
+      writeJournal(journal, 'promoting-candidate')
+      renameSync(candidate, target)
+
+      writeJournal(journal, 'updating-state')
+      this.host.rescan(id)
+      this.host.record(id, version, moduleFolderHash(target), staged.source)
+      const built = await this.host.reload(id)
+      if (!built.ok) {
+        log(`[module-installer] candidate activation failed: ${built.error}`)
+        activationFailure = new ActivationFailure(
+          redactPaths(built.error, [target, staged.workDir])
+        )
+        throw activationFailure
+      }
+      writeJournal(journal, 'committed')
+    } catch (error) {
+      let rollbackError: unknown = null
+      if (transaction) {
+        try {
+          await this.rollbackTransaction(transaction)
+        } catch (caught) {
+          rollbackError = caught
+          log(`[module-installer] transaction rollback failed: ${internalErrorDetail(caught)}`)
+        }
+      }
+      try {
+        this.discardWorkspace()
+      } catch (caught) {
+        rollbackError ??= caught
+        log(`[module-installer] staging cleanup after failure failed: ${internalErrorDetail(caught)}`)
+      }
+      this.staged = null
+      this.notifyListChanged()
+      if (rollbackError) {
+        return this.failState(
+          rollbackError,
+          'The module operation failed and automatic recovery could not be completed; restart the app to retry recovery',
+          { log: activationFailure ? this.tailLog(activationFailure.compilerLog) : undefined }
+        )
+      }
+      if (activationFailure) {
+        return this.setState({
+          phase: 'error',
+          error: hadPrevious
+            ? 'The candidate could not start; the previous module and all of its state were restored'
+            : 'The candidate could not start; no module or module-owned state was installed',
+          log: this.tailLog(activationFailure.compilerLog)
+        })
+      }
+      const safe = publicFailure(error, 'The module could not be installed; the previous state was restored')
+      return this.setState({ phase: 'error', error: safe.message })
+    }
+
+    const journal = transaction.journal
+    try {
+      removeTransactionArtifacts(journal)
+      this.discardWorkspace()
+    } catch (error) {
+      this.staged = null
+      this.notifyListChanged()
+      return this.failState(
+        error,
+        'The module was installed, but transaction cleanup did not complete; restart the app to finish recovery'
+      )
+    }
+
+    this.notifyListChanged()
     return this.setState({
       phase: 'done',
       error: undefined,
       progress: undefined,
+      validation: undefined,
       log: this.tailLog(`${id}@${version} compiled and running - no restart needed.`)
     })
   }
 
-  /**
-   * Remove a module's folder, and with it the two stores only that module
-   * could read - its own settings and what it remembered about each machine.
-   * Leaving those behind would be unreachable bytes, since nothing else knows
-   * their shape.
-   *
-   * What is deliberately kept: the keys in the app's own `settings.json`
-   * (`refresh.<id>`, the `overviewWidgets` flags and their grid positions), so
-   * reinstalling later puts the widgets back where they were; and the metrics
-   * history, which is per machine and expires on its own retention.
-   *
-   * An update does not come through here - install() swaps the folder in
-   * place - so upgrading a module keeps everything it had.
-   */
   async uninstall(id: string): Promise<ModuleInstallState> {
     if (this.busy()) return this.setState({ error: 'Another module operation is running' })
-    // The id arrives from a browser and ends up in a recursive delete, so it
-    // is not enough for the path to look right: it has to name a module the
-    // host actually has. `moduleDir` refuses a traversal in any case, but a
-    // folder under `modules/` that is not a module is not ours to remove.
+    if (this.hasPendingTransaction()) {
+      return this.setState({
+        phase: 'error',
+        error: 'An interrupted module operation must be recovered before another can start'
+      })
+    }
     if (!this.host.installed(id)) {
       return this.setState({ phase: 'error', error: `Module "${id}" is not installed` })
     }
     let target: string
     try {
       target = moduleDir(id)
-    } catch (err) {
-      return this.setState({ phase: 'error', error: message(err) })
+    } catch (error) {
+      return this.failState(error, 'The module id is not valid')
     }
     if (!existsSync(target)) {
       return this.setState({ phase: 'error', error: `Module "${id}" is not installed` })
+    }
+    try {
+      this.discardWorkspace()
+    } catch (error) {
+      return this.failState(error, 'The previous private staging area could not be removed')
     }
 
     this.setState({
@@ -719,36 +1828,69 @@ export class ModuleInstallerService {
       validation: undefined,
       log: []
     })
-    // Stopped before a single file goes: deactivating unregisters its RPC
-    // channels, revokes its context and kills anything it left running, so
-    // there is no tick that can arrive halfway through the delete and no
-    // chance of it writing its config back after the next two lines.
-    this.host.stop(id)
+    let transaction: ActiveTransaction | null = null
     try {
-      rmSync(target, { recursive: true, force: true })
-    } catch (err) {
-      await this.host.reload(id).catch(() => undefined)
-      return this.setState({ phase: 'error', error: `Could not remove the module: ${message(err)}` })
-    }
-    try {
+      transaction = this.beginTransaction('uninstall', id, true)
+      await this.stopAndSnapshot(transaction)
+      const journal = transaction.journal
+      const backup = backupDir(id, journal.transactionId)
+
+      writeJournal(journal, 'moving-target')
+      renameSync(target, backup)
+
+      writeJournal(journal, 'updating-state')
       deleteModuleConfig(id)
       deleteModuleData(id)
-    } catch {
-      // The module is already gone; a leftover file it can no longer reach is
-      // not worth failing the uninstall over.
+      await this.host.forget(id)
+      writeJournal(journal, 'committed')
+    } catch (error) {
+      let rollbackError: unknown = null
+      if (transaction) {
+        try {
+          await this.rollbackTransaction(transaction)
+        } catch (caught) {
+          rollbackError = caught
+          log(`[module-installer] uninstall rollback failed: ${internalErrorDetail(caught)}`)
+        }
+      }
+      this.notifyListChanged()
+      if (rollbackError) {
+        return this.failState(
+          rollbackError,
+          'The uninstall failed and automatic recovery could not be completed; restart the app to retry recovery'
+        )
+      }
+      const safe = publicFailure(error, 'The module could not be removed; its previous state was restored')
+      return this.setState({ phase: 'error', error: safe.message })
     }
-    this.host.forget(id)
-    this.onListChanged()
-    return this.setState({ phase: 'done', error: undefined })
+
+    try {
+      removeTransactionArtifacts(transaction.journal)
+    } catch (error) {
+      this.notifyListChanged()
+      return this.failState(
+        error,
+        'The module was removed, but transaction cleanup did not complete; restart the app to finish recovery'
+      )
+    }
+    this.notifyListChanged()
+    return this.setState({ phase: 'done', error: undefined, source: id })
   }
 
-  /** Throw away whatever was downloaded and go back to the starting point. */
+  /** Throw away downloaded/extracted staging. An install transaction cannot be cancelled mid-swap. */
   cancel(): ModuleInstallState {
     if (this.state.phase === 'installing' || this.state.phase === 'building') return this.state
     this.runId++
     this.transfer?.abort()
     this.transfer = null
-    this.reset()
+    try {
+      this.discardWorkspace()
+    } catch (error) {
+      return this.failState(
+        error,
+        'The private staging area could not be removed; retry discard after the transfer stops'
+      )
+    }
     return this.setState({
       phase: 'idle',
       source: undefined,
@@ -760,21 +1902,7 @@ export class ModuleInstallerService {
   }
 
   private tailLog(text: string): string[] {
-    const lines = text.split(/\r?\n/).filter((l) => l.trim())
+    const lines = text.split(/\r?\n/).filter((line) => line.trim())
     return lines.length > MAX_LOG_LINES ? lines.slice(-MAX_LOG_LINES) : lines
-  }
-
-  private reset(): void {
-    this.cleanWorkDir()
-    this.stagedRoot = null
-    this.stagedManifest = null
-  }
-
-  private cleanWorkDir(): void {
-    try {
-      rmSync(this.workDir(), { recursive: true, force: true })
-    } catch {
-      /* a leftover temp folder is harmless */
-    }
   }
 }

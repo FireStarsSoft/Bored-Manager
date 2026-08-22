@@ -8,7 +8,7 @@ The app reimplements nothing. Everything it shows comes from tools that are alre
 
 That is why "local machine" and "over SSH" are the same code path: one interface, two implementations.
 
-The **server** runs on Linux. Every browser on the network talks to that one process. There is still **one** connected target and **one** set of terminals — connect or disconnect from any client affects the others. That is deliberate.
+The **server** runs on Linux. Every browser on the network talks to that one process and shares its pool of connected targets. Each target has an independent executor, collectors, module runtimes, history buffer, package service and terminal set. A browser chooses its own active machine, so clients can view different targets concurrently. Adding or disconnecting a target affects the shared pool; changing the active target does not affect another browser.
 
 ## Process layout
 
@@ -22,24 +22,26 @@ flowchart TB
     ws["WebSocket /ws"]
     rpc["rpc.ts: 4 JSON frames"]
     ipc["ipc.ts: services + applyPollers"]
-    conn["connection.ts: the executor"]
+    pool["machines.ts: shared target pool"]
+    ctx["MachineContext: executor + services"]
     hostMod["modules-host.ts"]
     hist["history.ts"]
     track["services-tracker.ts"]
     auth["auth + users + sessions"]
   end
-  target["Target machine: local shell or SSH"]
+  targets["Target machines: local shell and SSH"]
 
   spa -->|"HTTP /api, static"| http
   spa -->|"invoke / send"| ws
   ws --> rpc
   rpc --> ipc
-  ipc --> conn
+  ipc --> pool
+  pool --> ctx
   ipc --> hostMod
   ipc --> hist
   ipc --> track
   ipc --> auth
-  conn --> target
+  ctx --> targets
   ipc -->|"event push:* / module:*"| spa
 ```
 
@@ -48,10 +50,11 @@ flowchart TB
 | `server/index.ts` | HTTP server, `/ws` upgrade, heartbeat ping/pong every 30s, `unlock` subcommand, SIGINT/SIGTERM → `cleanClose()` |
 | `server/http.ts` | Express app: CSP, session cookie `bm.sid`, static `out/renderer/`, SPA fallback, `/api` router |
 | `server/rpc.ts` | The four JSON frames, per-socket `activeTab` / `username` / `sessionId`, broadcast |
-| `server/ipc.ts` | Every service instance, `registerRpc()`, and `applyPollers()` — the single place that decides what is running |
-| `server/connection.ts` | The `ConnectionManager`: connect, disconnect, `exec` / `execSudo` / `stream` / `streamSudo`, the status the UI shows |
+| `server/ipc.ts` | RPC wiring and `applyPollers()` — the single place that decides what runs for each target |
+| `server/machines.ts` | The shared `MachinePool`; each `MachineContext` owns one manager, core collectors, package service and history buffer |
+| `server/connection.ts` | One target's `ConnectionManager`: connect, disconnect, `exec` / `execSudo` / `stream` / `streamSudo` |
 | `server/executors/local.ts`, `ssh.ts` | The two implementations. `ssh.ts` is imported lazily so a broken native binding can only affect a connect attempt, never startup |
-| `server/session-registry.ts` | Everything that has to be released on close: pollers, log streams, terminals. `disposeAll()` on quit |
+| `server/session-registry.ts` | Process-wide safety net for resources that have to be released on close; per-machine teardown happens before pool removal |
 | `server/services/*` | The app's own collectors and services (see below) |
 | `server/auth.ts` | Login, logout, lockout, session gate on `/api` |
 | `modules/<id>/main/` | A module's main half, compiled at runtime to `modules/<id>/.dist/main.mjs` |
@@ -76,7 +79,7 @@ flowchart TB
 | `services/registry.ts` | `registry/modules.json` on the update repo | the community catalog (cached 24h in `data/registry-cache.json`) |
 | `services/users.ts` | `data/users/users.json` | accounts (`bored-admin` is created on first boot) |
 
-Everything else — the process table, network detail, disk detail, sensors, GPU, containers — lives in a module.
+Everything else — the process table, network detail, disk detail, sensors, GPU, containers, the systemd fleet (`service-fleet`), BMC, OpenWRT — lives in a module.
 
 ## WebSocket RPC
 
@@ -91,6 +94,8 @@ Four JSON frames:
 | Client → server, fire and forget | `{ "kind": "send", "channel": string, "args": unknown[] }` — `ui:activeTab`, `term:write`, `term:resize` |
 | Server → client, push | `{ "kind": "event", "channel": string, "payload": unknown }` |
 
+Inbound frames are capped at 2 MiB (`RPC_LIMITS.maxPayload`) so a `file` form field can send a 1 MiB text list. Outbound results and the per-socket queue are capped at 8 MiB so a visibility-gated thousand-row table can return in one reply. Those limits live in `server/rpc.ts`.
+
 When auth is on, an expired session closes the socket with code **4401**. HTTP 401 is the matching status on `/api/*`.
 
 The surface is typed once in `src/lib/api.ts` and implemented by `src/lib/ws-api.ts`. Adding a module never means adding a channel by hand: `ctx.handle` registers under `module:<id>:invoke:<method>` and the host removes it again when the module is switched off.
@@ -101,13 +106,14 @@ The surface is typed once in `src/lib/api.ts` and implemented by `src/lib/ws-api
 
 | Channel | Purpose |
 |---|---|
-| `conn:connect` / `conn:disconnect` / `conn:status` | the one shared connection |
+| `conn:connect` / `conn:reconnect` | add a local/SSH target to the shared pool, or reconnect saved credentials server-side |
+| `conn:disconnect(machineId)` / `conn:status` | remove one target / list every connected target |
 | `conn:list` / `conn:credentials` / `conn:delete` | saved SSH hosts for **this** user |
-| `metrics:history` | latest `system` / `top` / `services` plus each module's snapshots, for a freshly opened client |
-| `metrics:refreshSlow` | take one slow reading now (`df`, `lsblk`, Docker df, …) |
+| `metrics:history(machineId)` | latest `system` / `top` / `services` plus each module's snapshots for one target |
+| `metrics:refreshSlow(machineId, target)` | take one slow reading now (`df`, `lsblk`, Docker df, …) |
 | `history:query` / `history:stats` / `history:flush` / `history:purge` / `history:folder` | metrics on disk; `folder` returns the path string |
-| `packages:overview` / `packages:search` / `packages:action` / `packages:cancel` / `packages:state` | the Packages page |
-| `term:create` / `term:list` / `term:buffer` / `term:dispose` | terminals (shared) |
+| `packages:overview` / `packages:search` / `packages:action` / `packages:cancel` / `packages:state` | the Packages page; `machineId` is the first argument |
+| `term:create(machineId, …)` / `term:list` / `term:buffer` / `term:dispose` | terminals, tagged with their target |
 | `settings:get` / `settings:set` | settings v4; changing `server.port` / `server.host` needs a restart |
 | `auth:users` / `auth:createUser` / `auth:deleteUser` / `auth:setPassword` / `auth:setEnabled` | accounts; enabling auth requires `bored-admin` to already have a password |
 | `modules:list` / `modules:enabledIds` / `modules:specs` | installed modules and their UI specs |
@@ -118,19 +124,20 @@ The surface is typed once in `src/lib/api.ts` and implemented by `src/lib/ws-api
 | `app:info` / `app:restart` / `app:ping` | version + restart the server process |
 | `module:<id>:invoke:<method>` | a module method registered with `ctx.handle` |
 
-**Send** (no reply): `ui:activeTab`, `term:write`, `term:resize`.
+**Send** (no reply): `ui:activeMachine`, `ui:activeTab`, `term:write`, `term:resize`.
 
 **Events** (server → every client, unless noted):
 
 | Channel | Payload |
 |---|---|
-| `push:conn-status` | `ConnectionStatus` after connect/disconnect, so every browser stays in step |
-| `push:conn-lost` | the SSH session dropped |
-| `push:system` / `push:top` / `push:services` | core collectors |
+| `push:conn-status` | complete `MachineStatus[]` after a pool change, so coalescing cannot lose a transition |
+| `push:conn-lost` | `{ machineId }` when one SSH session drops |
+| `push:system` / `push:top` | `{ machineId, data }` from one target; each browser ignores machines it is not viewing |
+| `push:services` | global cost of the Bored Manager process |
 | `packages:log` / `packages:state` | live apt/dnf/pacman output |
 | `term:data` / `term:exit` | terminal I/O, broadcast so every watcher sees the same PTY |
 | `push:update` / `push:modules` / `push:modules-list` | updater / installer progress and the installed-module list |
-| `module:<id>:event:<event>` | a module `ctx.emit` |
+| `module:<id>:event:<event>` | `{ machineId, data }` from one machine's module instance |
 
 ### HTTP (outside the socket)
 
@@ -145,19 +152,19 @@ Static files and the SPA are always served (the login form is part of the SPA). 
 | POST | `/api/modules/check-file` |
 | POST | `/api/update/check-file` |
 
-## Many clients, one connection
+## Many clients, many connections
 
-Each WebSocket has its own `activeTab`. Collectors in `detailPolling` mode `tab` run while **at least one** client has that tab open, and stop when the last one leaves. `ctx.tabActive` is true while any of the module's pages (`<id>` or `<id>/<page>`) is visible on any client.
+Each WebSocket has its own `activeMachine` and `activeTab`. `RpcRouter.activeTabsByMachine()` groups visible pages by target. A collector in `detailPolling` mode `tab` runs only while at least one client is viewing that tab **on that machine**; activity on another target cannot wake it. Every enabled module gets an isolated main instance and context per connected machine.
 
-`push:conn-status` is how a browser sitting on the Connect screen follows another client's connect/disconnect. Terminals belong to the server, not to a tab: output is broadcast, and a late joiner catches up with `term:buffer`.
+`push:conn-status` carries the complete shared pool after every add, reconnect, disconnect or loss. The renderer stores only its active selection and session reconnect list in `sessionStorage`; no credential is written there. Saved SSH credentials remain **per user** on the server (`data/users/<username>/connections.json`) and `conn:reconnect` consumes them without returning secrets to the browser. With auth off, everything belongs to `bored-admin`.
 
-Saved SSH hosts are **per user** (`data/users/<username>/connections.json`). With auth off, everything belongs to `bored-admin`.
+Terminals belong to a machine, not to a browser tab. `term:list` includes `machineId`; changing the active machine filters the visible terminal set while the other PTYs continue running. Disconnecting that machine disposes only its terminals.
 
 ## Users, session, lockout
 
 - Auth is **off** by default. Every client then acts as `bored-admin`.
 - Cookie `bm.sid`, HttpOnly, SameSite=Lax, secret from `data/secret.key`, store `data/sessions/`. Rolling idle: `auth.sessionIdle` default `{ value: 0, unit: "hour" }` means no expiry.
-- Lockout is global: `data/auth-lock.json`. After `auth.maxFailures` (default **5**) wrong passwords, every login returns HTTP 423 until `./bored-manager unlock` (or `node out/server/index.mjs unlock`) on the host.
+- Lockout is per username and per client address: `data/auth-lock.json`. After `auth.maxFailures` (default **5**) wrong passwords, that account or address returns HTTP 423 until `./bored-manager unlock` (or `node out/server/index.mjs unlock`) on the host. Unlock clears every counter.
 - Passwords are scrypt hashes in `data/users/users.json` (`version: 1`). Deleting a user deletes `data/users/<username>/` as well. `bored-admin` cannot be deleted.
 
 The app serves **plain HTTP**. Use it on a trusted LAN, or put TLS in front of it.
@@ -181,9 +188,9 @@ What changes every second and what changes every few minutes are collected on se
 
 | Fast (1–5s) | Slow (30s–30min, or manual) |
 |---|---|
-| CPU, memory, network and disk rates, sensors, GPU, containers, per-process counters | mount usage and inodes (`df`), the block device list (`lsblk`), Docker disk usage (`docker system df`), interface addresses / MTU / link speed / gateway / DNS |
+| CPU, memory, network and disk rates, sensors, GPU, containers, per-process counters, visible BMC tables, OpenWRT router status and WAN-binding reconciliation | mount usage and inodes (`df`), the block device list (`lsblk`), Docker disk usage (`docker system df`), interface addresses / MTU / link speed / gateway / DNS, BMC power sweep, service-fleet SSH sweep, OpenWRT PPPoE log scan and table-map self-heal |
 
-Slow sections show how long ago they were read and carry a refresh button (`metrics:refreshSlow`). Restarting a poller makes it tick immediately, which is fine at 1–5s but wrong for `df` — so the modules that own a slow poller remember what they applied and only re-apply it when the interval actually changed.
+Slow sections show how long ago they were read and carry a refresh button (`metrics:refreshSlow`). Starting a stopped poller or changing its interval ticks immediately; starting one again with the same interval is a no-op. Modules with slow pollers also remember their applied configuration so unrelated settings do not re-run `df`, `docker system df`, or a remote sweep.
 
 ## Rates come from counter diffs
 
@@ -195,20 +202,25 @@ Nothing on a Linux target reports a rate; everything reports a monotonic counter
 
 ## The polling decision
 
-`applyPollers()` in `ipc.ts` is the only place that starts or stops the **core** collectors. It runs on connect, disconnect, every settings change, every tab change, and when a client disconnects, and it is idempotent:
+`applyPollers()` in `ipc.ts` is the only place that starts or stops the **core** collectors. It runs on pool changes, machine/tab selection, settings changes and socket close, and it is idempotent:
 
 ```
 applyPollers()
-├─ configure the core collectors from settings.collectors
-├─ decide the two extra top-consumer sweeps from which modules are enabled
-├─ stop the core pollers (system, top, services)
-├─ modulesHost.configure(settings, activeTabs) + apply()
-│    └─ per module: activate/deactivate as needed, then instance.applyPollers()
-└─ if connected: start system + services (on refresh.system);
-                 start top when overviewTop's detailPolling says so
+├─ group active tabs by machine
+├─ for each connected machine
+│  ├─ configure its collectors from the shared settings
+│  ├─ derive desired state; start/keep/stop system and top independently
+│  └─ configure its fixed history buffer
+├─ modulesHost.configure(settings, tabsByMachine) + apply()
+│  └─ per enabled module × machine: activate/deactivate and applyPollers()
+└─ start/keep the app-wide services poller only while the pool is non-empty
 ```
 
 The `core:services` poller is **not** gated by a tab — it reports on the app's own upkeep whether or not anyone is looking at the Overview card. A module's `applyPollers()` is called with the same guarantees, which is why it has to re-derive its intervals from `ctx` rather than remember them.
+
+For a module in `detailPolling: "tab"` mode, `ctx.tabActive` means either one of its pages is open or one of its enabled Overview widgets is visible on that machine. GPU, Sensors and Container default to `"always"` to preserve continuous history, but can opt into this mode in Settings; the GPU auto-cap watcher and all slow monitoring sweeps remain independent. A browser hidden for 30 seconds advertises no active tab until it becomes visible again.
+
+GPU metrics are the one fast collector implemented as a long-running target stream: `nvidia-smi -lms` keeps NVML initialised while a bounded per-sample query updates compute processes. Stream startup/exit retries with backoff; three consecutive failures switch that connection to the older per-tick command path. The module kills the stream whenever its interval changes, its tab-gated surface disappears, the target disconnects, or the module is disabled.
 
 ## Modules at runtime
 
@@ -216,7 +228,7 @@ A module is a folder, not code compiled into the app's bundle.
 
 1. `modules-host` reads every `modules/<id>/module.json` from disk.
 2. The first time a module activates, esbuild bundles `entries.main` to `modules/<id>/.dist/main.mjs` (only `@shared/*` and the module's own files are allowed — see [MODULE-RULESET.md](MODULE-RULESET.md)).
-3. The host `import()`s that file with a `?v=` cache-bust so **reload** picks up a new compile without restarting the server.
+3. The host `import()`s that file once per connected machine with `?v=…&m=<machineId>`. The machine parameter gives each target a separate ESM namespace (including module-level caches), while the version parameter makes **reload** pick up a new compile without restarting the server.
 4. `modules:specs` sends each enabled module's `ui/pages/*.json` and `ui/widgets/*.json` to the renderer.
 
 The renderer never executes module code. `src/modules/BlockRenderer.tsx` walks the spec; `src/modules/binding.ts` resolves each `DataSource`:
@@ -247,7 +259,7 @@ The reduced history stream is named `services`: `{ t, cpu, mem, count }`.
 
 | Store | Holds |
 |---|---|
-| `src/state/store.ts` (Zustand) | Connection status, settings, the active page, the installed module list, the `system` ring buffer, top consumers, the services snapshot, terminals, notices |
+| `src/state/store.ts` (Zustand) | Shared machine list, this tab's `activeMachineId`, settings, active page, installed modules, and the active machine's core rings/terminals/notices |
 | `src/lib/module-bus.ts` (Zustand) | Every module's snapshots, keyed `<moduleId>:<event>` |
 
 Keeping module data out of the app store is what makes a module removable: nothing in the core references `s.gpu` any more, and a module that is off simply stops being written to.
@@ -272,9 +284,10 @@ A widget spec that omits `window` inherits the Overview's history window. A page
 
 ```
 data/metrics/<local | user@host>/<stream>-<YYYYMMDDHH>.jsonl
+data/metrics/_app/services-<YYYYMMDDHH>.jsonl
 ```
 
-NDJSON, one reduced sample per line, one file per stream per hour. The app writes `system` and `services`. Every other stream name belongs to a module, which writes to it through `ctx.addHistory` (default stream = the module id).
+NDJSON, one reduced sample per line, one file per stream per hour. Every machine context writes its own `system` and module streams. The app-wide `services` stream lives under `_app`, because it measures the one server process rather than a target.
 
 - Samples are buffered in RAM and appended **once every five minutes** in a single append (plus on quit, on disconnect, and before clearing). A hard crash loses at most one batch.
 - A 30-minute RAM ring answers short ranges without touching the disk.
@@ -283,4 +296,4 @@ NDJSON, one reduced sample per line, one file per stream per hour. The app write
 
 ## Clean close
 
-Everything the app creates on the target is registered somewhere that gets disposed: pollers register with the session registry, module streams are killed by the module's `dispose()`, terminals by the terminal service. `cleanClose()` flushes the history, disposes every module, tears down the session, drains the registry with a 5-second budget and closes the connection. Nothing is left running on the target machine.
+Everything the app creates on a target is registered somewhere that gets disposed. Disconnecting one machine stops only its pollers, package action, module instances, history timer and terminals, then closes its executor. `cleanClose()` repeats that teardown for every pool entry, flushes `_app`, drains the process-wide registry with a 5-second budget and closes all remaining executors. Nothing is left running on any target.

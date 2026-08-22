@@ -82,6 +82,14 @@ export const chartColors = {
     stroke: 'stroke-destructive',
     fill: 'fill-destructive',
     text: 'text-destructive'
+  },
+  // Unknown / unset health — muted-foreground, not muted (that token is a
+  // surface). Same grey the status wall uses for cards that have not been swept.
+  muted: {
+    bg: 'bg-muted-foreground',
+    stroke: 'stroke-muted-foreground',
+    fill: 'fill-muted-foreground',
+    text: 'text-muted-foreground'
   }
 } as const satisfies {
   [color: string]: { [key in ColorUtility]: string }

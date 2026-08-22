@@ -1,0 +1,40 @@
+{
+  "blocks": [
+    {
+      "type": "conditional",
+      "when": { "source": { "kind": "stream", "event": "snapshot", "path": "available" }, "op": "eq", "value": true },
+      "blocks": [
+        {
+          "type": "section",
+          "title": "GPU power",
+          "blocks": [
+            {
+              "type": "chart",
+              "title": "Power",
+              "kind": "area",
+              "source": { "kind": "stream", "event": "series" },
+              "series": [
+                { "key": "draw", "label": "Draw", "unit": "W" },
+                { "key": "limit", "label": "Limit", "unit": "W" }
+              ]
+            }
+          ]
+        }
+      ],
+      "else": [
+        {
+          "type": "section",
+          "title": "GPU power",
+          "blocks": [
+            {
+              "type": "list",
+              "source": { "kind": "stream", "event": "snapshot", "path": "gpus" },
+              "columns": [{ "key": "name" }],
+              "emptyText": "No GPU detected on this machine."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

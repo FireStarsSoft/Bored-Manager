@@ -40,7 +40,9 @@ const activate: ModuleActivate = (ctx) => {
   return {
     applyPollers() {
       const interval = ctx.fastIntervalMs('gpu')
-      if (ctx.connected && interval > 0) service.poller.start(interval)
+      const mode = ctx.detailMode('gpu')
+      const wanted = mode === 'always' || (mode === 'tab' && ctx.tabActive)
+      if (ctx.connected && wanted && interval > 0) service.poller.start(interval)
       else service.poller.stop()
       // Runs after ctx.hostKey was pointed at the machine that just connected
       // (see teardownSession/conn:connect in server/ipc.ts), which is what lets

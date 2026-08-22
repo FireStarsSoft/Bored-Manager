@@ -1,7 +1,7 @@
 import type { TopConsumersSnapshot, TopProcEntry } from '@shared/types'
 import { splitSections } from '@shared/shell'
 import { SS_CMD, parseSs } from '@shared/ss'
-import { connection } from '../connection'
+import { connection, type ConnectionManager } from '../connection'
 import { Poller } from './poller'
 
 /** How many processes each Overview card can possibly want to show. */
@@ -56,8 +56,12 @@ export class TopConsumersService {
   private prevSock = new Map<string, { acked: number; received: number }>()
   readonly poller: Poller
 
-  constructor(private emit: (snap: TopConsumersSnapshot) => void) {
-    this.poller = new Poller('top-consumers', () => this.sample())
+  constructor(
+    private emit: (snap: TopConsumersSnapshot) => void,
+    private readonly target: ConnectionManager = connection,
+    pollerName = 'top-consumers'
+  ) {
+    this.poller = new Poller(pollerName, () => this.sample())
   }
 
   configure(probes: TopProbes): void {
@@ -79,12 +83,12 @@ export class TopConsumersService {
   }
 
   private async sample(): Promise<void> {
-    if (!connection.connected) return
-    const useSudo = connection.status().hasSudo === true
+    if (!this.target.connected) return
+    const useSudo = this.target.status().hasSudo === true
     const cmd = this.compositeCmd()
     const res = useSudo
-      ? await connection.execSudo(cmd, { timeoutMs: 20000 })
-      : await connection.exec(cmd, { timeoutMs: 20000 })
+      ? await this.target.execSudo(cmd, { timeoutMs: 20000 })
+      : await this.target.exec(cmd, { timeoutMs: 20000 })
     if (res.code !== 0 && !res.stdout) return
     const t = Date.now()
     const sec = splitSections(res.stdout)

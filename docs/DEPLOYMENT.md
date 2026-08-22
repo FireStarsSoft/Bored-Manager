@@ -35,7 +35,7 @@ A zip created on Linux keeps the `+x` bit, so `./install.sh` runs straight away.
 | `assets/` | `icon.png` |
 | `docs/` | this documentation |
 | `server/` | Express + WebSocket RPC |
-| `modules/` | the seven built-in modules and `modules.lock.json` |
+| `modules/` | the nine built-in modules and `modules.lock.json` |
 | `registry/` | `modules.json` (community catalog) |
 | `scripts/` | `package.sh`, `update.sh`, `bored-manager.service`, module tooling, `licenses.mjs` |
 | `shared/`, `src/` | shared code and the renderer |
@@ -48,7 +48,7 @@ A zip created on Linux keeps the `+x` bit, so `./install.sh` runs straight away.
 | `modules-disabled/` | modules quarantined by a previous update — runtime state |
 | `modules/*.backup-*` | left behind by an interrupted module install |
 | `scripts/*.zip`, `*.log` | earlier archives and logs |
-| `.git`, `.github`, `.cursor`, `.cursorignore`, `Todos.MD` | development only |
+| `.git`, `.github`, `.cursor`, `.cursorignore`, `Todos.MD`, `tests/`, `vitest.config.ts`, `tsconfig.test.json` | development only |
 
 ## GitHub Actions
 
@@ -107,7 +107,7 @@ Because the app is a source folder, updating means *replace the whole folder, re
 
 ```bash
 ./bored-manager update                  # latest release of settings.update.repo
-./bored-manager update --source ./bored-manager-0.3.2.zip
+./bored-manager update --source ./bored-manager-0.3.3.zip
 ```
 
 ### 1. Download and check

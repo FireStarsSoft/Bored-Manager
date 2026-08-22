@@ -28,6 +28,12 @@ export class Poller {
   }
 
   start(intervalMs: number): void {
+    // applyPollers() is deliberately called for every tab, machine and settings
+    // transition. Preserve the existing timer phase when its desired state did
+    // not change; restarting here would also trigger an unnecessary immediate
+    // command on the target.
+    if (intervalMs > 0 && this.running && this.intervalMs === intervalMs) return
+
     const wasRunning = this.running
     const previous = this.intervalMs
     this.clear()

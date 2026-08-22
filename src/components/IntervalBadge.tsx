@@ -18,6 +18,7 @@ const FAST_LABELS: Record<string, string> = {
   processes: 'Processes',
   network: 'Network detail',
   disk: 'Disk activity',
+  openwrt: 'Router status & binding engine',
   'service-fleet': 'Fleet pages'
 }
 
@@ -25,6 +26,7 @@ const SLOW_LABELS: Record<string, string> = {
   storage: 'File systems & devices',
   container: 'Container disk usage',
   network: 'Interface inventory',
+  openwrt: 'Log scan & self-heal',
   'service-fleet': 'Fleet sweep'
 }
 

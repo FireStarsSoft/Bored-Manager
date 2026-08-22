@@ -6,21 +6,17 @@
       "blocks": [
         {
           "type": "section",
-          "title": "GPU",
+          "title": "GPU utilisation",
           "blocks": [
             {
-              "type": "stat",
-              "label": "Utilization",
-              "source": { "kind": "stream", "event": "snapshot", "path": "gpus.0.utilization" },
-              "format": "pct",
-              "spark": { "source": { "kind": "stream", "event": "series" }, "key": "util" }
-            },
-            {
-              "type": "list",
-              "source": { "kind": "stream", "event": "snapshot", "path": "processes" },
-              "columns": [{ "key": "name" }, { "key": "memMiB", "label": "MiB", "align": "right" }],
-              "limit": 3,
-              "emptyText": "No compute processes on the GPU"
+              "type": "chart",
+              "title": "Utilisation & temperature",
+              "kind": "area",
+              "source": { "kind": "stream", "event": "series" },
+              "series": [
+                { "key": "util", "label": "Utilisation", "format": "pct", "axis": "left", "color": "gpu" },
+                { "key": "temp", "label": "Temperature", "format": "temp", "axis": "right", "color": "warning" }
+              ]
             }
           ]
         }
@@ -28,13 +24,13 @@
       "else": [
         {
           "type": "section",
-          "title": "GPU",
+          "title": "GPU utilisation",
           "blocks": [
             {
               "type": "list",
               "source": { "kind": "stream", "event": "snapshot", "path": "gpus" },
               "columns": [{ "key": "name" }],
-              "emptyText": "No NVIDIA GPU detected on this machine."
+              "emptyText": "No GPU detected on this machine."
             }
           ]
         }

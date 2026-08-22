@@ -1,8 +1,15 @@
-// Types shared between the Electron main process and the renderer.
+// Types shared between the server and the renderer.
 
 // ---------- Connection ----------
 
 export type ConnectionMode = 'local' | 'ssh'
+
+export interface HostKeyConfirmation {
+  /** Exact SHA-256 fingerprint shown by the preceding challenge. */
+  fingerprint: string
+  /** Single-use, short-lived token bound to host, port, and fingerprint. */
+  token: string
+}
 
 export interface ConnectionConfig {
   mode: ConnectionMode
@@ -14,8 +21,8 @@ export interface ConnectionConfig {
   privateKeyPath?: string
   sudoPassword?: string
   rememberPassword?: boolean
-  /** One-shot: persist the host key presented on this attempt. */
-  acceptHostKey?: boolean
+  /** One-shot proof that the exact host key challenge was confirmed. */
+  hostKeyConfirmation?: HostKeyConfirmation
 }
 
 export interface ConnectionStatus {
@@ -23,9 +30,30 @@ export interface ConnectionStatus {
   mode?: ConnectionMode
   label?: string
   host?: string
+  port?: number
   username?: string
   isRoot?: boolean
   hasSudo?: boolean
+}
+
+/** One target in the server-wide connection pool. */
+export interface MachineStatus extends ConnectionStatus {
+  machineId: string
+  /** Increments whenever this id's executor is successfully replaced. */
+  revision: number
+}
+
+/** Result of adding or reconnecting one target. */
+export interface ConnectionResult extends OkResult {
+  machineId?: string
+  /** Reconnect could not proceed without asking the user for credentials. */
+  needsCredentials?: boolean
+}
+
+/** A server push whose data belongs to one target machine. */
+export interface MachinePayload<T> {
+  machineId: string
+  data: T
 }
 
 export interface SavedConnection {
@@ -533,7 +561,7 @@ export interface HistoryStats {
   enabled: boolean
   /** absolute path of data/metrics */
   dir: string
-  /** local / user@host of the current session, null when disconnected */
+  /** Scoped machine id, or null when stats aggregate the whole pool. */
   hostKey: string | null
   /** file the next flush will append to */
   currentFile: string | null
@@ -601,6 +629,9 @@ export type DetailPollingMode = 'tab' | 'always' | 'off'
 export interface DetailPollingSettings {
   network: DetailPollingMode
   disk: DetailPollingMode
+  gpu: DetailPollingMode
+  sensors: DetailPollingMode
+  container: DetailPollingMode
   /** per-process CPU/memory/disk/network for the Overview cards */
   overviewTop: DetailPollingMode
 }
@@ -656,13 +687,19 @@ export type SlowRefreshTarget = string
  *    written before this only ever ran dark, and is carried over as such.
  * 6: the Docker module grew Incus alongside it and became the Container
  *    module, so its interval keys and Overview widget ids changed name.
+ * 7: the server gained an explicit Host allowlist and local reverse-proxy
+ *    trust setting.
  */
-export const SETTINGS_VERSION = 6
+export const SETTINGS_VERSION = 7
 
-/** Where the WebUI listens. Changing either needs a restart. */
+/** Network boundary of the WebUI. Changing any field needs a restart. */
 export interface ServerSettings {
   port: number
   host: string
+  /** Extra DNS names accepted in Host/Origin, beyond local addresses. */
+  allowedHosts: string[]
+  /** Trust forwarding headers only from a reverse proxy on loopback. */
+  trustProxy: boolean
 }
 
 export type SessionIdleUnit = 'minute' | 'hour' | 'day'
@@ -765,6 +802,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     processes: 'normal',
     network: 'normal',
     disk: 'normal',
+    bmc: 'normal',
+    openwrt: 'normal',
     // A module-declared key with no default reads back as `paused`
     // (modules-host's fastIntervalMs), so a module that ships with the app has
     // to have its key here or it never polls. This one only re-reads the last
@@ -775,6 +814,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     storage: 60,
     container: 300,
     network: 60,
+    bmc: 60,
+    openwrt: 60,
     'service-fleet': 120
   },
   overviewWidgets: {},
@@ -789,6 +830,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   detailPolling: {
     network: 'tab',
     disk: 'tab',
+    gpu: 'always',
+    sensors: 'always',
+    container: 'always',
     overviewTop: 'tab'
   },
   history: {
@@ -798,7 +842,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   server: {
     port: 8686,
-    host: '0.0.0.0'
+    host: '0.0.0.0',
+    allowedHosts: [],
+    trustProxy: false
   },
   auth: {
     enabled: false,
@@ -1138,6 +1184,7 @@ export type TerminalPreset = 'shell' | 'nvidia-smi' | 'glances' | 'lazydocker' |
 
 export interface TerminalInfo {
   id: string
+  machineId: string
   title: string
   preset: TerminalPreset
 }
@@ -1221,6 +1268,8 @@ export interface HostKeyChallenge {
   fingerprint: string
   host: string
   port: number
+  token: string
+  expiresAt: number
 }
 
 export interface OkResult {

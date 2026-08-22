@@ -6,10 +6,9 @@ import type { ModuleContext } from '@shared/modules'
 // something to match on, the same way `user` backs the "by user" group.
 const LIST_CMD = `ps axo pid,ppid,user:20,pcpu,pmem,rss,stat,etime,comm,args --sort=-pcpu --no-headers | head -n 400`
 
-export async function listProcesses(ctx: ModuleContext): Promise<ProcessInfo[]> {
-  const res = await ctx.exec(LIST_CMD, { timeoutMs: 15000 })
+export function parseProcessList(text: string): ProcessInfo[] {
   const procs: ProcessInfo[] = []
-  for (const line of res.stdout.split('\n')) {
+  for (const line of text.split('\n')) {
     if (!line.trim()) continue
     const m = line.match(
       /^\s*(\d+)\s+(\d+)\s+(\S+)\s+([\d.]+)\s+([\d.]+)\s+(\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(.*)$/
@@ -31,6 +30,11 @@ export async function listProcesses(ctx: ModuleContext): Promise<ProcessInfo[]> 
     })
   }
   return procs
+}
+
+export async function listProcesses(ctx: ModuleContext): Promise<ProcessInfo[]> {
+  const res = await ctx.exec(LIST_CMD, { timeoutMs: 15000 })
+  return parseProcessList(res.stdout)
 }
 
 const SIGNALS: ReadonlySet<string> = new Set(['TERM', 'KILL'])

@@ -11,10 +11,14 @@ Releasing a version, the schema versions that need care, reviewing a community m
 5. **Required files** — if you added a file the app cannot boot without, add it to **both** lists below.
 6. **Checks**:
    ```bash
-   npm run typecheck
+   npm run typecheck         # server, renderer, and tests (tsconfig.test.json)
+   npm test                  # unit + integration + protocol contract
+   npm run check             # typecheck then test
    npm run build
    npm run modules:lock      # the packager does this too, but check it in
    npm run modules:verify
+   npm run modules:specs
+   npm run modules:compile
    ```
 7. **Run it** against a real Linux target and walk the checklist below.
 8. **Commit**, tag `vX.Y.Z` (the same numbers as `package.json`), **push the tag**. GitHub Actions packages the zip and attaches it to the release.
@@ -26,7 +30,7 @@ Not exhaustive — the things that break quietly:
 
 | Area | Check |
 |---|---|
-| First run | Delete `data/`, start: density is auto-detected, five built-in modules appear enabled, Container and Services are disabled, no "files modified" badge |
+| First run | Delete `data/`, start: density is auto-detected, five built-in modules appear enabled, Container, Services, BMC and OpenWRT are disabled, no "files modified" badge |
 | Auth off / on | With auth off, the UI is usable with no login. Enable it (after setting `bored-admin`'s password): `/api/*` is 401 until login; lockout after 5 failures; `./bored-manager unlock` clears it |
 | Enable / disable | Toggle each module: its page and cards appear and disappear at once, and `data/app.log` shows no poller left behind |
 | Reload | Edit a module file, press Reload: the new spec/main runs, no server restart |
@@ -46,11 +50,11 @@ Not exhaustive — the things that break quietly:
 
 Four numbers version an interface, and each has its own rule.
 
-### `SETTINGS_VERSION` (`shared/types.ts`) — **6**
+### `SETTINGS_VERSION` (`shared/types.ts`) — **7**
 
 Bump when an existing field **changes shape**, not when one is added — a new field is filled from the defaults automatically.
 
-The conversion goes in `mergeSettings()` in `server/services/store.ts`:
+The conversion goes in `normalizeAppSettings()` in `shared/app-settings.ts`:
 
 - read the old field from the raw object (typed through a `LegacySettings` interface, not `any`);
 - write the new shape;
@@ -61,10 +65,11 @@ The conversion goes in `mergeSettings()` in `server/services/store.ts`:
 - v3 → v4 moved `lastUpdateUrl` to `update.lastUrl` and filled `server` / `auth` / `update`.
 - v4 → v5 carried a pre-theme file over as dark (the only theme that build had).
 - v5 → v6 renamed the Docker module's interval keys and Overview widget ids to `container`.
+- v6 → v7 added `server.allowedHosts` (extra Host/Origin names) and `server.trustProxy` (trust forwarding headers from a loopback reverse proxy).
 
 ### `MODULE_API_VERSION` (`shared/modules.ts`) — **2**
 
-Bump when the contract in `ModuleContext` or `ModuleMainInstance` changes in a way that breaks an existing module, **or** when the renderer half's shape changes (v2 replaced `entries.renderer` with `ui/*.json`). The app refuses any module whose `apiVersion` is not exactly this number, so a bump means **every module has to be updated and repackaged**, including the seven default ones.
+Bump when the contract in `ModuleContext` or `ModuleMainInstance` changes in a way that breaks an existing module, **or** when the renderer half's shape changes (v2 replaced `entries.renderer` with `ui/*.json`). The app refuses any module whose `apiVersion` is not exactly this number, so a bump means **every module has to be updated and repackaged**, including the nine default ones.
 
 Adding an optional member to `ModuleContext` is not a breaking change and does not need a bump.
 

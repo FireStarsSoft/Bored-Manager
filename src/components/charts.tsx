@@ -1,20 +1,24 @@
 import * as React from 'react'
 import { cn } from '@/lib/utils'
 import { AreaChart, ChartLegend, useCategoryColors } from '@/components/charts/area-chart'
+import { DonutChart } from '@/components/charts/donut-chart'
 import { ProgressBar } from '@/components/charts/progress-bar'
-import type { ChartColor } from '@/components/charts/chart-colors'
+import { getColorClassName, type ChartColor } from '@/components/charts/chart-colors'
 
 /**
- * The app's two chart shapes, on top of the Tremor-derived AreaChart in
- * ./charts/. Everything specific to a live system monitor lives here: a real
- * time axis whose labels do not jump as samples scroll past, and a value axis
- * whose top does not flicker on every new reading.
+ * The app's chart shapes, on top of the Tremor-derived primitives in
+ * ./charts/. Time-series charts keep a real time axis whose labels do not
+ * jump as samples scroll past, and a value axis whose top does not flicker
+ * on every new reading. The donut is a snapshot (part-of-whole), not a series.
  */
 
 export interface SeriesDef {
   key: string
   color: ChartColor
   name?: string
+  axis?: 'left' | 'right'
+  /** Tooltip and this series' axis. Falls back to the chart-level formatter. */
+  formatValue?: (v: number) => string
 }
 
 export interface ChartPoint {
@@ -124,9 +128,16 @@ function useAreaSeries(series: SeriesDef[]): Array<{
   category: string
   label: string
   color: ChartColor
+  axis?: 'left' | 'right'
 }> {
   return React.useMemo(
-    () => series.map((s) => ({ category: s.key, label: s.name ?? s.key, color: s.color })),
+    () =>
+      series.map((s) => ({
+        category: s.key,
+        label: s.name ?? s.key,
+        color: s.color,
+        axis: s.axis
+      })),
     [series]
   )
 }
@@ -152,11 +163,24 @@ function TimeAreaChart({
   legend?: boolean
   heightClass: string
 }): React.JSX.Element {
-  const value = useValueAxis(data, series, max, valueTicks)
+  const leftSeries = React.useMemo(() => series.filter((s) => s.axis !== 'right'), [series])
+  const rightSeries = React.useMemo(() => series.filter((s) => s.axis === 'right'), [series])
+  const leftAxis = useValueAxis(data, leftSeries.length ? leftSeries : series, max, valueTicks)
+  const rightAxis = useValueAxis(data, rightSeries, undefined, valueTicks)
   const time = useTimeAxis(data, timeTickCount)
   const fmt = formatValue ?? ((v: number) => v.toFixed(0))
+  const leftFmt = (v: number): string => leftSeries[0]?.formatValue?.(v) ?? fmt(v)
+  const rightFmt = (v: number): string => rightSeries[0]?.formatValue?.(v) ?? fmt(v)
+  const valueFormatter = (v: number, category?: string): string => {
+    if (category) {
+      const s = series.find((x) => x.key === category)
+      if (s?.formatValue) return s.formatValue(v)
+    }
+    return fmt(v)
+  }
   const areaSeries = useAreaSeries(series)
   const categoryColors = useCategoryColors(areaSeries)
+  const hasRight = leftSeries.length > 0 && rightSeries.length > 0
 
   return (
     <>
@@ -169,11 +193,19 @@ function TimeAreaChart({
           timeAxis
           xTicks={distinct(time.ticks, time.format)}
           xTickFormatter={time.format}
-          yTicks={distinct(value.ticks, fmt)}
-          maxValue={value.top}
+          yTicks={distinct(leftAxis.ticks, leftFmt)}
+          maxValue={leftAxis.top}
           minValue={0}
+          {...(hasRight
+            ? {
+                rightYTicks: distinct(rightAxis.ticks, rightFmt),
+                rightMaxValue: rightAxis.top,
+                rightMinValue: 0,
+                rightValueFormatter: rightFmt
+              }
+            : {})}
           yAxisWidth={yAxisWidth}
-          valueFormatter={fmt}
+          valueFormatter={valueFormatter}
           tooltipLabelFormatter={tooltipTime}
         />
       </div>
@@ -252,6 +284,66 @@ export function DetailChart({
   )
 }
 
+export interface DonutSlice {
+  name: string
+  value: number
+  color: ChartColor
+}
+
+/**
+ * Part-of-whole chart for Overview / `pie` blocks. The centre is a total the
+ * caller already computed (so it can match a field like `counts.total` rather
+ * than summing only the visible slices). Legend always lists every slice,
+ * including zeros, so a missing colour still means "none of these".
+ */
+export function Donut({
+  data,
+  label,
+  labelCaption,
+  formatValue,
+  className,
+  compact
+}: {
+  data: DonutSlice[]
+  label?: string
+  labelCaption?: string
+  formatValue?: (v: number) => string
+  className?: string
+  compact?: boolean
+}): React.JSX.Element {
+  const fmt = formatValue ?? ((v: number) => v.toFixed(0))
+  return (
+    <div className={cn('flex items-center gap-3', className)}>
+      <div className={cn('shrink-0', compact ? 'h-28 w-28' : 'h-36 w-36')}>
+        <DonutChart
+          data={data.map((s) => ({ name: s.name, value: s.value }))}
+          category="name"
+          value="value"
+          colors={data.map((s) => s.color)}
+          label={label}
+          labelCaption={labelCaption}
+          showLabel
+          valueFormatter={fmt}
+        />
+      </div>
+      <div className="flex min-w-0 flex-1 flex-col gap-1 text-xs">
+        {data.map((s) => (
+          <div key={s.name} className="flex items-center justify-between gap-3">
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span
+                aria-hidden
+                className={cn('h-1.5 w-2.5 shrink-0 rounded-sm', getColorClassName(s.color, 'bg'))}
+              />
+              <span className="truncate text-muted-foreground">{s.name}</span>
+            </span>
+            <span className="shrink-0 font-medium tabular-nums">{fmt(s.value)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 /**
  * Thin horizontal usage bar. Kept as a named export because Overview and the
  * `meter` block both ask for one by this name.
@@ -276,5 +368,4 @@ export function MeterBar({
   )
 }
 
-export { ProgressBar } from '@/components/charts/progress-bar'
 export type { ChartColor } from '@/components/charts/chart-colors'

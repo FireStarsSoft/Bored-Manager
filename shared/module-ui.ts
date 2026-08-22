@@ -5,6 +5,7 @@
 // here executes - it is read, validated (`specProblems`) and walked.
 import type { ModuleManifest } from './modules'
 import { CORE_HISTORY_STREAMS, ownsHistoryStream } from './modules'
+import { isRecord } from './validation'
 
 /**
  * How a raw value is printed. Maps 1-1 to formatBytes/Rate/Pct/Temp/Duration in
@@ -111,6 +112,28 @@ export interface SectionBlock {
   blocks: Block[]
 }
 
+export interface SubnavBlock {
+  type: 'subnav'
+  items: Array<{
+    id: string
+    label: string
+    icon?: string
+    blocks: Block[]
+  }>
+  /** Id of the item shown first; defaults to the first item. */
+  initial?: string
+}
+
+/** Static page-level guidance that does not need a data source. */
+export interface NoteBlock {
+  type: 'note'
+  title?: string
+  /** Each entry is rendered as one short paragraph. */
+  lines: string[]
+  /** Defaults to `info`. */
+  tone?: 'info' | 'warning'
+}
+
 export interface StatBlock {
   type: 'stat'
   label: string
@@ -128,12 +151,41 @@ export interface MeterBlock {
   max?: number
 }
 
+/**
+ * Swatches a `chart` series may name. Same tokens as the renderer palette
+ * (`src/components/charts/chart-colors.ts`); listed here so a spec can be
+ * checked without importing the UI layer.
+ */
+export const CHART_SERIES_COLORS = [
+  'primary',
+  'cpu',
+  'mem',
+  'gpu',
+  'docker',
+  'net',
+  'disk',
+  'download',
+  'upload',
+  'success',
+  'warning',
+  'destructive',
+  'muted'
+] as const
+
+export type ChartSeriesColor = (typeof CHART_SERIES_COLORS)[number]
+
 export interface ChartSeriesDecl {
   /** Key inside the resolved data point. */
   key: string
   label: string
   /** Only used when the chart has no `format` - a literal suffix with no scaling (e.g. "RPM"). */
   unit?: string
+  /** Which Y-axis this series uses. Omit for the left axis (the only axis on a single-scale chart). */
+  axis?: 'left' | 'right'
+  /** How this series' axis and tooltip print a value. Overrides the chart-level `format`. */
+  format?: ValueFormat
+  /** Paint token; omit to take the next colour from the block palette. */
+  color?: ChartSeriesColor
 }
 
 export interface ChartBlock {
@@ -141,12 +193,52 @@ export interface ChartBlock {
   title?: string
   kind: 'line' | 'area' | 'bar'
   source: DataSource
-  series: ChartSeriesDecl[]
+  /**
+   * Declared series when the keys are known at spec time. Omit to take every
+   * numeric key on the last point except `t` (machine-dependent sensors).
+   */
+  series?: ChartSeriesDecl[]
+  /** Cap when inferring series from keys. Ignored when `series` is declared. */
+  maxSeries?: number
+  /**
+   * Literal suffix when the chart has no `format` and series are inferred
+   * (so there is no per-series `unit`). Declared series still prefer their own.
+   */
+  unit?: string
+  /** Decimal places for the unit suffix (or a raw number). Ignored when `format` is set. */
+  decimals?: number
   /** How the axis/tooltip prints a value - same formats as `stat`/`meter`. Omit for a raw number (or a series' own `unit` suffix). */
   format?: ValueFormat
   stacked?: boolean
   /** Seconds of history to show; omit to inherit the page/widget's window. */
   window?: number
+}
+
+/**
+ * A slice of a `pie` block. Colour is a status, not a paint — same rule as
+ * `statusCards`, so a theme switch does not leave a spec holding hex.
+ */
+export type PieSliceStatus = 'ok' | 'warn' | 'bad' | 'unknown'
+
+export interface PieSliceDecl {
+  /** Key on the resolved object (e.g. `"online"` on `hosts.counts`). */
+  key: string
+  label: string
+  status: PieSliceStatus
+}
+
+/**
+ * A part-of-whole snapshot (counts by status). Not a `chart` kind: those are
+ * time series of `{ t, … }`, and a pie cannot inherit a window or sparkline.
+ */
+export interface PieBlock {
+  type: 'pie'
+  source: DataSource
+  slices: PieSliceDecl[]
+  /** Number drawn in the donut hole. Omit to sum the slices. */
+  center?: { key: string; label?: string }
+  emptyText?: string
+  format?: ValueFormat
 }
 
 export interface KeyValueRow {
@@ -283,6 +375,7 @@ export type FormInput =
   | 'checkbox'
   | 'password'
   | 'textarea'
+  | 'file'
   | 'color'
 
 export interface FormField {
@@ -297,6 +390,12 @@ export interface FormField {
    * an `Array<{ value, label }>`; read once when the block first becomes visible.
    */
   optionsFrom?: DataSource
+  /** `file` only: browser file-picker filter; defaults to `.txt`. */
+  accept?: string
+  /** `file` only: maximum file size in KiB; defaults to 1024. */
+  maxKb?: number
+  /** `checkForm` only: send an empty value on apply after the check froze it. */
+  omitOnApply?: boolean
   placeholder?: string
   /** A line under the field saying what it is for. */
   help?: string
@@ -394,9 +493,12 @@ export interface ConditionalBlock {
 
 export type Block =
   | SectionBlock
+  | SubnavBlock
+  | NoteBlock
   | StatBlock
   | MeterBlock
   | ChartBlock
+  | PieBlock
   | KeyValueBlock
   | ListBlock
   | TableBlock
@@ -430,9 +532,12 @@ export interface ModuleSpecsEntry {
 
 const BLOCK_TYPES = new Set<Block['type']>([
   'section',
+  'subnav',
+  'note',
   'stat',
   'meter',
   'chart',
+  'pie',
   'keyValue',
   'list',
   'table',
@@ -444,6 +549,32 @@ const BLOCK_TYPES = new Set<Block['type']>([
   'checkForm',
   'conditional'
 ])
+
+// Kept in sync with the explicit renderer map in src/lib/module-registry.ts.
+// Shared validation cannot import the renderer bundle.
+const MODULE_ICON_NAMES = new Set<string>([
+  'Activity',
+  'Boxes',
+  'Cable',
+  'Container',
+  'Cpu',
+  'FileText',
+  'FolderTree',
+  'Gauge',
+  'HardDrive',
+  'Info',
+  'Layers',
+  'ListTree',
+  'Network',
+  'Server',
+  'Settings2',
+  'Sparkles',
+  'Tag',
+  'Thermometer',
+  'Zap'
+])
+
+const CHART_SERIES_COLOR_SET = new Set<string>(CHART_SERIES_COLORS)
 
 const VALUE_FORMATS = new Set<ValueFormat>([
   'bytes',
@@ -463,8 +594,13 @@ const FORM_INPUTS = new Set<FormInput>([
   'checkbox',
   'password',
   'textarea',
+  'file',
   'color'
 ])
+
+const MAX_SPEC_BLOCKS = 20_000
+const MAX_SPEC_DEPTH = 64
+const MAX_COLLECTION_ITEMS = 10_000
 
 /** Blocks nested inside `blocks`/`rowDetail`/`else`; walked to check they never reference a CDN. */
 function nestedBlockArrays(block: Record<string, unknown>): Array<{ path: string; blocks: unknown[] }> {
@@ -472,14 +608,85 @@ function nestedBlockArrays(block: Record<string, unknown>): Array<{ path: string
   const blocks = block['blocks']
   const rowDetail = block['rowDetail']
   const elseBlocks = block['else']
+  const items = block['items']
   if (Array.isArray(blocks)) out.push({ path: 'blocks', blocks })
   if (Array.isArray(rowDetail)) out.push({ path: 'rowDetail', blocks: rowDetail })
   if (Array.isArray(elseBlocks)) out.push({ path: 'else', blocks: elseBlocks })
+  if (Array.isArray(items)) {
+    for (const [index, item] of items.entries()) {
+      if (isRecord(item) && Array.isArray(item['blocks'])) {
+        out.push({ path: `items[${index}].blocks`, blocks: item['blocks'] })
+      }
+    }
+  }
   return out
 }
 
 function pushIf(problems: string[], condition: boolean, message: string): void {
   if (condition) problems.push(message)
+}
+
+function checkRequiredString(problems: string[], where: string, value: unknown): void {
+  if (typeof value !== 'string' || !value.trim()) problems.push(`${where} is missing`)
+}
+
+function checkOptionalString(problems: string[], where: string, value: unknown): void {
+  if (value != null && typeof value !== 'string') problems.push(`${where} is not a string`)
+}
+
+function checkOptionalBoolean(problems: string[], where: string, value: unknown): void {
+  if (value != null && typeof value !== 'boolean') problems.push(`${where} is not a boolean`)
+}
+
+function checkOptionalFiniteNumber(
+  problems: string[],
+  where: string,
+  value: unknown,
+  options: { min?: number; integer?: boolean } = {}
+): void {
+  if (value == null) return
+  if (
+    typeof value !== 'number' ||
+    !Number.isFinite(value) ||
+    (options.integer === true && !Number.isInteger(value)) ||
+    (options.min != null && value < options.min)
+  ) {
+    problems.push(`${where} is not a valid number`)
+  }
+}
+
+function checkStringArray(
+  problems: string[],
+  where: string,
+  value: unknown,
+  options: { required?: boolean; nonEmpty?: boolean } = {}
+): value is string[] {
+  if (value == null && options.required !== true) return false
+  if (
+    !Array.isArray(value) ||
+    (options.nonEmpty === true && value.length === 0) ||
+    value.some((item) => typeof item !== 'string' || !item)
+  ) {
+    problems.push(`${where} is not an array of non-empty strings`)
+    return false
+  }
+  if (value.length > MAX_COLLECTION_ITEMS) problems.push(`${where} contains too many items`)
+  return true
+}
+
+function checkObjectArray(
+  problems: string[],
+  where: string,
+  value: unknown,
+  options: { required?: boolean; nonEmpty?: boolean } = {}
+): value is unknown[] {
+  if (value == null && options.required !== true) return false
+  if (!Array.isArray(value) || (options.nonEmpty === true && value.length === 0)) {
+    problems.push(`${where} is not a${options.nonEmpty === true ? ' non-empty' : 'n'} array`)
+    return false
+  }
+  if (value.length > MAX_COLLECTION_ITEMS) problems.push(`${where} contains too many items`)
+  return true
 }
 
 function checkFormat(problems: string[], where: string, format: unknown): void {
@@ -490,22 +697,29 @@ function checkFormat(problems: string[], where: string, format: unknown): void {
 
 /** `where` names the source field itself (`blocks[0].source`, `...fields[1].optionsFrom`). */
 function checkSource(problems: string[], where: string, source: unknown, manifest: ModuleManifest): void {
-  if (typeof source !== 'object' || source === null) {
+  if (!isRecord(source)) {
     problems.push(`${where} is missing`)
     return
   }
-  const s = source as Record<string, unknown>
-  const streamEvents = new Set((manifest.streams ?? []).map((x) => x.event))
+  const s = source
+  const streams = Array.isArray(manifest.streams) ? manifest.streams : []
+  const streamEvents = new Set(streams.filter(isRecord).map((x) => x['event']))
   const kind = s['kind']
   switch (kind) {
     case 'stream': {
       const event = s['event']
       const known = typeof event === 'string' && streamEvents.has(event)
       if (!known) problems.push(`${where}: stream "${String(event)}" is not declared in manifest.streams`)
+      checkOptionalString(problems, `${where}.path`, s['path'])
       break
     }
     case 'invoke':
       checkMethod(problems, where, s['method'], manifest)
+      if (s['args'] != null && !Array.isArray(s['args'])) {
+        problems.push(`${where}.args is not an array`)
+      }
+      checkOptionalString(problems, `${where}.intervalKey`, s['intervalKey'])
+      checkOptionalString(problems, `${where}.path`, s['path'])
       break
     case 'history': {
       // A module may chart its own history, or one of the app's own streams
@@ -523,6 +737,7 @@ function checkSource(problems: string[], where: string, source: unknown, manifes
           `${where}: history stream "${stream}" belongs to another module - use "${manifest.id}", "${manifest.id}-<name>", or one of ${CORE_HISTORY_STREAMS.join(', ')}`
         )
       }
+      checkStringArray(problems, `${where}.keys`, s['keys'], { required: true, nonEmpty: true })
       break
     }
     case 'core': {
@@ -530,6 +745,7 @@ function checkSource(problems: string[], where: string, source: unknown, manifes
       if (stream !== 'system' && stream !== 'top' && stream !== 'services') {
         problems.push(`${where}: "${String(stream)}" is not a core stream (system, top, services)`)
       }
+      checkOptionalString(problems, `${where}.path`, s['path'])
       break
     }
     default:
@@ -538,19 +754,37 @@ function checkSource(problems: string[], where: string, source: unknown, manifes
 }
 
 function checkMethod(problems: string[], where: string, method: unknown, manifest: ModuleManifest): void {
-  const methods = new Set(manifest.methods ?? [])
+  const methods = new Set(Array.isArray(manifest.methods) ? manifest.methods : [])
   const known = typeof method === 'string' && methods.has(method)
   if (!known) problems.push(`${where}: method "${String(method)}" is not declared in manifest.methods`)
 }
 
 function checkAction(problems: string[], where: string, action: unknown, manifest: ModuleManifest): void {
-  if (typeof action !== 'object' || action === null) {
+  if (!isRecord(action)) {
     problems.push(`${where} is not an object`)
     return
   }
-  const a = action as Record<string, unknown>
-  if (typeof a['label'] !== 'string' || !a['label']) problems.push(`${where}.label is missing`)
+  const a = action
+  checkRequiredString(problems, `${where}.label`, a['label'])
   checkMethod(problems, where, a['method'], manifest)
+  checkStringArray(problems, `${where}.argsFromRow`, a['argsFromRow'])
+  if (a['args'] != null && !Array.isArray(a['args'])) problems.push(`${where}.args is not an array`)
+  checkOptionalString(problems, `${where}.confirm`, a['confirm'])
+  if (a['kind'] != null && a['kind'] !== 'default' && a['kind'] !== 'danger') {
+    problems.push(`${where}.kind must be default or danger`)
+  }
+  const prompt = a['prompt']
+  if (prompt != null) {
+    if (!isRecord(prompt)) {
+      problems.push(`${where}.prompt is not an object`)
+    } else {
+      checkRequiredString(problems, `${where}.prompt.label`, prompt['label'])
+      if (prompt['input'] !== 'number' && prompt['input'] !== 'text') {
+        problems.push(`${where}.prompt.input must be number or text`)
+      }
+      checkOptionalString(problems, `${where}.prompt.initialKey`, prompt['initialKey'])
+    }
+  }
 }
 
 /** The field list shared by `form` and `checkForm`. */
@@ -562,11 +796,11 @@ function checkFields(problems: string[], where: string, fields: unknown, manifes
   const seen = new Set<string>()
   for (const [i, field] of fields.entries()) {
     const at = `${where}[${i}]`
-    if (typeof field !== 'object' || field === null) {
+    if (!isRecord(field)) {
       problems.push(`${at} is not an object`)
       continue
     }
-    const f = field as Record<string, unknown>
+    const f = field
     const key = f['key']
     if (typeof key !== 'string' || !key) problems.push(`${at}.key is missing`)
     // Values are collected into one object per form, so a repeated key would
@@ -581,16 +815,56 @@ function checkFields(problems: string[], where: string, fields: unknown, manifes
       if (input !== 'select') problems.push(`${at}.optionsFrom only applies to a select`)
       checkSource(problems, `${at}.optionsFrom`, f['optionsFrom'], manifest)
     }
+    if (f['accept'] != null) {
+      if (input !== 'file') problems.push(`${at}.accept only applies to a file input`)
+      checkOptionalString(problems, `${at}.accept`, f['accept'])
+    }
+    if (f['maxKb'] != null) {
+      if (input !== 'file') problems.push(`${at}.maxKb only applies to a file input`)
+      checkOptionalFiniteNumber(problems, `${at}.maxKb`, f['maxKb'], { min: 1 })
+    }
+    checkOptionalBoolean(problems, `${at}.omitOnApply`, f['omitOnApply'])
+    checkRequiredString(problems, `${at}.label`, f['label'])
+    checkOptionalString(problems, `${at}.placeholder`, f['placeholder'])
+    checkOptionalString(problems, `${at}.help`, f['help'])
+    checkOptionalString(problems, `${at}.initialFromScope`, f['initialFromScope'])
+    const initial = f['initial']
+    if (
+      initial != null &&
+      typeof initial !== 'string' &&
+      typeof initial !== 'number' &&
+      typeof initial !== 'boolean'
+    ) {
+      problems.push(`${at}.initial has an unsupported type`)
+    }
+    const options = f['options']
+    if (options != null) {
+      if (input !== 'select') problems.push(`${at}.options only applies to a select`)
+      if (checkObjectArray(problems, `${at}.options`, options, { nonEmpty: true })) {
+        for (const [optionIndex, option] of options.entries()) {
+          const optionAt = `${at}.options[${optionIndex}]`
+          if (!isRecord(option)) {
+            problems.push(`${optionAt} is not an object`)
+            continue
+          }
+          checkRequiredString(problems, `${optionAt}.value`, option['value'])
+          checkRequiredString(problems, `${optionAt}.label`, option['label'])
+        }
+      }
+    }
+    if (options != null && f['optionsFrom'] != null) {
+      problems.push(`${at} cannot declare both options and optionsFrom`)
+    }
   }
 }
 
 /** Checks one block's own fields (not its nested block arrays, done by the caller). */
 function checkBlock(problems: string[], where: string, block: unknown, manifest: ModuleManifest): void {
-  if (typeof block !== 'object' || block === null) {
+  if (!isRecord(block)) {
     problems.push(`${where} is not an object`)
     return
   }
-  const b = block as Record<string, unknown>
+  const b = block
   const type = b['type']
   if (typeof type !== 'string' || !BLOCK_TYPES.has(type as Block['type'])) {
     problems.push(`${where}.type "${String(type)}" is not a known block type`)
@@ -599,15 +873,82 @@ function checkBlock(problems: string[], where: string, block: unknown, manifest:
 
   switch (type as Block['type']) {
     case 'section':
+      checkObjectArray(problems, `${where}.blocks`, b['blocks'], { required: true })
+      checkOptionalString(problems, `${where}.title`, b['title'])
+      checkOptionalString(problems, `${where}.slowTarget`, b['slowTarget'])
+      checkOptionalFiniteNumber(problems, `${where}.columns`, b['columns'], {
+        min: 1,
+        integer: true
+      })
       break
+    case 'subnav': {
+      const items = b['items']
+      const ids = new Set<string>()
+      if (!Array.isArray(items) || items.length < 1 || items.length > 32) {
+        problems.push(`${where}.items must be an array of 1 to 32 items`)
+      }
+      for (const [index, item] of (Array.isArray(items) ? items : []).entries()) {
+        const at = `${where}.items[${index}]`
+        if (!isRecord(item)) {
+          problems.push(`${at} is not an object`)
+          continue
+        }
+        const id = item['id']
+        if (typeof id !== 'string' || !/^[a-z][a-z0-9-]{0,31}$/.test(id)) {
+          problems.push(`${at}.id is not a valid subnav id`)
+        } else if (ids.has(id)) {
+          problems.push(`${at}.id "${id}" is used twice`)
+        } else {
+          ids.add(id)
+        }
+        checkRequiredString(problems, `${at}.label`, item['label'])
+        if (
+          item['icon'] != null &&
+          (typeof item['icon'] !== 'string' || !MODULE_ICON_NAMES.has(item['icon']))
+        ) {
+          problems.push(`${at}.icon "${String(item['icon'])}" is not a module icon`)
+        }
+        checkObjectArray(problems, `${at}.blocks`, item['blocks'], { required: true })
+      }
+      if (b['initial'] != null) {
+        if (typeof b['initial'] !== 'string' || !ids.has(b['initial'])) {
+          problems.push(`${where}.initial must name a subnav item`)
+        }
+      }
+      break
+    }
+    case 'note': {
+      checkOptionalString(problems, `${where}.title`, b['title'])
+      const lines = b['lines']
+      if (
+        !Array.isArray(lines) ||
+        lines.length < 1 ||
+        lines.length > 32 ||
+        lines.some((line) => typeof line !== 'string' || !line.trim())
+      ) {
+        problems.push(`${where}.lines must be an array of 1 to 32 non-empty strings`)
+      }
+      if (b['tone'] != null && b['tone'] !== 'info' && b['tone'] !== 'warning') {
+        problems.push(`${where}.tone must be info or warning`)
+      }
+      break
+    }
     case 'stat':
     case 'meter':
       pushIf(problems, typeof b['label'] !== 'string' || !b['label'], `${where}.label is missing`)
       checkSource(problems, `${where}.source`, b['source'], manifest)
       checkFormat(problems, where, b['format'])
       if (type === 'stat') {
-        const spark = b['spark'] as Record<string, unknown> | undefined
-        if (spark != null) checkSource(problems, `${where}.spark.source`, spark['source'], manifest)
+        const spark = b['spark']
+        if (spark != null) {
+          if (!isRecord(spark)) problems.push(`${where}.spark is not an object`)
+          else {
+            checkSource(problems, `${where}.spark.source`, spark['source'], manifest)
+            checkRequiredString(problems, `${where}.spark.key`, spark['key'])
+          }
+        }
+      } else {
+        checkOptionalFiniteNumber(problems, `${where}.max`, b['max'])
       }
       break
     case 'chart': {
@@ -618,30 +959,210 @@ function checkBlock(problems: string[], where: string, block: unknown, manifest:
         `${where}.kind must be line, area or bar`
       )
       const series = b['series']
-      pushIf(problems, !Array.isArray(series) || series.length === 0, `${where}.series is empty`)
+      // Omit series to infer keys from the last point; an empty array is still
+      // a mistake (the author listed series and then left them blank).
+      if (series !== undefined) {
+        pushIf(problems, !Array.isArray(series) || series.length === 0, `${where}.series is empty`)
+      }
+      let hasRightAxis = false
+      if (Array.isArray(series)) {
+        for (const [i, item] of series.entries()) {
+          const at = `${where}.series[${i}]`
+          if (!isRecord(item)) {
+            problems.push(`${at} is not an object`)
+            continue
+          }
+          const s = item
+          checkRequiredString(problems, `${at}.key`, s['key'])
+          checkRequiredString(problems, `${at}.label`, s['label'])
+          checkOptionalString(problems, `${at}.unit`, s['unit'])
+          if (s['axis'] != null && s['axis'] !== 'left' && s['axis'] !== 'right') {
+            problems.push(`${at}.axis must be left or right`)
+          }
+          if (s['axis'] === 'right') hasRightAxis = true
+          checkFormat(problems, at, s['format'])
+          if (s['color'] != null && !CHART_SERIES_COLOR_SET.has(s['color'] as string)) {
+            problems.push(`${at}.color "${String(s['color'])}" is not a chart colour`)
+          }
+        }
+      }
+      checkOptionalString(problems, `${where}.title`, b['title'])
+      checkOptionalString(problems, `${where}.unit`, b['unit'])
+      checkOptionalBoolean(problems, `${where}.stacked`, b['stacked'])
+      checkOptionalFiniteNumber(problems, `${where}.window`, b['window'], { min: 1 })
+      pushIf(
+        problems,
+        b['stacked'] === true && hasRightAxis,
+        `${where}: stacked cannot be used with a right axis`
+      )
+      if (b['maxSeries'] != null) {
+        const n = b['maxSeries']
+        pushIf(
+          problems,
+          typeof n !== 'number' || !Number.isFinite(n) || n < 1,
+          `${where}.maxSeries must be a positive number`
+        )
+      }
+      if (b['decimals'] != null) {
+        const n = b['decimals']
+        pushIf(
+          problems,
+          typeof n !== 'number' || !Number.isFinite(n) || n < 0,
+          `${where}.decimals must be a non-negative number`
+        )
+      }
       checkFormat(problems, where, b['format'])
       break
     }
-    case 'keyValue':
+    case 'pie': {
       checkSource(problems, `${where}.source`, b['source'], manifest)
-      pushIf(problems, !Array.isArray(b['rows']), `${where}.rows is missing`)
+      const slices = b['slices']
+      pushIf(problems, !Array.isArray(slices) || slices.length === 0, `${where}.slices is empty`)
+      for (const [i, slice] of (Array.isArray(slices) ? slices : []).entries()) {
+        const at = `${where}.slices[${i}]`
+        if (!isRecord(slice)) {
+          problems.push(`${at} is not an object`)
+          continue
+        }
+        const s = slice
+        pushIf(problems, typeof s['key'] !== 'string' || !s['key'], `${at}.key is missing`)
+        pushIf(problems, typeof s['label'] !== 'string' || !s['label'], `${at}.label is missing`)
+        pushIf(
+          problems,
+          s['status'] !== 'ok' && s['status'] !== 'warn' && s['status'] !== 'bad' && s['status'] !== 'unknown',
+          `${at}.status must be ok, warn, bad or unknown`
+        )
+      }
+      const center = b['center']
+      if (center != null) {
+        if (!isRecord(center)) problems.push(`${where}.center is not an object`)
+        else {
+          pushIf(
+            problems,
+            typeof center['key'] !== 'string' || !center['key'],
+            `${where}.center.key is missing`
+          )
+          checkOptionalString(problems, `${where}.center.label`, center['label'])
+        }
+      }
+      checkOptionalString(problems, `${where}.emptyText`, b['emptyText'])
+      checkFormat(problems, where, b['format'])
       break
-    case 'list':
+    }
+    case 'keyValue': {
       checkSource(problems, `${where}.source`, b['source'], manifest)
-      pushIf(problems, !Array.isArray(b['columns']), `${where}.columns is missing`)
+      const rows = b['rows']
+      if (checkObjectArray(problems, `${where}.rows`, rows, { required: true, nonEmpty: true })) {
+        for (const [index, row] of rows.entries()) {
+          const at = `${where}.rows[${index}]`
+          if (!isRecord(row)) {
+            problems.push(`${at} is not an object`)
+            continue
+          }
+          checkRequiredString(problems, `${at}.key`, row['key'])
+          checkRequiredString(problems, `${at}.label`, row['label'])
+          checkFormat(problems, at, row['format'])
+        }
+      }
       break
+    }
+    case 'list': {
+      checkSource(problems, `${where}.source`, b['source'], manifest)
+      const columns = b['columns']
+      if (
+        checkObjectArray(problems, `${where}.columns`, columns, {
+          required: true,
+          nonEmpty: true
+        })
+      ) {
+        for (const [index, column] of columns.entries()) {
+          const at = `${where}.columns[${index}]`
+          if (!isRecord(column)) {
+            problems.push(`${at} is not an object`)
+            continue
+          }
+          checkRequiredString(problems, `${at}.key`, column['key'])
+          checkOptionalString(problems, `${at}.label`, column['label'])
+          checkFormat(problems, at, column['format'])
+          if (column['align'] != null && column['align'] !== 'left' && column['align'] !== 'right') {
+            problems.push(`${at}.align must be left or right`)
+          }
+        }
+      }
+      checkOptionalFiniteNumber(problems, `${where}.limit`, b['limit'], {
+        min: 1,
+        integer: true
+      })
+      checkOptionalString(problems, `${where}.emptyText`, b['emptyText'])
+      break
+    }
     case 'table': {
       checkSource(problems, `${where}.source`, b['source'], manifest)
       const columns = b['columns']
-      pushIf(problems, !Array.isArray(columns) || columns.length === 0, `${where}.columns is empty`)
+      if (
+        checkObjectArray(problems, `${where}.columns`, columns, {
+          required: true,
+          nonEmpty: true
+        })
+      ) {
+        for (const [index, column] of columns.entries()) {
+          const at = `${where}.columns[${index}]`
+          if (!isRecord(column)) {
+            problems.push(`${at} is not an object`)
+            continue
+          }
+          checkRequiredString(problems, `${at}.key`, column['key'])
+          checkRequiredString(problems, `${at}.label`, column['label'])
+          checkFormat(problems, at, column['format'])
+          if (column['align'] != null && column['align'] !== 'left' && column['align'] !== 'right') {
+            problems.push(`${at}.align must be left or right`)
+          }
+          checkOptionalBoolean(problems, `${at}.sortable`, column['sortable'])
+          checkOptionalBoolean(problems, `${at}.aggregate`, column['aggregate'])
+        }
+      }
+      checkOptionalString(problems, `${where}.rowKey`, b['rowKey'])
+      checkStringArray(problems, `${where}.filterKeys`, b['filterKeys'])
+      checkOptionalBoolean(problems, `${where}.selectable`, b['selectable'])
+      checkOptionalString(problems, `${where}.emptyText`, b['emptyText'])
+      const sortDefault = b['sortDefault']
+      if (sortDefault != null) {
+        if (!isRecord(sortDefault)) {
+          problems.push(`${where}.sortDefault is not an object`)
+        } else {
+          checkRequiredString(problems, `${where}.sortDefault.key`, sortDefault['key'])
+          if (sortDefault['dir'] !== 'asc' && sortDefault['dir'] !== 'desc') {
+            problems.push(`${where}.sortDefault.dir must be asc or desc`)
+          }
+        }
+      }
+      const groupModes = b['groupModes']
+      if (checkObjectArray(problems, `${where}.groupModes`, groupModes)) {
+        for (const [index, mode] of groupModes.entries()) {
+          const at = `${where}.groupModes[${index}]`
+          if (!isRecord(mode)) {
+            problems.push(`${at} is not an object`)
+            continue
+          }
+          checkRequiredString(problems, `${at}.id`, mode['id'])
+          checkRequiredString(problems, `${at}.label`, mode['label'])
+          checkRequiredString(problems, `${at}.key`, mode['key'])
+          checkOptionalString(problems, `${at}.parentIdKey`, mode['parentIdKey'])
+        }
+      }
       const rowActions = b['rowActions']
-      for (const [i, action] of (Array.isArray(rowActions) ? rowActions : []).entries()) {
-        checkAction(problems, `${where}.rowActions[${i}]`, action, manifest)
+      if (checkObjectArray(problems, `${where}.rowActions`, rowActions)) {
+        for (const [i, action] of rowActions.entries()) {
+          checkAction(problems, `${where}.rowActions[${i}]`, action, manifest)
+        }
       }
       const bulkActions = b['bulkActions']
-      for (const [i, action] of (Array.isArray(bulkActions) ? bulkActions : []).entries()) {
-        checkAction(problems, `${where}.bulkActions[${i}]`, action, manifest)
+      if (checkObjectArray(problems, `${where}.bulkActions`, bulkActions)) {
+        for (const [i, action] of bulkActions.entries()) {
+          checkAction(problems, `${where}.bulkActions[${i}]`, action, manifest)
+        }
       }
+      checkObjectArray(problems, `${where}.rowDetail`, b['rowDetail'])
       // A selection is a list of rowKey values, and the default rowKey is
       // whatever the first column happens to be - fine for a React key, not
       // for deciding which containers to remove.
@@ -664,19 +1185,72 @@ function checkBlock(problems: string[], where: string, block: unknown, manifest:
       for (const field of ['rowKey', 'titleKey', 'statusKey'] as const) {
         pushIf(problems, typeof b[field] !== 'string' || !b[field], `${where}.${field} is missing`)
       }
-      const items = b['items'] as Record<string, unknown> | undefined
+      const items = b['items']
       if (items == null) problems.push(`${where}.items is missing`)
-      else pushIf(problems, typeof items['key'] !== 'string' || !items['key'], `${where}.items.key is missing`)
-      const cardActions = b['rowActions']
-      for (const [i, action] of (Array.isArray(cardActions) ? cardActions : []).entries()) {
-        checkAction(problems, `${where}.rowActions[${i}]`, action, manifest)
+      else if (!isRecord(items)) problems.push(`${where}.items is not an object`)
+      else {
+        pushIf(
+          problems,
+          typeof items['key'] !== 'string' || !items['key'],
+          `${where}.items.key is missing`
+        )
+        checkOptionalFiniteNumber(problems, `${where}.items.visibleRows`, items['visibleRows'], {
+          min: 1,
+          integer: true
+        })
+        for (const field of [
+          'labelKey',
+          'statusKey',
+          'pinnedKey',
+          'pinnedFilterLabel',
+          'emptyText'
+        ] as const) {
+          checkOptionalString(problems, `${where}.items.${field}`, items[field])
+        }
       }
+      checkOptionalString(problems, `${where}.subtitleKey`, b['subtitleKey'])
+      checkOptionalString(problems, `${where}.emptyText`, b['emptyText'])
+      const note = b['note']
+      if (note != null) {
+        if (!isRecord(note)) problems.push(`${where}.note is not an object`)
+        else {
+          checkRequiredString(problems, `${where}.note.key`, note['key'])
+          checkOptionalString(problems, `${where}.note.label`, note['label'])
+          checkOptionalBoolean(problems, `${where}.note.startOpen`, note['startOpen'])
+        }
+      }
+      const cardColumns = b['columns']
+      if (cardColumns != null) {
+        if (!isRecord(cardColumns)) problems.push(`${where}.columns is not an object`)
+        else {
+          checkOptionalFiniteNumber(problems, `${where}.columns.default`, cardColumns['default'], {
+            min: 1,
+            integer: true
+          })
+          checkOptionalFiniteNumber(problems, `${where}.columns.min`, cardColumns['min'], {
+            min: 1,
+            integer: true
+          })
+          checkOptionalFiniteNumber(problems, `${where}.columns.max`, cardColumns['max'], {
+            min: 1,
+            integer: true
+          })
+        }
+      }
+      const cardActions = b['rowActions']
+      if (checkObjectArray(problems, `${where}.rowActions`, cardActions)) {
+        for (const [i, action] of cardActions.entries()) {
+          checkAction(problems, `${where}.rowActions[${i}]`, action, manifest)
+        }
+      }
+      checkObjectArray(problems, `${where}.rowDetail`, b['rowDetail'])
       break
     }
     case 'log': {
       pushIf(problems, typeof b['event'] !== 'string' || !b['event'], `${where}.event is missing`)
       if (b['startMethod'] != null) checkMethod(problems, `${where}.startMethod`, b['startMethod'], manifest)
       if (b['stopMethod'] != null) checkMethod(problems, `${where}.stopMethod`, b['stopMethod'], manifest)
+      checkStringArray(problems, `${where}.argsFromScope`, b['argsFromScope'])
       break
     }
     case 'terminal':
@@ -689,44 +1263,69 @@ function checkBlock(problems: string[], where: string, block: unknown, manifest:
       break
     case 'actions': {
       const actions = b['actions']
-      for (const [i, action] of (Array.isArray(actions) ? actions : []).entries()) {
-        checkAction(problems, `${where}.actions[${i}]`, action, manifest)
+      if (
+        checkObjectArray(problems, `${where}.actions`, actions, {
+          required: true,
+          nonEmpty: true
+        })
+      ) {
+        for (const [i, action] of actions.entries()) {
+          checkAction(problems, `${where}.actions[${i}]`, action, manifest)
+        }
       }
       break
     }
     case 'form': {
+      checkOptionalString(problems, `${where}.title`, b['title'])
       checkFields(problems, `${where}.fields`, b['fields'], manifest)
       checkAction(problems, `${where}.submit`, b['submit'], manifest)
       break
     }
     case 'checkForm': {
+      checkOptionalString(problems, `${where}.title`, b['title'])
       checkFields(problems, `${where}.fields`, b['fields'], manifest)
       checkMethod(problems, `${where}.checkMethod`, b['checkMethod'], manifest)
       checkMethod(problems, `${where}.applyMethod`, b['applyMethod'], manifest)
+      checkStringArray(problems, `${where}.argsFromScope`, b['argsFromScope'])
+      checkOptionalString(problems, `${where}.checkLabel`, b['checkLabel'])
+      checkOptionalString(problems, `${where}.applyLabel`, b['applyLabel'])
+      if (b['kind'] != null && b['kind'] !== 'default' && b['kind'] !== 'danger') {
+        problems.push(`${where}.kind must be default or danger`)
+      }
       break
     }
     case 'conditional': {
-      const when = b['when'] as Record<string, unknown> | undefined
+      const when = b['when']
       if (when == null) problems.push(`${where}.when is missing`)
+      else if (!isRecord(when)) problems.push(`${where}.when is not an object`)
       else {
         checkSource(problems, `${where}.when.source`, when['source'], manifest)
+        checkOptionalString(problems, `${where}.when.path`, when['path'])
         pushIf(
           problems,
           when['op'] !== 'exists' && when['op'] !== 'eq' && when['op'] !== 'gt',
           `${where}.when.op must be exists, eq or gt`
         )
       }
+      checkObjectArray(problems, `${where}.blocks`, b['blocks'], { required: true })
+      checkObjectArray(problems, `${where}.else`, b['else'])
       break
     }
   }
 }
 
 /** True when any string value anywhere in `value` contains a URL - the no-CDN rule (T7.1). */
-function containsUrl(value: unknown): boolean {
-  if (typeof value === 'string') return /https?:\/\//i.test(value)
-  if (Array.isArray(value)) return value.some(containsUrl)
-  if (typeof value === 'object' && value !== null) {
-    return Object.values(value).some(containsUrl)
+function containsUrl(value: unknown, seen = new Set<object>()): boolean {
+  const pending: unknown[] = [value]
+  while (pending.length > 0) {
+    const next = pending.pop()
+    if (typeof next === 'string' && /https?:\/\//i.test(next)) return true
+    if (typeof next === 'object' && next !== null) {
+      if (seen.has(next)) continue
+      seen.add(next)
+      const values = Array.isArray(next) ? next : Object.values(next)
+      for (const item of values) pending.push(item)
+    }
   }
   return false
 }
@@ -740,27 +1339,35 @@ function containsUrl(value: unknown): boolean {
  */
 export function specProblems(spec: unknown, manifest: ModuleManifest): string[] {
   const problems: string[] = []
-  if (typeof spec !== 'object' || spec === null) return ['spec is not an object']
-  const s = spec as Record<string, unknown>
+  if (!isRecord(spec)) return ['spec is not an object']
+  const s = spec
   const topBlocks = s['blocks']
   if (!Array.isArray(topBlocks)) return ['spec.blocks is missing']
+  checkOptionalFiniteNumber(problems, 'spec.window', s['window'], { min: 1 })
 
-  const walk = (blocks: unknown[], path: string): void => {
-    if (!Array.isArray(blocks)) {
-      problems.push(`${path} is not an array`)
+  let blockCount = 0
+  const visited = new Set<object>()
+  const walk = (blocks: unknown[], path: string, depth: number): void => {
+    if (depth > MAX_SPEC_DEPTH) {
+      problems.push(`${path} exceeds the maximum nesting depth`)
       return
     }
     blocks.forEach((block, i) => {
+      blockCount += 1
+      if (blockCount > MAX_SPEC_BLOCKS) return
       const where = `${path}[${i}]`
       checkBlock(problems, where, block, manifest)
-      if (typeof block === 'object' && block !== null) {
-        for (const nested of nestedBlockArrays(block as Record<string, unknown>)) {
-          walk(nested.blocks, `${where}.${nested.path}`)
+      if (isRecord(block)) {
+        if (visited.has(block)) return
+        visited.add(block)
+        for (const nested of nestedBlockArrays(block)) {
+          walk(nested.blocks, `${where}.${nested.path}`, depth + 1)
         }
       }
     })
   }
-  walk(topBlocks, 'blocks')
+  walk(topBlocks, 'blocks', 0)
+  if (blockCount > MAX_SPEC_BLOCKS) problems.push('spec contains too many blocks')
 
   if (containsUrl(spec)) {
     problems.push('spec contains a URL (http:// or https://) - modules may not reference remote content')

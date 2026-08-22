@@ -13,8 +13,8 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { SelectField } from '@/components/select-field'
 import { Button } from '@/components/ui/button'
-import { cn } from '@/lib/utils'
-import { resolvePath, useBlockData } from '../binding'
+import { cn, formatBytes } from '@/lib/utils'
+import { BlockData, resolvePath } from '../binding'
 
 /** What a field holds while it is being edited: a tick is a boolean, everything else is text. */
 export type FieldState = Record<string, string | boolean>
@@ -121,12 +121,15 @@ export function FormFields({
 function RemoteOptionsField(
   props: FieldProps & { optionsFrom: NonNullable<FormField['optionsFrom']> }
 ): React.JSX.Element {
-  const raw = useBlockData(props.moduleId, props.optionsFrom, {
-    visible: props.visible,
-    scope: props.scope
-  })
-  const options = React.useMemo(() => toOptions(raw), [raw])
-  return <FieldRow {...props} options={options} />
+  return (
+    <BlockData
+      moduleId={props.moduleId}
+      source={props.optionsFrom}
+      opts={{ visible: props.visible, scope: props.scope }}
+    >
+      {({ value }) => <FieldRow {...props} options={toOptions(value)} />}
+    </BlockData>
+  )
 }
 
 function toOptions(raw: unknown): FormFieldOption[] {
@@ -204,6 +207,15 @@ function FieldRow({
           className="mono text-xs"
           onChange={(e) => onChange(e.target.value)}
         />
+      ) : field.input === 'file' ? (
+        <FileField
+          id={id}
+          field={field}
+          value={text}
+          disabled={disabled}
+          onChange={onChange}
+          describedBy={describedBy}
+        />
       ) : field.input === 'color' ? (
         <ColorField id={id} value={text} disabled={disabled} onChange={onChange} describedBy={describedBy} />
       ) : (
@@ -219,6 +231,168 @@ function FieldRow({
         />
       )}
       {help}
+    </div>
+  )
+}
+
+function FileField({
+  id,
+  field,
+  value,
+  disabled,
+  onChange,
+  describedBy
+}: {
+  id: string
+  field: FormField
+  value: string
+  disabled: boolean
+  onChange: (value: string) => void
+  describedBy: string | undefined
+}): React.JSX.Element {
+  const inputRef = React.useRef<HTMLInputElement>(null)
+  const readerRef = React.useRef<FileReader | null>(null)
+  const operationRef = React.useRef(0)
+  const [file, setFile] = React.useState<{ name: string; size: number } | null>(null)
+  const [reading, setReading] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+  const previousValueRef = React.useRef(value)
+
+  React.useEffect(
+    () => () => {
+      operationRef.current += 1
+      const reader = readerRef.current
+      readerRef.current = null
+      if (reader?.readyState === FileReader.LOADING) reader.abort()
+    },
+    []
+  )
+
+  // A form clears its state after a successful submit/check-apply. The native
+  // file input and this component's filename are not controlled by that state,
+  // so mirror an external non-empty -> empty transition here. While a
+  // replacement file is being read, chooseFile intentionally clears the old
+  // payload first; `reading` keeps that internal transition from erasing the
+  // new selection or a useful read error.
+  React.useEffect(() => {
+    const previous = previousValueRef.current
+    previousValueRef.current = value
+    if (!previous || value || reading) return
+    if (inputRef.current) inputRef.current.value = ''
+    setFile(null)
+    setError(null)
+  }, [reading, value])
+
+  const stopReading = (): void => {
+    operationRef.current += 1
+    const reader = readerRef.current
+    readerRef.current = null
+    if (reader?.readyState === FileReader.LOADING) reader.abort()
+    setReading(false)
+  }
+
+  const clear = (): void => {
+    stopReading()
+    if (inputRef.current) inputRef.current.value = ''
+    setFile(null)
+    setError(null)
+    onChange('')
+  }
+
+  const chooseFile = (event: React.ChangeEvent<HTMLInputElement>): void => {
+    stopReading()
+    const selected = event.currentTarget.files?.[0]
+    setError(null)
+    onChange('')
+
+    if (!selected) {
+      setFile(null)
+      return
+    }
+
+    setFile({ name: selected.name, size: selected.size })
+    const configuredMaxKb = field.maxKb ?? 1024
+    const maxKb = Number.isFinite(configuredMaxKb) && configuredMaxKb > 0 ? configuredMaxKb : 1024
+    const maxBytes = maxKb * 1024
+    if (selected.size > maxBytes) {
+      event.currentTarget.value = ''
+      setError(`${selected.name} is ${formatBytes(selected.size)}; the limit is ${formatBytes(maxBytes)}.`)
+      return
+    }
+
+    const operation = ++operationRef.current
+    const reader = new FileReader()
+    readerRef.current = reader
+    setReading(true)
+
+    reader.onload = () => {
+      if (operationRef.current !== operation) return
+      readerRef.current = null
+      setReading(false)
+      if (typeof reader.result === 'string') {
+        onChange(reader.result)
+        return
+      }
+      if (inputRef.current) inputRef.current.value = ''
+      setError(`Could not read ${selected.name} as text.`)
+    }
+    reader.onerror = () => {
+      if (operationRef.current !== operation) return
+      readerRef.current = null
+      setReading(false)
+      if (inputRef.current) inputRef.current.value = ''
+      setError(
+        reader.error?.message
+          ? `Could not read ${selected.name}: ${reader.error.message}`
+          : `Could not read ${selected.name}.`
+      )
+    }
+
+    try {
+      reader.readAsText(selected)
+    } catch (reason) {
+      if (operationRef.current !== operation) return
+      readerRef.current = null
+      setReading(false)
+      event.currentTarget.value = ''
+      setError(
+        reason instanceof Error && reason.message
+          ? `Could not read ${selected.name}: ${reason.message}`
+          : `Could not read ${selected.name}.`
+      )
+    }
+  }
+
+  const errorId = `${id}-file-error`
+  const inputDescribedBy = [describedBy, error ? errorId : null].filter(Boolean).join(' ') || undefined
+
+  return (
+    <div className="flex flex-col gap-1">
+      <Input
+        ref={inputRef}
+        id={id}
+        type="file"
+        accept={field.accept?.trim() || '.txt'}
+        disabled={disabled}
+        aria-describedby={inputDescribedBy}
+        onChange={chooseFile}
+      />
+      {file && (
+        <div className="flex items-center justify-between gap-2 rounded-md border border-input bg-field px-2 py-1">
+          <span className="min-w-0 truncate text-xs text-muted-foreground">
+            {file.name} · {formatBytes(file.size)}
+            {reading ? ' · Reading…' : ''}
+          </span>
+          <Button type="button" variant="ghost" size="sm" disabled={disabled} onClick={clear}>
+            Clear
+          </Button>
+        </div>
+      )}
+      {error && (
+        <p id={errorId} role="alert" className="text-xs text-destructive">
+          {error}
+        </p>
+      )}
     </div>
   )
 }

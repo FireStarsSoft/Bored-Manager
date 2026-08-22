@@ -1,13 +1,13 @@
 # Sensors
 
-Every hardware reading the target machine exposes, grouped by chip: temperatures with a bar against the chip's own critical point, fan speeds, voltages, power and current, plus a temperature history chart.
+Every hardware reading the target machine exposes: temperatures, fan speeds, voltages, power and current, each kind on its own history chart (up to 8 series) plus a table of every reading.
 
 ## What it adds
 
 | Where | What |
 |---|---|
-| Sidebar | **Sensors** page — chart of up to 8 temperature sensors, then one card per reading kind |
-| Overview | **Sensors** widget (off by default) — a badge per temperature, colour-coded against the critical point |
+| Sidebar | **Sensors** page — one area chart per unit (°C, RPM, V, W, A), then a table of every reading |
+| Overview | **Sensors** widget (off by default) — the same charts, stacked, hidden when that kind has no readings |
 
 ## What it runs on the target
 
@@ -34,10 +34,9 @@ Virtual machines and containers usually expose no sensors at all — the page sa
 ## Files
 
 ```
-main/index.ts     activate(): one fast poller
-main/service.ts   the poller and the snapshot it emits
-main/probe.ts     the shell commands and their parsers
-renderer/index.tsx     tab + widget + stream declaration
-renderer/SensorsTab.tsx
-renderer/SensorsCard.tsx
+main/index.ts          activate(): one fast poller
+main/service.ts        the poller, the snapshot, and the per-kind series points
+main/probe.ts          the shell commands and their parsers
+ui/pages/main.json     charts + table
+ui/widgets/summary.json  Overview charts
 ```

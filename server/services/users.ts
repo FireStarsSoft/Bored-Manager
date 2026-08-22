@@ -1,13 +1,15 @@
 import { promisify } from 'util'
 import { randomBytes, scrypt, timingSafeEqual } from 'crypto'
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'fs'
+import { mkdirSync, rmSync } from 'fs'
 import { join } from 'path'
 import {
   DEFAULT_USERNAME,
   USERNAME_PATTERN,
   type UserAccount
 } from '@shared/types'
-import { dataDir, userDataDir, writePrivateJson } from './store'
+import { isFiniteNumber, isRecord } from '@shared/validation'
+import { dataDir, userDataDir } from './store'
+import { readPrivateJson, writeAtomicPrivateJson } from './private-file'
 
 const scryptAsync = promisify(scrypt)
 
@@ -25,6 +27,9 @@ const scryptAsync = promisify(scrypt)
 
 const SCRYPT_KEYLEN = 64
 const SALT_BYTES = 16
+export const MAX_PASSWORD_LENGTH = 4096
+const DUMMY_SALT = randomBytes(SALT_BYTES).toString('hex')
+const DUMMY_EXPECTED = randomBytes(SCRYPT_KEYLEN)
 
 interface StoredUser {
   username: string
@@ -33,10 +38,12 @@ interface StoredUser {
   salt: string
   createdAt: number
   lastLoginAt: number | null
+  /** Incremented whenever the password changes, invalidating old sessions. */
+  sessionVersion: number
 }
 
 interface UsersFile {
-  version: number
+  version: 2
   users: StoredUser[]
 }
 
@@ -44,22 +51,77 @@ function usersFile(): string {
   return join(dataDir(), 'users', 'users.json')
 }
 
-function read(): StoredUser[] {
-  try {
-    if (!existsSync(usersFile())) return []
-    const raw = JSON.parse(readFileSync(usersFile(), 'utf8')) as Partial<UsersFile>
-    if (!Array.isArray(raw.users)) return []
-    return raw.users.filter(
-      (u): u is StoredUser => typeof u?.username === 'string' && u.username.length > 0
-    )
-  } catch {
-    return []
+function usersDocument(value: unknown): UsersFile {
+  if (!isRecord(value) || (value['version'] !== 1 && value['version'] !== 2)) {
+    throw new Error('users database must have version 1 or 2')
   }
+  if (!Array.isArray(value['users'])) throw new Error('users database must contain a users array')
+
+  const users: StoredUser[] = []
+  const seen = new Set<string>()
+  for (const [index, raw] of value['users'].entries()) {
+    if (!isRecord(raw)) throw new Error(`users[${index}] must be an object`)
+    const username = raw['username']
+    if (typeof username !== 'string' || !USERNAME_PATTERN.test(username)) {
+      throw new Error(`users[${index}].username is invalid`)
+    }
+    if (seen.has(username)) throw new Error(`users database contains duplicate "${username}"`)
+    seen.add(username)
+
+    const passwordHash = raw['passwordHash']
+    const salt = raw['salt']
+    if (
+      typeof passwordHash !== 'string' ||
+      (passwordHash !== '' && !/^[0-9a-f]{128}$/i.test(passwordHash))
+    ) {
+      throw new Error(`users[${index}].passwordHash is invalid`)
+    }
+    if (typeof salt !== 'string' || !/^[0-9a-f]{32}$/i.test(salt)) {
+      throw new Error(`users[${index}].salt is invalid`)
+    }
+    const createdAt = raw['createdAt']
+    const lastLoginAt = raw['lastLoginAt']
+    if (!isFiniteNumber(createdAt) || createdAt < 0) {
+      throw new Error(`users[${index}].createdAt is invalid`)
+    }
+    if (lastLoginAt !== null && (!isFiniteNumber(lastLoginAt) || lastLoginAt < 0)) {
+      throw new Error(`users[${index}].lastLoginAt is invalid`)
+    }
+    const rawSessionVersion = value['version'] === 1 ? 1 : raw['sessionVersion']
+    if (
+      !isFiniteNumber(rawSessionVersion) ||
+      !Number.isSafeInteger(rawSessionVersion) ||
+      rawSessionVersion < 1
+    ) {
+      throw new Error(`users[${index}].sessionVersion is invalid`)
+    }
+    users.push({
+      username,
+      passwordHash,
+      salt,
+      createdAt,
+      lastLoginAt,
+      sessionVersion: rawSessionVersion
+    })
+  }
+  return { version: 2, users }
+}
+
+function readResult() {
+  return readPrivateJson(usersFile(), usersDocument, 'users database')
+}
+
+function read(): StoredUser[] {
+  const result = readResult()
+  if (result.kind === 'missing') {
+    throw new Error(`Users database "${usersFile()}" is missing; initialize it before use`)
+  }
+  return result.value.users
 }
 
 function write(users: StoredUser[]): void {
   mkdirSync(join(dataDir(), 'users'), { recursive: true })
-  writePrivateJson(usersFile(), { version: 1, users } satisfies UsersFile)
+  writeAtomicPrivateJson(usersFile(), { version: 2, users } satisfies UsersFile)
 }
 
 async function hash(password: string, salt: string): Promise<string> {
@@ -76,23 +138,44 @@ function toAccount(user: StoredUser): UserAccount {
   }
 }
 
+let mutationTail: Promise<void> = Promise.resolve()
+
+function serializeMutation<T>(operation: () => T | Promise<T>): Promise<T> {
+  const result = mutationTail.then(operation, operation)
+  mutationTail = result.then(
+    () => undefined,
+    () => undefined
+  )
+  return result
+}
+
+/** Test seam; callers must only reset after all prior operations have settled. */
+export function resetUserMutationQueueForTests(): void {
+  mutationTail = Promise.resolve()
+}
+
 /**
  * Called on every boot. The default account always exists - with auth off,
  * everything a client does is done as this user, so its folder has to be there
  * before the first request arrives.
  */
 export function ensureDefaultAdmin(): void {
-  const users = read()
+  const result = readResult()
+  if (result.kind === 'missing') {
+    write([
+      {
+        username: DEFAULT_USERNAME,
+        passwordHash: '',
+        salt: randomBytes(SALT_BYTES).toString('hex'),
+        createdAt: Date.now(),
+        lastLoginAt: null,
+        sessionVersion: 1
+      }
+    ])
+  } else if (!result.value.users.some((user) => user.username === DEFAULT_USERNAME)) {
+    throw new Error(`Users database is missing required account "${DEFAULT_USERNAME}"`)
+  }
   mkdirSync(userDataDir(DEFAULT_USERNAME), { recursive: true })
-  if (users.some((u) => u.username === DEFAULT_USERNAME)) return
-  users.unshift({
-    username: DEFAULT_USERNAME,
-    passwordHash: '',
-    salt: randomBytes(SALT_BYTES).toString('hex'),
-    createdAt: Date.now(),
-    lastLoginAt: null
-  })
-  write(users)
 }
 
 export function listUsers(): UserAccount[] {
@@ -116,44 +199,79 @@ function nameProblem(username: string, users: StoredUser[]): string | null {
   return null
 }
 
-export async function createUser(username: string, password: string): Promise<UserAccount> {
-  const users = read()
-  const problem = nameProblem(username, users)
-  if (problem) throw new Error(problem)
-  if (!password) throw new Error('a new account needs a password')
-  const salt = randomBytes(SALT_BYTES).toString('hex')
-  const user: StoredUser = {
-    username,
-    passwordHash: await hash(password, salt),
-    salt,
-    createdAt: Date.now(),
-    lastLoginAt: null
+function passwordProblem(password: string): string | null {
+  if (!password) return 'the password cannot be empty'
+  if (password.length > MAX_PASSWORD_LENGTH) {
+    return `the password must be at most ${MAX_PASSWORD_LENGTH} characters`
   }
-  users.push(user)
-  write(users)
-  mkdirSync(userDataDir(username), { recursive: true })
-  return toAccount(user)
+  return null
+}
+
+export async function createUser(username: string, password: string): Promise<UserAccount> {
+  if (!USERNAME_PATTERN.test(username)) {
+    throw new Error(
+      'a username is 3-32 characters: lower case letters, digits, - and _, starting with a letter'
+    )
+  }
+  const passwordError = passwordProblem(password)
+  if (passwordError) throw new Error(passwordError)
+  const salt = randomBytes(SALT_BYTES).toString('hex')
+  const passwordHash = await hash(password, salt)
+  return serializeMutation(() => {
+    const users = read()
+    const problem = nameProblem(username, users)
+    if (problem) throw new Error(problem)
+    const user: StoredUser = {
+      username,
+      passwordHash,
+      salt,
+      createdAt: Date.now(),
+      lastLoginAt: null,
+      sessionVersion: 1
+    }
+    users.push(user)
+    write(users)
+    mkdirSync(userDataDir(username), { recursive: true })
+    return toAccount(user)
+  })
 }
 
 /** Removes the account and everything it saved; the default one is kept. */
-export function deleteUser(username: string): void {
+export function deleteUser(username: string): Promise<void> {
   if (username === DEFAULT_USERNAME) {
-    throw new Error(`"${DEFAULT_USERNAME}" cannot be deleted`)
+    return Promise.reject(new Error(`"${DEFAULT_USERNAME}" cannot be deleted`))
   }
-  const users = read()
-  if (!users.some((u) => u.username === username)) throw new Error(`"${username}" does not exist`)
-  write(users.filter((u) => u.username !== username))
-  rmSync(userDataDir(username), { recursive: true, force: true })
+  if (!USERNAME_PATTERN.test(username)) {
+    return Promise.reject(new Error(`"${username}" is not a valid username`))
+  }
+  return serializeMutation(() => {
+    const users = read()
+    if (!users.some((u) => u.username === username)) {
+      throw new Error(`"${username}" does not exist`)
+    }
+    write(users.filter((u) => u.username !== username))
+    rmSync(userDataDir(username), { recursive: true, force: true })
+  })
 }
 
 export async function setPassword(username: string, password: string): Promise<void> {
-  if (!password) throw new Error('the password cannot be empty')
-  const users = read()
-  const user = users.find((u) => u.username === username)
-  if (!user) throw new Error(`"${username}" does not exist`)
-  user.salt = randomBytes(SALT_BYTES).toString('hex')
-  user.passwordHash = await hash(password, user.salt)
-  write(users)
+  if (!USERNAME_PATTERN.test(username)) throw new Error(`"${username}" is not a valid username`)
+  const problem = passwordProblem(password)
+  if (problem) throw new Error(problem)
+  const salt = randomBytes(SALT_BYTES).toString('hex')
+  const passwordHash = await hash(password, salt)
+  await serializeMutation(() => {
+    const users = read()
+    const user = users.find((u) => u.username === username)
+    if (!user) throw new Error(`"${username}" does not exist`)
+    if (user.sessionVersion >= Number.MAX_SAFE_INTEGER) {
+      throw new Error(`"${username}" session version cannot be incremented`)
+    }
+    user.salt = salt
+    user.passwordHash = passwordHash
+    user.sessionVersion += 1
+    write(users)
+  })
 }
 
 /**
@@ -161,18 +279,56 @@ export async function setPassword(username: string, password: string): Promise<v
  * account without a password cannot be logged into at all, which is what makes
  * "turn auth on" require setting one first.
  */
-export async function verify(username: string, password: string): Promise<boolean> {
-  const user = read().find((u) => u.username === username)
-  if (!user || !user.passwordHash) return false
-  const expected = Buffer.from(user.passwordHash, 'hex')
-  const actual = Buffer.from(await hash(password, user.salt), 'hex')
-  return expected.length === actual.length && timingSafeEqual(expected, actual)
+export async function verifyForSession(username: string, password: string): Promise<number | null> {
+  if (
+    !USERNAME_PATTERN.test(username) ||
+    password.length === 0 ||
+    password.length > MAX_PASSWORD_LENGTH
+  ) {
+    return null
+  }
+
+  const user = read().find((candidate) => candidate.username === username)
+  const salt = user?.passwordHash ? user.salt : DUMMY_SALT
+  const expected = user?.passwordHash ? Buffer.from(user.passwordHash, 'hex') : DUMMY_EXPECTED
+  const actual = Buffer.from(await hash(password, salt), 'hex')
+  const matches = expected.length === actual.length && timingSafeEqual(expected, actual)
+
+  return serializeMutation(() => {
+    const current = read().find((candidate) => candidate.username === username)
+    if (
+      !matches ||
+      !user ||
+      !current ||
+      current.passwordHash !== user.passwordHash ||
+      current.salt !== user.salt ||
+      current.sessionVersion !== user.sessionVersion
+    ) {
+      return null
+    }
+    return current.sessionVersion
+  })
 }
 
-export function recordLogin(username: string): void {
-  const users = read()
-  const user = users.find((u) => u.username === username)
-  if (!user) return
-  user.lastLoginAt = Date.now()
-  write(users)
+export async function verify(username: string, password: string): Promise<boolean> {
+  return (await verifyForSession(username, password)) !== null
+}
+
+export function sessionIsCurrent(username: string, sessionVersion: unknown): boolean {
+  if (!Number.isSafeInteger(sessionVersion) || Number(sessionVersion) < 1) return false
+  const user = read().find((candidate) => candidate.username === username)
+  return !!user && user.sessionVersion === sessionVersion
+}
+
+export function recordLogin(username: string, expectedSessionVersion?: number): Promise<boolean> {
+  return serializeMutation(() => {
+    const users = read()
+    const user = users.find((candidate) => candidate.username === username)
+    if (!user || (expectedSessionVersion != null && user.sessionVersion !== expectedSessionVersion)) {
+      return false
+    }
+    user.lastLoginAt = Date.now()
+    write(users)
+    return true
+  })
 }

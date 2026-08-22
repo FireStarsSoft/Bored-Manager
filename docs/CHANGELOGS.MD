@@ -2,6 +2,10 @@
 
 All notable changes to Bored Manager. Each module keeps its own changelog in `modules/<id>/CHANGELOG.md`, because module versions are independent of the app's.
 
+## 0.3.4
+
+- **Fixed: a fresh install from the v0.3.3 zip failed at `vite build`.** The packager left `tsconfig.test.json` out of the archive, but the root `tsconfig.json` still references it and Vite 7 parses that reference. The file now ships in the zip; `install.sh` writes a stub when an older archive is missing it.
+
 ## 0.3.3
 
 - **Many machines.** The server keeps a shared pool of local and SSH targets. Adding or disconnecting a machine changes the pool for every browser; each tab still picks which machine it is viewing.

@@ -31,6 +31,7 @@ INCLUDE_FILES=(
     run.sh
     tsconfig.json
     tsconfig.node.json
+    tsconfig.test.json
     tsconfig.web.json
     uninstall.sh
     vite.config.ts
@@ -38,7 +39,7 @@ INCLUDE_FILES=(
 )
 # Development leftovers, deliberately left out (listed so the script can tell
 # "known to be excluded" apart from "new file nobody classified yet").
-KNOWN_EXCLUDED=(.git .gitattributes .cursor .cursorignore .github data modules-disabled node_modules out start-app.cmd start-app.vbs Todos.MD tests vitest.config.ts tsconfig.test.json)
+KNOWN_EXCLUDED=(.git .gitattributes .cursor .cursorignore .github data modules-disabled node_modules out start-app.cmd start-app.vbs Todos.MD tests vitest.config.ts)
 
 # Same list the in-app updater validates a downloaded archive against, so a
 # package built here can never fail that check - plus the module folders, whose
@@ -46,6 +47,7 @@ KNOWN_EXCLUDED=(.git .gitattributes .cursor .cursorignore .github data modules-d
 REQUIRED_ENTRIES=(
     package.json package-lock.json
     vite.config.ts vite.config.server.ts
+    tsconfig.test.json
     server/index.ts server/rpc.ts server/ipc.ts
     shared/types.ts shared/modules.ts src src/index.html
     modules modules/modules.lock.json

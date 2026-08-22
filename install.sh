@@ -195,6 +195,11 @@ repair_app() {
     echo "  node-pty unusable on this machine - removed it."
     echo "  Local terminals will use the 'script' fallback (still works)."
   fi
+  # Vite parses the root tsconfig's project references. Older release zips
+  # omitted tsconfig.test.json; a stub is enough for the build to proceed.
+  if [ ! -f tsconfig.test.json ]; then
+    printf '%s\n' '{ "compilerOptions": { "noEmit": true, "skipLibCheck": true }, "include": [] }' > tsconfig.test.json
+  fi
   step 'Building the app...'
   npm run build
 }

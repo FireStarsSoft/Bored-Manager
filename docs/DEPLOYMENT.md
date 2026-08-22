@@ -48,7 +48,9 @@ A zip created on Linux keeps the `+x` bit, so `./install.sh` runs straight away.
 | `modules-disabled/` | modules quarantined by a previous update — runtime state |
 | `modules/*.backup-*` | left behind by an interrupted module install |
 | `scripts/*.zip`, `*.log` | earlier archives and logs |
-| `.git`, `.github`, `.cursor`, `.cursorignore`, `Todos.MD`, `tests/`, `vitest.config.ts`, `tsconfig.test.json` | development only |
+| `.git`, `.github`, `.cursor`, `.cursorignore`, `Todos.MD`, `tests/`, `vitest.config.ts` | development only |
+
+`tsconfig.test.json` ships even though `tests/` does not. The root `tsconfig.json` references it, and Vite 7 parses that reference during `vite build`; a zip without the file fails a fresh install.
 
 ## GitHub Actions
 
@@ -69,7 +71,7 @@ On a new Linux machine the bootstrap is one command (see the README). `install.s
 3. Resolve the source: in-place (the script already sits in an app folder), a local `--source` zip, a zip URL, the latest GitHub release asset `bored-manager-*.zip`, or `codeload.github.com/.../main` if there is no release. A sibling `.sha256` file is checked when one is available.
 4. Unpack, find the unique folder that contains `package.json` named `bored-manager`.
 5. Copy into `--dir` (default `~/bored-manager`), keeping an existing `data/`.
-6. `npm install --include=dev`, drop ssh2's optional native bindings, probe `node-pty` (delete it if it is broken), `npm run build`.
+6. `npm install --include=dev`, drop ssh2's optional native bindings, probe `node-pty` (delete it if it is broken), write a stub `tsconfig.test.json` if an older zip omitted it, `npm run build`.
 7. Write or patch `data/user-settings/settings.json` with `--port` / `--host`.
 8. Unless `--no-service`: install `~/.config/systemd/user/bored-manager.service` from `scripts/bored-manager.service` (`WorkingDirectory` / `ExecStart` rewritten to the install folder), `systemctl --user enable --now`, `loginctl enable-linger`.
 9. Print the URL `http://<ip>:<port>`.
@@ -107,7 +109,7 @@ Because the app is a source folder, updating means *replace the whole folder, re
 
 ```bash
 ./bored-manager update                  # latest release of settings.update.repo
-./bored-manager update --source ./bored-manager-0.3.3.zip
+./bored-manager update --source ./bored-manager-0.3.4.zip
 ```
 
 ### 1. Download and check

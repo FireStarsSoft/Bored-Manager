@@ -1,6 +1,6 @@
 {
   "name": "bored-manager",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "description": "Bored Manager - web UI for Linux system processes, network, disk, sensors, packages, GPU, containers (Docker/Incus) and systemd services - local or remote over SSH",
   "type": "module",
   "private": true,

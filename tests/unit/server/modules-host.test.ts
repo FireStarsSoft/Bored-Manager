@@ -173,7 +173,7 @@ describe('ModulesHost lifecycle serialization', () => {
     expect(host.list()[0]?.problem).toMatch(/dispose/)
   })
 
-  it('publishes specs only after runtime and handlers are ready', async () => {
+  it('publishes specs for enabled modules before they become live', async () => {
     writeModule()
     let release!: () => void
     let started!: () => void
@@ -195,10 +195,12 @@ describe('ModulesHost lifecycle serialization', () => {
     const { host, handlers } = makeHost()
     const applying = host.apply()
     await compiling
-    expect(host.specsPayload()).toEqual([])
+    expect(host.isLive('race-module')).toBe(false)
+    expect(host.specsPayload()).toHaveLength(1)
     release()
     await applying
     expect(handlers.has('module:race-module:invoke:ping')).toBe(true)
+    expect(host.isLive('race-module')).toBe(true)
     expect(host.specsPayload()).toHaveLength(1)
   })
 

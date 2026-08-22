@@ -543,12 +543,11 @@ export class ModulesHost {
   /** What every enabled module's pages and widgets render from, read fresh off disk. */
   specsPayload(): ModuleSpecsEntry[] {
     const out: ModuleSpecsEntry[] = []
-    // An enabled bit is intent, not readiness. Specs become callable UI only
-    // after activation returned a valid runtime and all handlers are installed.
-    for (const [id, instances] of this.live) {
-      if (instances.size === 0) continue
-      const loaded = this.compiled.get(id)
-      if (!loaded) continue
+    // Nav and Settings need the JSON as soon as the module is enabled. Whether
+    // a runtime is live only decides if its handlers answer; a broken activate
+    // sets `problem` and `isEnabled` drops it here.
+    for (const [id, loaded] of this.compiled) {
+      if (!this.isEnabled(id)) continue
       const dir = moduleDir(id)
       const pages: Record<string, PageSpec> = {}
       const widgets: Record<string, WidgetSpec> = {}

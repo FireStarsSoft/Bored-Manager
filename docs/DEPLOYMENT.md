@@ -109,7 +109,7 @@ Because the app is a source folder, updating means *replace the whole folder, re
 
 ```bash
 ./bored-manager update                  # latest release of settings.update.repo
-./bored-manager update --source ./bored-manager-0.3.6.zip
+./bored-manager update --source ./bored-manager-0.3.7.zip
 ```
 
 ### 1. Download and check

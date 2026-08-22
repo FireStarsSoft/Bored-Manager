@@ -56,6 +56,7 @@ export function Dashboard(): React.JSX.Element {
   const setActiveTab = useApp((s) => s.setActiveTab)
   const packagesOn = useApp((s) => s.settings?.collectors.packages !== false)
   const enabledIds = useApp((s) => s.enabledModules)
+  const modules = useApp((s) => s.modules)
   const specsList = useModuleSpecs((s) => s.list)
 
   const [collapsed, setCollapsed] = React.useState(
@@ -75,8 +76,8 @@ export function Dashboard(): React.JSX.Element {
     [packagesOn]
   )
   const moduleEntries = React.useMemo(
-    () => sidebarEntries(enabledIds, specsList),
-    [enabledIds, specsList]
+    () => sidebarEntries(enabledIds, modules, specsList),
+    [enabledIds, modules, specsList]
   )
   const navRows = React.useMemo((): NavRow[] => {
     const core: NavRow[] = coreTabs.map((tab) => ({ kind: 'core', order: tab.order, tab }))

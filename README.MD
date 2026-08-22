@@ -67,7 +67,7 @@ curl -fsSL https://raw.githubusercontent.com/FireStarsSoft/Bored-Manager/main/in
 wget -qO- https://raw.githubusercontent.com/FireStarsSoft/Bored-Manager/main/install.sh | bash -s -- --port 9090 --no-service
 
 # install from a zip already downloaded
-curl -fsSL https://raw.githubusercontent.com/FireStarsSoft/Bored-Manager/main/install.sh | bash -s -- --source ./bored-manager-0.3.6.zip
+curl -fsSL https://raw.githubusercontent.com/FireStarsSoft/Bored-Manager/main/install.sh | bash -s -- --source ./bored-manager-0.3.7.zip
 ```
 
 Needs Node.js 20+, `curl` or `wget`, and `unzip`. The installer registers a systemd user unit (`bored-manager.service`) unless you pass `--no-service`, then starts it. Open `http://127.0.0.1:8686` on the host, or `http://<ip>:8686` from another machine.

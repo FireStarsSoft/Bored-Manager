@@ -2,6 +2,10 @@
 
 All notable changes to Bored Manager. Each module keeps its own changelog in `modules/<id>/CHANGELOG.md`, because module versions are independent of the app's.
 
+## 0.3.7
+
+- **Fixed: the sidebar still hid module pages until a host was live.** 0.3.6 refreshed specs after connect, but `modules:specs` only returned JSON for modules that already had a runtime, so nav stayed empty on a fresh boot or while activate was still running. Specs are now published for every enabled compiled module; the sidebar lists pages from the installed-module manifests and attaches specs when they arrive. A later specs refresh no longer overwrites a newer one.
+
 ## 0.3.6
 
 - **Fixed: connecting a machine left module pages and Overview cards empty until a refresh.** Module specs are gated on a live instance, but the UI still used the empty list fetched at boot. After connect/reconnect the renderer now reloads specs before seeding history; a newly live host (including one another browser connected) also triggers a refresh; and the server pushes the updated module list as soon as that host activates. Settings → Overview cards lists widget toggles from the installed-module manifests, so the switches no longer wait for a live spec.

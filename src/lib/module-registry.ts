@@ -46,11 +46,16 @@ interface ModuleSpecsState {
  * `setModules` in `src/state/store.ts`) - install, uninstall, reload, enable
  * and disable all end with a fresh copy of this.
  */
+let specsRefreshGeneration = 0
+
 export const useModuleSpecs = create<ModuleSpecsState>((set) => ({
   list: [],
   async refresh() {
+    const generation = ++specsRefreshGeneration
     try {
-      set({ list: await api.modules.specs() })
+      const list = await api.modules.specs()
+      if (generation !== specsRefreshGeneration) return
+      set({ list })
     } catch {
       // A transient failure keeps showing the previous specs rather than
       // blanking every module page at once.
@@ -170,9 +175,9 @@ export interface SidebarPageEntry {
 }
 
 /**
- * One nav entry per enabled module that has a loaded spec for at least one
- * declared page. `pages` is every page with a spec, sorted by `order` - the
- * sidebar turns this into a single button or a dropdown (Dashboard.tsx).
+ * One nav entry per enabled module that declares at least one page. `pages`
+ * comes from the manifest; `specs` is whatever `modules:specs` has loaded so
+ * far. The sidebar turns this into a single button or a dropdown (Dashboard.tsx).
  */
 export interface SidebarEntry {
   id: string
@@ -189,20 +194,25 @@ export function modulePageTab(moduleId: string, pageId: string): string {
 }
 
 /**
- * `specsList` is a parameter (not read internally) so the caller's own
- * subscription to `useModuleSpecs` is what decides when this needs to run
- * again.
+ * `modules` and `specsList` are parameters (not read internally) so the
+ * caller's own subscriptions decide when this needs to run again. Pages come
+ * from the installed-module list — same intent as Settings → Overview cards.
+ * Specs attach when `modules:specs` has caught up; a missing spec still keeps
+ * the nav entry.
  */
-export function sidebarEntries(enabledIds: readonly string[], specsList: ModuleSpecsEntry[]): SidebarEntry[] {
-  const byId = new Map(specsList.map((e) => [e.id, e]))
+export function sidebarEntries(
+  enabledIds: readonly string[],
+  modules: readonly ModuleDescriptor[],
+  specsList: ModuleSpecsEntry[] = []
+): SidebarEntry[] {
+  const enabled = new Set(enabledIds)
+  const specsById = new Map(specsList.map((e) => [e.id, e]))
   const out: SidebarEntry[] = []
-  for (const id of enabledIds) {
-    const specEntry = byId.get(id)
-    if (!specEntry) continue
-    // Skip pages whose spec has not loaded yet (just after install/enable,
-    // before `modules:specs` catches up) rather than show a broken entry.
-    const pages = (specEntry.manifest.pages ?? [])
-      .filter((p) => specEntry.pages[p.id])
+  for (const module of modules) {
+    const id = module.manifest.id
+    if (!enabled.has(id) || module.problem) continue
+    const specEntry = specsById.get(id)
+    const pages = (module.manifest.pages ?? [])
       .map((p) => ({
         id: p.id,
         label: p.label,
@@ -214,11 +224,11 @@ export function sidebarEntries(enabledIds: readonly string[], specsList: ModuleS
     if (!first) continue
     out.push({
       id,
-      label: specEntry.manifest.name,
+      label: module.manifest.name,
       icon: first.icon ?? iconByName(undefined),
       order: first.order ?? 50,
       pages,
-      specs: specEntry.pages
+      specs: specEntry?.pages ?? {}
     })
   }
   return out

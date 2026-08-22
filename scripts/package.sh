@@ -59,7 +59,7 @@ REQUIRED_ENTRIES=(
     docs/MODULE-RULESET.md
     assets/icon.png
     run.sh install.sh bored-manager
-    scripts/update.sh scripts/bored-manager.service
+    scripts/update.sh scripts/bored-manager.service scripts/seed-settings.ts
     registry/modules.json
 )
 

@@ -53,6 +53,53 @@ describe.sequential('security-sensitive persistence recovery', () => {
     expect(readFileSync(file, 'utf8')).toBe('{"settingsVersion":6,"auth":')
   })
 
+  it('loads the v0.3.4 installer stub and rewrites it to the current schema', () => {
+    const file = join(temp.path, 'data', 'user-settings', 'settings.json')
+    mkdirSync(join(temp.path, 'data', 'user-settings'), { recursive: true })
+    writeFileSync(
+      file,
+      '{"settingsVersion":6,"server":{"port":8686,"host":"0.0.0.0"}}',
+      'utf8'
+    )
+
+    const loaded = loadSettings()
+    expect(loaded.auth).toEqual(DEFAULT_SETTINGS.auth)
+    expect(loaded.server).toMatchObject({
+      port: 8686,
+      host: '0.0.0.0',
+      allowedHosts: [],
+      trustProxy: false
+    })
+    expect(loaded.settingsVersion).toBe(DEFAULT_SETTINGS.settingsVersion)
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({
+      settingsVersion: DEFAULT_SETTINGS.settingsVersion,
+      auth: DEFAULT_SETTINGS.auth,
+      server: {
+        port: 8686,
+        host: '0.0.0.0'
+      }
+    })
+  })
+
+  it('still rejects a present but malformed auth object', () => {
+    const file = join(temp.path, 'data', 'user-settings', 'settings.json')
+    mkdirSync(join(temp.path, 'data', 'user-settings'), { recursive: true })
+    writeFileSync(
+      file,
+      JSON.stringify({
+        settingsVersion: 6,
+        server: { port: 8686, host: '0.0.0.0' },
+        auth: { enabled: true }
+      }),
+      'utf8'
+    )
+
+    expect(() => loadSettings()).toThrow(/auth\.maxFailures is invalid/)
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({
+      auth: { enabled: true }
+    })
+  })
+
   it('recovers settings from a valid backup and keeps security fields', () => {
     saveSettings({
       ...structuredClone(DEFAULT_SETTINGS),

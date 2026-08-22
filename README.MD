@@ -2,7 +2,7 @@
 
 **Bored Manager** is a web UI for Linux — monitor and control **system processes**, **network**, **disk**, **sensors**, **packages**, **GPU** and **containers** on the local machine or on a remote machine over SSH.
 
-The server runs on Linux. Open it from **any device with a browser** at `http://<ip>:8686`. The app does not reimplement any tool: it visualises data from what is already on the target machine (`/proc`, `ps`, `ss`, `ip`, `lsblk`, `df`, `dpkg/apt`, `nvidia-smi`, `docker`, `sensors`) through a single executor layer (local shell or SSH).
+The server runs on Linux. On the host open **`http://127.0.0.1:8686`**. From another device on the LAN use `http://<ip>:8686`. The app does not reimplement any tool: it visualises data from what is already on the target machine (`/proc`, `ps`, `ss`, `ip`, `lsblk`, `df`, `dpkg/apt`, `nvidia-smi`, `docker`, `sensors`) through a single executor layer (local shell or SSH).
 
 **Everything except the Overview, Packages, Terminals and Settings pages is a module** that can be switched off, removed or replaced — and you can install your own. See *Modules* below, and [`docs/MODULE-RULESET.md`](docs/MODULE-RULESET.md) to write one.
 
@@ -67,12 +67,12 @@ curl -fsSL https://raw.githubusercontent.com/FireStarsSoft/Bored-Manager/main/in
 wget -qO- https://raw.githubusercontent.com/FireStarsSoft/Bored-Manager/main/install.sh | bash -s -- --port 9090 --no-service
 
 # install from a zip already downloaded
-curl -fsSL https://raw.githubusercontent.com/FireStarsSoft/Bored-Manager/main/install.sh | bash -s -- --source ./bored-manager-0.3.4.zip
+curl -fsSL https://raw.githubusercontent.com/FireStarsSoft/Bored-Manager/main/install.sh | bash -s -- --source ./bored-manager-0.3.5.zip
 ```
 
-Needs Node.js 20+, `curl` or `wget`, and `unzip`. The installer registers a systemd user unit (`bored-manager.service`) unless you pass `--no-service`, then starts it. Open `http://<ip>:8686`.
+Needs Node.js 20+, `curl` or `wget`, and `unzip`. The installer registers a systemd user unit (`bored-manager.service`) unless you pass `--no-service`, then starts it. Open `http://127.0.0.1:8686` on the host, or `http://<ip>:8686` from another machine.
 
-`./install.sh --repair` reinstalls dependencies and rebuilds in the current app folder (what `run.sh` and the in-app updater call).
+`./install.sh --repair` reinstalls dependencies, rebuilds, and heals an unbootable first-run settings file (what `run.sh` and the in-app updater call).
 
 Running the same one-liner (or `./install.sh`) against an existing install **updates** it: the running process is stopped first, `data/` is kept, `--port` / `--host` are only written when you pass those flags, and the service is restarted.
 
@@ -100,7 +100,7 @@ CLI flags (`--port`, `--host`) beat `data/user-settings/settings.json`, which be
 |---|---|
 | Port | `8686` |
 | Bind host | `0.0.0.0` |
-| URL | `http://<ip>:8686` |
+| URL | `http://127.0.0.1:8686` on the host; `http://<ip>:8686` on the LAN |
 | Install folder | `~/bored-manager` |
 | systemd unit | user unit `bored-manager.service` (`~/.config/systemd/user/`) |
 | Login | **off** (every client acts as `bored-admin`) |

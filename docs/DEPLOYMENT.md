@@ -37,7 +37,7 @@ A zip created on Linux keeps the `+x` bit, so `./install.sh` runs straight away.
 | `server/` | Express + WebSocket RPC |
 | `modules/` | the nine built-in modules and `modules.lock.json` |
 | `registry/` | `modules.json` (community catalog) |
-| `scripts/` | `package.sh`, `update.sh`, `bored-manager.service`, module tooling, `licenses.mjs` |
+| `scripts/` | `package.sh`, `update.sh`, `bored-manager.service`, `seed-settings.ts`, module tooling, `licenses.mjs` |
 | `shared/`, `src/` | shared code and the renderer |
 | root files | `package.json`, `package-lock.json`, the Vite configs, the tsconfigs, `components.json`, `install.sh`, `uninstall.sh`, `run.sh`, `bored-manager`, `README.MD`, `LICENSE`, `.gitignore` |
 
@@ -72,11 +72,11 @@ On a new Linux machine the bootstrap is one command (see the README). `install.s
 4. Unpack, find the unique folder that contains `package.json` named `bored-manager`.
 5. Copy into `--dir` (default `~/bored-manager`), keeping an existing `data/`.
 6. `npm install --include=dev`, drop ssh2's optional native bindings, probe `node-pty` (delete it if it is broken), write a stub `tsconfig.test.json` if an older zip omitted it, `npm run build`.
-7. Write or patch `data/user-settings/settings.json` with `--port` / `--host`.
-8. Unless `--no-service`: install `~/.config/systemd/user/bored-manager.service` from `scripts/bored-manager.service` (`WorkingDirectory` / `ExecStart` rewritten to the install folder), `systemctl --user enable --now`, `loginctl enable-linger`.
-9. Print the URL `http://<ip>:<port>`.
+7. Seed `data/user-settings/settings.json` from `DEFAULT_SETTINGS` via `scripts/seed-settings.ts` (`--port` / `--host` on a new file or when those flags are passed). An existing file that is the v0.3.4 stub (no `auth` object) is repaired; a healthy file is left alone; corrupt JSON is left untouched and the install fails.
+8. Unless `--no-service`: install `~/.config/systemd/user/bored-manager.service` from `scripts/bored-manager.service` (`WorkingDirectory` / `ExecStart` rewritten to the install folder), `systemctl --user enable --now`, `loginctl enable-linger`. Fail the “started” claim if `http://127.0.0.1:<port>/` does not answer.
+9. Print `http://127.0.0.1:<port>` and, when there is a usable private IPv4, a LAN URL.
 
-`--repair` is steps 6 only, in the current folder — what `run.sh` and the in-app updater call.
+`--repair` is steps 6 and 7, in the current folder — what `run.sh` and the in-app updater call. That is how a v0.3.4 install is healed on update.
 
 `--refresh` stops the app, deletes the install folder except accounts / settings / UI config / `data/module-data/` / the secret key / known hosts, then copies the new tree, restores those files, rebuilds and starts the service. Custom modules, metrics, sessions and logs are discarded.
 
@@ -109,7 +109,7 @@ Because the app is a source folder, updating means *replace the whole folder, re
 
 ```bash
 ./bored-manager update                  # latest release of settings.update.repo
-./bored-manager update --source ./bored-manager-0.3.4.zip
+./bored-manager update --source ./bored-manager-0.3.5.zip
 ```
 
 ### 1. Download and check

@@ -195,8 +195,9 @@ export function validateSettingsDocument(value: unknown): Record<string, unknown
   }
 
   // Server and authentication settings were introduced in v4. Once a file
-  // claims that schema, malformed security fields are corruption rather than
-  // "missing values" that may safely inherit the permissive first-run defaults.
+  // claims that schema, a present but malformed security field is corruption.
+  // An omitted `auth` object is the v0.3.4 installer stub and may inherit
+  // first-run defaults via normalizeAppSettings.
   const version = rawVersion
   if (version >= 4) {
     const server = value['server']
@@ -234,7 +235,11 @@ export function validateSettingsDocument(value: unknown): Record<string, unknown
       }
     }
 
+    // Omitted auth is the v0.3.4 installer stub: normalizeAppSettings fills
+    // first-run defaults. A present but malformed auth object is still
+    // corruption and must not become "login off".
     const auth = value['auth']
+    if (auth === undefined) return value
     if (!isRecord(auth)) throw new Error('auth settings must be an object')
     if (typeof auth['enabled'] !== 'boolean') throw new Error('auth.enabled must be boolean')
     const max = auth['maxFailures']

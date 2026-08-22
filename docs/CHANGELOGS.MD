@@ -2,6 +2,11 @@
 
 All notable changes to Bored Manager. Each module keeps its own changelog in `modules/<id>/CHANGELOG.md`, because module versions are independent of the app's.
 
+## 0.3.5
+
+- **Fixed: a fresh install crash-looped and never listened on port 8686.** `install.sh` wrote a `settingsVersion` 6 file with only `server.port` / `server.host`. The server requires an `auth` object on v4+ files, so Node exited before `listen` and systemd restarted it every 3 seconds. Settings are now seeded from `DEFAULT_SETTINGS` (`scripts/seed-settings.ts`). `--repair` (what `bored-manager update` runs) heals the v0.3.4 stub. An omitted `auth` field is treated as first-run defaults; a present but malformed `auth` object still refuses to start.
+- **Install prints a URL that works on the box.** The summary always shows `http://127.0.0.1:<port>`. The LAN line is the first private IPv4 that is not docker0 / libvirt's default bridge — not whatever `hostname -I` listed first. If the user service does not answer on loopback, the installer says so and prints the journal instead of "enabled and started".
+
 ## 0.3.4
 
 - **Fixed: a fresh install from the v0.3.3 zip failed at `vite build`.** The packager left `tsconfig.test.json` out of the archive, but the root `tsconfig.json` still references it and Vite 7 parses that reference. The file now ships in the zip; `install.sh` writes a stub when an older archive is missing it.

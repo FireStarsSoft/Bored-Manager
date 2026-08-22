@@ -21,7 +21,8 @@ export const REQUIRED_UPDATE_ENTRIES: ReadonlyArray<{ path: string; directory?: 
   { path: 'run.sh' },
   { path: 'install.sh' },
   { path: 'bored-manager' },
-  { path: 'scripts/update.sh' }
+  { path: 'scripts/update.sh' },
+  { path: 'scripts/seed-settings.ts' }
 ]
 
 export interface StructuralUpdateResult {

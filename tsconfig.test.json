@@ -25,6 +25,7 @@
     "tests/**/*.tsx",
     "server/env.d.ts",
     "scripts/check-protocol-contract.ts",
+    "scripts/seed-settings.ts",
     "vitest.config.ts"
   ],
   "exclude": ["tests/unit/modules/openwrt.test.ts"]

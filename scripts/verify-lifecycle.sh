@@ -84,7 +84,16 @@ Environment=PATH=%PATH%
 EOF
 printf '%s\n' '{"id":"hello"}' > "$DUMMY/modules/hello/module.json"
 printf '%s\n' 'ok' > "$DUMMY/src/index.html"
+mkdir -p "$DUMMY/shared"
+cp "$ROOT/scripts/seed-settings.ts" "$DUMMY/scripts/seed-settings.ts"
+cp "$ROOT/shared/types.ts" "$ROOT/shared/app-settings.ts" "$ROOT/shared/validation.ts" "$DUMMY/shared/"
 chmod +x "$DUMMY"/*.sh "$DUMMY/bored-manager" "$DUMMY/scripts"/*.sh
+if ! grep -q 'settingsVersion.:6' "$ROOT/install.sh"; then
+  :
+else
+  echo "ERROR: install.sh still contains a settingsVersion 6 stub" >&2
+  exit 1
+fi
 
 make_zip() {
   local dest="$1"
@@ -116,6 +125,7 @@ bash "$INSTALLER" --source "$ZIP" --dir "$DIR1" --port 8790 --no-service
 test -f "$DIR1/package.json"
 test -f "$DIR1/data/user-settings/settings.json"
 grep -q '"port":8790\|"port": 8790' "$DIR1/data/user-settings/settings.json"
+grep -q '"auth"' "$DIR1/data/user-settings/settings.json"
 test -f "$DIR1/out/server/index.mjs"
 
 mkdir -p "$DIR1/data/users/alice" "$DIR1/data/module-data/hello" "$DIR1/modules/custom"
@@ -126,6 +136,13 @@ printf '%s\n' '{"id":"custom"}' > "$DIR1/modules/custom/module.json"
 printf '%s\n' 'metric' > "$DIR1/data/metrics.log"
 mkdir -p "$DIR1/data/metrics"
 printf '%s\n' 'old' > "$DIR1/data/metrics/x.jsonl"
+
+echo "==> --repair heals the v0.3.4 installer stub"
+printf '%s\n' '{"settingsVersion":6,"server":{"port":8790,"host":"0.0.0.0"}}' \
+  > "$DIR1/data/user-settings/settings.json"
+(cd "$DIR1" && bash "$INSTALLER" --repair)
+grep -q '"port":8790\|"port": 8790' "$DIR1/data/user-settings/settings.json"
+grep -q '"auth"' "$DIR1/data/user-settings/settings.json"
 
 echo "==> update in place keeps port and users"
 # bump dummy version so we can see the copy

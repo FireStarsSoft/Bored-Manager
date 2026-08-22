@@ -39,14 +39,31 @@ read_repo() {
   printf '%s' "$DEFAULT_REPO"
 }
 
+pick_lan_ip() {
+  local addrs a
+  addrs="$(hostname -I 2>/dev/null || true)"
+  [ -n "${addrs:-}" ] || addrs="$(hostname -i 2>/dev/null || true)"
+  for a in $addrs; do
+    case "$a" in
+      *:*) continue ;;
+      127.*) continue ;;
+      172.17.*) continue ;;
+      192.168.122.*) continue ;;
+      10.*|192.168.*) printf '%s' "$a"; return 0 ;;
+      172.1[6-9].*|172.2[0-9].*|172.3[0-1].*) printf '%s' "$a"; return 0 ;;
+    esac
+  done
+  printf '%s' '127.0.0.1'
+}
+
 print_url() {
   local port ip
   port="$(read_port)" || port=8686
-  ip=""
-  ip="$(hostname -I 2>/dev/null | awk '{print $1}')" || true
-  [ -n "${ip:-}" ] || ip="$(hostname -i 2>/dev/null | awk '{print $1}')" || true
-  [ -n "${ip:-}" ] || ip=127.0.0.1
-  echo "URL: http://${ip}:${port}"
+  echo "URL: http://127.0.0.1:${port}"
+  ip="$(pick_lan_ip)"
+  if [ "$ip" != "127.0.0.1" ]; then
+    echo "LAN: http://${ip}:${port}"
+  fi
 }
 
 cmd_start() {

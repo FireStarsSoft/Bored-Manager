@@ -86,6 +86,108 @@ DIR="${DIR/#\~/${HOME}}"
 die() { echo "ERROR: $1" >&2; exit 1; }
 step() { echo "==> $1"; }
 
+# Path of this script when it is a real file (not `curl | bash`). Used to find
+# tsx / seed-settings.ts during verify-lifecycle dummy installs.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || SCRIPT_DIR=""
+
+find_tsx() {
+  if [ -x node_modules/.bin/tsx ]; then
+    printf '%s' node_modules/.bin/tsx
+    return 0
+  fi
+  if [ -n "${SCRIPT_DIR:-}" ] && [ -x "$SCRIPT_DIR/node_modules/.bin/tsx" ]; then
+    printf '%s' "$SCRIPT_DIR/node_modules/.bin/tsx"
+    return 0
+  fi
+  command -v tsx
+}
+
+find_seed_script() {
+  if [ -f scripts/seed-settings.ts ]; then
+    printf '%s' scripts/seed-settings.ts
+    return 0
+  fi
+  if [ -n "${SCRIPT_DIR:-}" ] && [ -f "$SCRIPT_DIR/scripts/seed-settings.ts" ]; then
+    printf '%s' "$SCRIPT_DIR/scripts/seed-settings.ts"
+    return 0
+  fi
+  return 1
+}
+
+# Write or repair settings.json from DEFAULT_SETTINGS (scripts/seed-settings.ts).
+seed_settings() {
+  mkdir -p data/user-settings
+  chmod 700 data 2>/dev/null || true
+  chmod 700 data/user-settings 2>/dev/null || true
+  local tsx seed action
+  tsx="$(find_tsx)" || die "need tsx to write settings (run npm install --include=dev first)"
+  seed="$(find_seed_script)" || die "scripts/seed-settings.ts is missing"
+  local args=(--file data/user-settings/settings.json --port "$PORT" --host "$HOST")
+  [ "${PORT_SET:-0}" -eq 1 ] && args+=(--port-set)
+  [ "${HOST_SET:-0}" -eq 1 ] && args+=(--host-set)
+  action="$("$tsx" "$seed" "${args[@]}")" || die "could not seed settings"
+  action="$(printf '%s' "$action" | tr -d '\r' | tail -n 1)"
+  case "$action" in
+    created) step "Wrote data/user-settings/settings.json" ;;
+    repaired) step "Repaired data/user-settings/settings.json" ;;
+    updated) step "Updated server.port/host in data/user-settings/settings.json" ;;
+    kept) step "Keeping existing data/user-settings/settings.json" ;;
+    *) step "Settings: $action" ;;
+  esac
+}
+
+read_settings_port() {
+  local file="${1:-data/user-settings/settings.json}"
+  local fallback="${2:-$PORT}"
+  if command -v node >/dev/null 2>&1 && [ -f "$file" ]; then
+    node --input-type=commonjs -e '
+      try {
+        const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+        const n = Number(s && s.server && s.server.port);
+        process.stdout.write(Number.isInteger(n) && n > 0 && n < 65536 ? String(n) : process.argv[2]);
+      } catch { process.stdout.write(process.argv[2]); }
+    ' "$file" "$fallback" 2>/dev/null && return 0
+  fi
+  printf '%s' "$fallback"
+}
+
+# First RFC1918 IPv4 that is not docker0 / libvirt's default virbr0.
+pick_lan_ip() {
+  local addrs a
+  addrs="$(hostname -I 2>/dev/null || true)"
+  [ -n "${addrs:-}" ] || addrs="$(hostname -i 2>/dev/null || true)"
+  for a in $addrs; do
+    case "$a" in
+      *:*) continue ;;
+      127.*) continue ;;
+      172.17.*) continue ;;
+      192.168.122.*) continue ;;
+      10.*|192.168.*) printf '%s' "$a"; return 0 ;;
+      172.1[6-9].*|172.2[0-9].*|172.3[0-1].*) printf '%s' "$a"; return 0 ;;
+    esac
+  done
+  printf '%s' '127.0.0.1'
+}
+
+wait_for_http() {
+  local port="$1" i
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    if command -v curl >/dev/null 2>&1; then
+      if curl -fsS -o /dev/null --max-time 2 "http://127.0.0.1:${port}/"; then
+        return 0
+      fi
+    elif command -v wget >/dev/null 2>&1; then
+      if wget -qO- --timeout=2 "http://127.0.0.1:${port}/" >/dev/null; then
+        return 0
+      fi
+    else
+      return 1
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 if [ "$((REPAIR + REFRESH + RENEW))" -gt 1 ]; then
   die "use only one of --repair, --refresh, --renew"
 fi
@@ -207,6 +309,7 @@ repair_app() {
 if [ "$REPAIR" -eq 1 ]; then
   echo "==> Bored Manager repair"
   repair_app
+  seed_settings
   echo "==> Repair complete."
   exit 0
 fi
@@ -501,37 +604,11 @@ repair_app
 chmod +x run.sh bored-manager install.sh uninstall.sh scripts/*.sh 2>/dev/null || true
 
 # --- settings: port / host ---------------------------------------------------
-mkdir -p data/user-settings
 SETTINGS="data/user-settings/settings.json"
-if [ ! -f "$SETTINGS" ]; then
-  cat > "$SETTINGS" <<EOF
-{"settingsVersion":6,"server":{"port":${PORT},"host":"${HOST}"}}
-EOF
-  chmod 600 "$SETTINGS" 2>/dev/null || true
-  chmod 700 data 2>/dev/null || true
-  step "Wrote $SETTINGS"
-elif [ "$PORT_SET" -eq 1 ] || [ "$HOST_SET" -eq 1 ]; then
-  node --input-type=commonjs -e '
-    const fs = require("fs");
-    const file = process.argv[1];
-    const portSet = process.argv[2] === "1";
-    const hostSet = process.argv[3] === "1";
-    const port = Number(process.argv[4]);
-    const host = process.argv[5];
-    const s = JSON.parse(fs.readFileSync(file, "utf8"));
-    s.server = Object.assign({}, s.server);
-    if (portSet) {
-      s.server.port = Number.isInteger(port) && port > 0 && port < 65536 ? port : 8686;
-    }
-    if (hostSet) {
-      s.server.host = host || "0.0.0.0";
-    }
-    fs.writeFileSync(file, JSON.stringify(s, null, 2) + "\n");
-  ' "$SETTINGS" "$PORT_SET" "$HOST_SET" "$PORT" "$HOST"
-  step "Updated server.port/host in $SETTINGS"
-else
-  step "Keeping existing $SETTINGS"
-fi
+seed_settings
+
+SHOW_PORT="$(read_settings_port "$SETTINGS" "$PORT")"
+IP="$(pick_lan_ip)"
 
 # --- systemd user unit -------------------------------------------------------
 SERVICE_OK=0
@@ -552,9 +629,14 @@ else
   if systemctl --user daemon-reload \
      && systemctl --user enable bored-manager \
      && systemctl --user restart bored-manager; then
-    SERVICE_OK=1
-    loginctl enable-linger "$USER" 2>/dev/null \
-      || echo "WARNING: could not enable linger — the service will stop on logout"
+    if wait_for_http "$SHOW_PORT"; then
+      SERVICE_OK=1
+      loginctl enable-linger "$USER" 2>/dev/null \
+        || echo "WARNING: could not enable linger — the service will stop on logout"
+    else
+      echo "WARNING: bored-manager.service is enabled but http://127.0.0.1:${SHOW_PORT} did not answer."
+      journalctl --user -u bored-manager -n 40 --no-pager 2>/dev/null || true
+    fi
   else
     echo "WARNING: could not enable the user service."
     echo "         Start the app with:  $DIR/bored-manager start"
@@ -564,33 +646,26 @@ fi
 if [ "$SERVICE_OK" -ne 1 ] && [ "$NO_SERVICE" -ne 1 ]; then
   if [ -x "$DIR/bored-manager" ]; then
     "$DIR/bored-manager" start || true
+    if wait_for_http "$SHOW_PORT"; then
+      SERVICE_OK=1
+    fi
   fi
 fi
-
-SHOW_PORT="$PORT"
-if [ -f "$SETTINGS" ] && command -v node >/dev/null 2>&1; then
-  SHOW_PORT="$(node --input-type=commonjs -e '
-    try {
-      const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-      const n = Number(s && s.server && s.server.port);
-      process.stdout.write(Number.isInteger(n) && n > 0 && n < 65536 ? String(n) : "8686");
-    } catch { process.stdout.write("8686"); }
-  ' "$SETTINGS" 2>/dev/null || printf '%s' "$PORT")"
-fi
-
-IP="$(hostname -I 2>/dev/null | awk '{print $1}')" || true
-[ -n "${IP:-}" ] || IP="$(hostname -i 2>/dev/null | awk '{print $1}')" || true
-[ -n "${IP:-}" ] || IP=127.0.0.1
 
 echo ""
 echo "==> Bored Manager is installed"
 echo "    Folder:  $DIR"
 if [ "$SERVICE_OK" -eq 1 ]; then
   echo "    Service: bored-manager.service (user) — enabled and started"
-else
+elif [ "$NO_SERVICE" -eq 1 ]; then
   echo "    Service: not registered"
+else
+  echo "    Service: enabled but not reachable — see the warning above"
 fi
-echo "    URL:     http://${IP}:${SHOW_PORT}"
+echo "    URL:     http://127.0.0.1:${SHOW_PORT}"
+if [ "$IP" != "127.0.0.1" ]; then
+  echo "    LAN:     http://${IP}:${SHOW_PORT}"
+fi
 echo ""
 echo "    $DIR/bored-manager start"
 echo "    $DIR/bored-manager stop"
